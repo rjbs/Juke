@@ -41,6 +41,13 @@ any one of them.
 
 Artist, album and title match, ignoring track number.
 
+=item title-duration
+
+Artist and title match and the durations are within two seconds, ignoring
+the album entirely.  This catches re-rips filed under a differently named
+album, and tracks that turned up on a different album, which is a fine
+stand-in.
+
 =back
 
 Normalization is NFC, case folding, and whitespace collapsing.  It does not
@@ -81,7 +88,8 @@ $dbh->begin_work;
 $dbh->do('DELETE FROM itunes_track_file WHERE library = ?', undef, $opt->library);
 
 my $tracks = $dbh->selectall_arrayref(<<~'SQL', { Slice => {} });
-  SELECT track_id, music_path, size, artist, album, name, track_number
+  SELECT track_id, music_path, size, artist, album, name, track_number,
+         total_time
   FROM itunes_track
   WHERE track_type = 'File'
     AND kind LIKE '%audio file'
@@ -89,7 +97,8 @@ my $tracks = $dbh->selectall_arrayref(<<~'SQL', { Slice => {} });
   SQL
 
 my $files = $dbh->selectall_arrayref(<<~'SQL', { Slice => {} }, $opt->library);
-  SELECT file_id, rel_path, size, artist, album, title, track_number
+  SELECT file_id, rel_path, size, artist, album, title, track_number,
+         duration_ms
   FROM file
   WHERE library = ? AND is_audio = 1
   SQL
@@ -98,46 +107,67 @@ my $insert = $dbh->prepare(
   'INSERT INTO itunes_track_file (track_id, library, file_id, method) VALUES (?, ?, ?, ?)'
 );
 
-my %by_path;
-my %by_tags;
-my %by_loose_tags;
+# Each pass is a way of turning a track or a file into a key; files are
+# indexed by that key once, then each still-unmatched track looks itself
+# up.  A pass may also filter the candidates it finds. -- claude, 2026-10-14
+my @PASSES = (
+  {
+    method   => 'path',
+    file_key => sub ($f) { norm_path($f->{rel_path}) },
+    track_key => sub ($t) { norm_path($t->{music_path}) },
+  },
+  {
+    method   => 'tags',
+    file_key => sub ($f) { tag_key($f, 'title', 1) },
+    track_key => sub ($t) { tag_key($t, 'name', 1) },
+  },
+  {
+    method   => 'tags-loose',
+    file_key => sub ($f) { tag_key($f, 'title', 0) },
+    track_key => sub ($t) { tag_key($t, 'name', 0) },
+  },
+  {
+    method   => 'title-duration',
+    file_key => sub ($f) { artist_title_key($f, 'title') },
+    track_key => sub ($t) { artist_title_key($t, 'name') },
+    filter   => sub ($t, $f) { duration_close($t, $f) },
+  },
+);
 
-for my $file (@$files) {
-  push @{ $by_path{ norm_path($file->{rel_path}) } }, $file;
-  push @{ $by_tags{ tag_key($file, 'title', 1) } }, $file;
-  push @{ $by_loose_tags{ tag_key($file, 'title', 0) } }, $file;
+for my $pass (@PASSES) {
+  my %index;
+  for my $file (@$files) {
+    push @{ $index{ $pass->{file_key}->($file) } }, $file;
+  }
+  $pass->{index} = \%index;
 }
 
 my %count;
 my @unmatched;
 
-for my $track (@$tracks) {
-  my $file = pick_file($track, $by_path{ norm_path($track->{music_path}) });
-  my $method = 'path';
+TRACK: for my $track (@$tracks) {
+  for my $pass (@PASSES) {
+    my $candidates = $pass->{index}{ $pass->{track_key}->($track) };
 
-  if (! $file) {
-    $file   = pick_file($track, $by_tags{ tag_key($track, 'name', 1) });
-    $method = 'tags';
+    if ($candidates && $pass->{filter}) {
+      $candidates = [ grep {; $pass->{filter}->($track, $_) } @$candidates ];
+    }
+
+    my $file = pick_file($track, $candidates);
+    next unless $file;
+
+    $insert->execute($track->{track_id}, $opt->library, $file->{file_id}, $pass->{method});
+    $count{ $pass->{method} }++;
+    next TRACK;
   }
 
-  if (! $file) {
-    $file   = pick_file($track, $by_loose_tags{ tag_key($track, 'name', 0) });
-    $method = 'tags-loose';
-  }
-
-  if (! $file) {
-    push @unmatched, $track;
-    next;
-  }
-
-  $insert->execute($track->{track_id}, $opt->library, $file->{file_id}, $method);
-  $count{$method}++;
+  push @unmatched, $track;
 }
 
 $dbh->commit;
 
-printf "%-11s %6d\n", $_, $count{$_} // 0 for qw(path tags tags-loose);
-printf "%-11s %6d\n", 'unmatched', scalar @unmatched;
+printf "%-15s %6d\n", $_->{method}, $count{ $_->{method} } // 0 for @PASSES;
+printf "%-15s %6d\n", 'unmatched', scalar @unmatched;
 
 =head1 ROUTINES
 
@@ -168,6 +198,15 @@ sub tag_key ($row, $title_field, $with_number) {
     norm_text($row->{album}),
     norm_text($row->{$title_field}),
     $number;
+}
+
+sub artist_title_key ($row, $title_field) {
+  return join "\0", norm_text($row->{artist}), norm_text($row->{$title_field});
+}
+
+sub duration_close ($track, $file) {
+  return 0 unless defined $track->{total_time} && defined $file->{duration_ms};
+  return abs($track->{total_time} - $file->{duration_ms}) < 2000;
 }
 
 sub pick_file ($track, $candidates) {
