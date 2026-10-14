@@ -25,6 +25,14 @@ considered by later ones:
 
 =over
 
+=item size
+
+The file is exactly as many bytes as the catalog recorded, and its duration
+is within two seconds.  An exact size match is near proof that these are
+the same bytes, so this outranks the path: a file that was moved or renamed
+but never retagged is found here, and a re-rip that took over the original
+path is not mistaken for the original.
+
 =item path
 
 The track's path relative to the iTunes music folder equals the file's path
@@ -40,6 +48,12 @@ any one of them.
 =item tags-loose
 
 Artist, album and title match, ignoring track number.
+
+=item album-number
+
+Album, disc number and track number match and the durations are within two
+seconds, ignoring artist and title.  A re-rip whose titles were spelled
+differently, or whose filenames iTunes truncated, lands here.
 
 =item title-duration
 
@@ -89,7 +103,7 @@ $dbh->do('DELETE FROM itunes_track_file WHERE library = ?', undef, $opt->library
 
 my $tracks = $dbh->selectall_arrayref(<<~'SQL', { Slice => {} });
   SELECT track_id, music_path, size, artist, album, name, track_number,
-         total_time
+         disc_number, total_time
   FROM itunes_track
   WHERE track_type = 'File'
     AND kind LIKE '%audio file'
@@ -98,7 +112,7 @@ my $tracks = $dbh->selectall_arrayref(<<~'SQL', { Slice => {} });
 
 my $files = $dbh->selectall_arrayref(<<~'SQL', { Slice => {} }, $opt->library);
   SELECT file_id, rel_path, size, artist, album, title, track_number,
-         duration_ms
+         disc_number, duration_ms
   FROM file
   WHERE library = ? AND is_audio = 1
   SQL
@@ -111,6 +125,12 @@ my $insert = $dbh->prepare(
 # indexed by that key once, then each still-unmatched track looks itself
 # up.  A pass may also filter the candidates it finds. -- claude, 2026-10-14
 my @PASSES = (
+  {
+    method   => 'size',
+    file_key => sub ($f) { $f->{size} },
+    track_key => sub ($t) { $t->{size} },
+    filter   => sub ($t, $f) { duration_close($t, $f) },
+  },
   {
     method   => 'path',
     file_key => sub ($f) { norm_path($f->{rel_path}) },
@@ -127,6 +147,12 @@ my @PASSES = (
     track_key => sub ($t) { tag_key($t, 'name', 0) },
   },
   {
+    method   => 'album-number',
+    file_key => sub ($f) { album_number_key($f) },
+    track_key => sub ($t) { album_number_key($t) },
+    filter   => sub ($t, $f) { duration_close($t, $f) },
+  },
+  {
     method   => 'title-duration',
     file_key => sub ($f) { artist_title_key($f, 'title') },
     track_key => sub ($t) { artist_title_key($t, 'name') },
@@ -137,7 +163,8 @@ my @PASSES = (
 for my $pass (@PASSES) {
   my %index;
   for my $file (@$files) {
-    push @{ $index{ $pass->{file_key}->($file) } }, $file;
+    my $key = $pass->{file_key}->($file);
+    push @{ $index{$key} }, $file if defined $key;
   }
   $pass->{index} = \%index;
 }
@@ -147,7 +174,10 @@ my @unmatched;
 
 TRACK: for my $track (@$tracks) {
   for my $pass (@PASSES) {
-    my $candidates = $pass->{index}{ $pass->{track_key}->($track) };
+    my $key = $pass->{track_key}->($track);
+    next unless defined $key;
+
+    my $candidates = $pass->{index}{$key};
 
     if ($candidates && $pass->{filter}) {
       $candidates = [ grep {; $pass->{filter}->($track, $_) } @$candidates ];
@@ -198,6 +228,11 @@ sub tag_key ($row, $title_field, $with_number) {
     norm_text($row->{album}),
     norm_text($row->{$title_field}),
     $number;
+}
+
+sub album_number_key ($row) {
+  return undef unless defined $row->{track_number} && length($row->{album} // '');
+  return join "\0", norm_text($row->{album}), $row->{track_number}, ($row->{disc_number} // 1);
 }
 
 sub artist_title_key ($row, $title_field) {
