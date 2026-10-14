@@ -32,6 +32,12 @@ nothing to look for and nothing to count as missing.
 =cut
 
 sub ensure_views ($dbh) {
+  # The duplicate test looks every track up by path and by size and
+  # duration; without these, SQLite walks the whole table for each row.
+  # -- claude, 2026-10-14
+  $dbh->do('CREATE INDEX IF NOT EXISTS itunes_track_music_path ON itunes_track (music_path)');
+  $dbh->do('CREATE INDEX IF NOT EXISTS itunes_track_size_time ON itunes_track (size, total_time)');
+
   $dbh->do('DROP VIEW IF EXISTS itunes_audio_track');
   $dbh->do(<<~'SQL');
     CREATE VIEW itunes_audio_track AS
