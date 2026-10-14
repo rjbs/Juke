@@ -35,10 +35,14 @@ considered by later ones:
 =item size
 
 The file is exactly as many bytes as the catalog recorded, and its duration
-is within two seconds.  An exact size match is near proof that these are
-the same bytes, so this outranks the path: a file that was moved or renamed
-but never retagged is found here, and a re-rip that took over the original
-path is not mistaken for the original.
+is within a tenth of a second, or within two seconds with the title, artist
+or album agreeing too.  Among sixty thousand files a byte size alone is not
+unique, and a Hair cast recording once stood in for a Daydream Anatomy
+single on size and a half-second of slack.  An exact size match with the
+duration to match is near proof that these are the same bytes, so this
+outranks the path: a file that was moved or renamed but never retagged is
+found here, and a re-rip that took over the original path is not mistaken
+for the original.
 
 =item path
 
@@ -154,7 +158,7 @@ my @PASSES = (
     method   => 'size',
     file_key => sub ($f) { $f->{size} },
     track_key => sub ($t) { $t->{size} },
-    filter   => sub ($t, $f) { duration_close($t, $f) },
+    filter   => sub ($t, $f) { duration_close($t, $f) && (duration_tight($t, $f) || tags_agree($t, $f)) },
   },
   {
     method   => 'path',
@@ -349,6 +353,19 @@ sub album_alike_or_absent ($track, $file) {
 sub duration_close ($track, $file) {
   return 0 unless defined $track->{total_time} && defined $file->{duration_ms};
   return abs($track->{total_time} - $file->{duration_ms}) < 2000;
+}
+
+sub duration_tight ($track, $file) {
+  return 0 unless defined $track->{total_time} && defined $file->{duration_ms};
+  return abs($track->{total_time} - $file->{duration_ms}) < 100;
+}
+
+sub tags_agree ($track, $file) {
+  for my $pair ([ 'name', 'title' ], [ 'artist', 'artist' ], [ 'album', 'album' ]) {
+    my ($t, $f) = (norm_text($track->{ $pair->[0] }), norm_text($file->{ $pair->[1] }));
+    return 1 if length $t && $t eq $f;
+  }
+  return 0;
 }
 
 sub pick_file ($track, $candidates) {
