@@ -7,6 +7,7 @@ use Getopt::Long::Descriptive;
 use Unicode::Normalize qw(NFC);
 
 use lib "$FindBin::Bin/../lib";
+use Juke::Albums qw(albums_from_rows);
 use Juke::Names qw(norm_text album_key safe_filename disc_and_track_from_name);
 
 =head1 NAME
@@ -175,7 +176,7 @@ for my $file (@$files) {
 }
 
 my @plan;
-my %by_library_and_album;
+my %music_by_library;
 
 for my $file (@$files) {
   next unless $file->{is_audio};
@@ -189,47 +190,24 @@ for my $file (@$files) {
   } elsif (! length($file->{artist} // '') && ! length($file->{album} // '')) {
     push @plan, plan_misc($file, 'Untagged');
   } else {
-    push @{ $by_library_and_album{ $file->{library} }{ norm_text($file->{album}) } }, $file;
+    push @{ $music_by_library{ $file->{library} } }, $file;
   }
 }
 
 =head2 Disk albums
 
 A disk album is one library's files that, by their tags, make up one
-album.  It carries the artist directory and album name they imply, and the
-catalog album most of its files were matched to.
+album, as L<Juke::Albums> decides it.  It carries the artist directory and
+album name they imply, and the catalog album its files were matched
+to, unless that was a single file among several.
 
 =cut
 
 my @disk_albums;
 
-for my $library (sort keys %by_library_and_album) {
-  my $by_name = $by_library_and_album{$library};
-
-  for my $name (sort keys %$by_name) {
-    my $group = $by_name->{$name};
-
-    if ($name eq '' || $name eq fc 'unknown album') {
-      push @disk_albums, disk_album($library, $_->{artist} // '', '', 0, 1, [ $_ ]) for @$group;
-      next;
-    }
-
-    if (is_compilation($group)) {
-      push @disk_albums, disk_album($library, 'Compilations', $group->[0]{album}, 1, 0, $group);
-      next;
-    }
-
-    my %by_artist;
-    for my $file (@$group) {
-      my $artist = length($file->{album_artist} // '') ? $file->{album_artist} : ($file->{artist} // '');
-      push @{ $by_artist{ norm_text($artist) } }, $file;
-    }
-
-    for my $key (sort keys %by_artist) {
-      my $part = $by_artist{$key};
-      my $artist = length($part->[0]{album_artist} // '') ? $part->[0]{album_artist} : ($part->[0]{artist} // '');
-      push @disk_albums, disk_album($library, $artist, $part->[0]{album}, 0, 0, $part);
-    }
+for my $library (sort keys %music_by_library) {
+  for my $album (albums_from_rows($music_by_library{$library})) {
+    push @disk_albums, disk_album($library, @{$album}{qw(artist album compilation singleton members)});
   }
 }
 
@@ -241,6 +219,13 @@ sub disk_album ($library, $artist, $album, $compilation, $singleton, $files) {
   }
 
   my ($album_id) = sort {; $votes{$b} <=> $votes{$a} || $a <=> $b } keys %votes;
+
+  # One stray match must not rename a whole album, so a lone vote among
+  # several files is not believed.  A few votes are enough: the partner's
+  # copy of an album is tied to the catalog by whichever of its tracks
+  # matched, and that is what lets it lose its slots to mine.
+  # -- claude, 2026-10-14
+  undef $album_id if defined $album_id && $votes{$album_id} == 1 && @$files >= 4;
 
   return {
     library     => $library,
@@ -633,27 +618,6 @@ sub track_filename ($file, $track, $multi_disc) {
   return safe_filename($prefix . $title) . '.' . ($file->{ext} // 'bin');
 }
 
-sub is_compilation ($group) {
-  my $flagged = grep {; $_->{compilation} } @$group;
-  return 1 if $flagged > @$group / 2;
-
-  my %seen;
-  my $distinct = 1;
-  for my $file (@$group) {
-    if (! defined $file->{track_number} || $seen{ join '-', ($file->{disc_number} // 1), $file->{track_number} }++) {
-      $distinct = 0;
-      last;
-    }
-  }
-
-  return 1 if $flagged && $distinct;
-
-  my %artists = map {; norm_text($_->{artist}) => 1 } @$group;
-  my $album_artists = grep {; length($_->{album_artist} // '') } @$group;
-
-  return 1 if keys %artists >= 3 && ! $album_artists && $distinct;
-  return 0;
-}
 
 sub read_dispositions ($path) {
   open my $fh, '<:encoding(UTF-8)', $path or die "can't read $path: $!";
