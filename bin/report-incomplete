@@ -35,12 +35,17 @@ Singletons, tracks with no album name, are left out.
 
 Albums are as C<group-albums> decided them, which must have been run first.
 
+With C<--dispositions>, a tab-separated file of C<artist>, C<album>,
+C<disposition>, C<note> is read, and any album listed in it is left out of
+the report: it has been looked at and decided, whatever the decision was.
+
 =cut
 
 my ($opt, $usage) = describe_options(
   '%c %o',
   [ 'db=s',      'the SQLite catalog',                        { required => 1 } ],
-  [ 'library=s', 'the library to count present files against', { required => 1 } ],
+  [ 'library=s',      'the library to count present files against', { required => 1 } ],
+  [ 'dispositions=s', 'a TSV of albums already decided, to leave out' ],
   [],
   [ 'help',      'print usage and exit', { shortcircuit => 1 } ],
 );
@@ -48,6 +53,8 @@ my ($opt, $usage) = describe_options(
 print($usage->text), exit if $opt->help;
 
 binmode STDOUT, ':encoding(UTF-8)';
+
+my %decided = $opt->dispositions ? read_dispositions($opt->dispositions)->%* : ();
 
 my $dbh = DBI->connect(
   "dbi:SQLite:dbname=" . $opt->db, undef, undef,
@@ -77,10 +84,27 @@ my $rows = $dbh->selectall_arrayref(<<~'SQL', { Slice => {} }, $opt->library);
   ORDER BY a.artist COLLATE NOCASE, a.album COLLATE NOCASE
   SQL
 
-for my $row (@$rows) {
+my @undecided = grep {; ! $decided{ fc "$_->{artist}\t$_->{album}" } } @$rows;
+
+for my $row (@undecided) {
   say join "\t",
     map {; $_ // '' }
     @{$row}{qw(artist album have expected discs_seen disc_count missing_now reason)};
 }
 
-printf STDERR "%d albums were already incomplete in the catalog\n", scalar @$rows;
+printf STDERR "%d albums were already incomplete in the catalog, %d of them not yet decided\n",
+  scalar @$rows, scalar @undecided;
+
+sub read_dispositions ($path) {
+  open my $fh, '<:encoding(UTF-8)', $path or die "can't read $path: $!";
+  my $header = <$fh>;
+
+  my %decided;
+  while (my $line = <$fh>) {
+    chomp $line;
+    my ($artist, $album, $disposition) = split /\t/, $line;
+    $decided{ fc "$artist\t$album" } = $disposition;
+  }
+
+  return \%decided;
+}

@@ -98,9 +98,16 @@ The catalog is `/Volumes/Video/music/catalog.sqlite`.  Every tool takes
     bin/match-tracks --db $DB --library jcap
     bin/group-albums --db $DB
     bin/report-missing --db $DB --library mine --fallback jcap > /Volumes/Video/music/missing.tsv
-    bin/report-incomplete --db $DB --library mine > /Volumes/Video/music/incomplete-2014.tsv
+    bin/report-incomplete --db $DB --library mine --dispositions /Volumes/Video/music/album-dispositions.tsv > /Volumes/Video/music/incomplete-2014.tsv
 
 The import and the matcher rebuild their tables from scratch.  The
 inventory is incremental and skips files whose size and mtime haven't
 changed, so rerunning it after a reorganization only reads what moved.  The
 full first run of both trees took about two hours, limited by the drive.
+
+Decisions about individual albums live in
+`/Volumes/Video/music/album-dispositions.tsv`: artist, album, disposition,
+note.  Dispositions so far are `keep` (whole, whatever the tags claim),
+`damaged`, `misc` (not music), and `jcap` (take the partner's copy).  The
+incomplete report leaves out any album listed there, and the splitter will
+honor the same file.
