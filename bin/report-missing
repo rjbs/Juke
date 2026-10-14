@@ -43,6 +43,8 @@ my ($opt, $usage) = describe_options(
 
 print($usage->text), exit if $opt->help;
 
+binmode STDOUT, q{:encoding(UTF-8)};
+
 my $dbh = DBI->connect(
   "dbi:SQLite:dbname=" . $opt->db, undef, undef,
   { RaiseError => 1, sqlite_unicode => 1 },
