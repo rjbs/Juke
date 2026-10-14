@@ -7,7 +7,8 @@ use Getopt::Long::Descriptive;
 use Unicode::Normalize qw(NFC);
 
 use lib "$FindBin::Bin/../lib";
-use Juke::Names qw(norm_text albums_alike);
+use Juke::Catalog qw(ensure_views);
+use Juke::Names qw(norm_text album_key albums_alike album_keys_alike);
 
 =head1 NAME
 
@@ -20,9 +21,11 @@ match-tracks - link catalog tracks from the iTunes XML to files on disk
 
 =head1 DESCRIPTION
 
-For every audio track in C<itunes_track>, tries to find the file in the
-named library that is that track, and records the result in
-C<itunes_track_file>.  Each track gets at most one file per library.
+For every audio track in the catalog, tries to find the file in the named
+library that is that track, and records the result in C<itunes_track_file>.
+Each track gets at most one file per library, and each file at most one
+track.  Duplicate catalog listings of one file are left out; see
+L<Juke::Catalog>.
 
 Matching happens in passes, and a track matched by an earlier pass is not
 considered by later ones:
@@ -58,6 +61,20 @@ Artist, album and title match, ignoring track number.
 Album, disc number and track number match and the durations are within two
 seconds, ignoring artist and title.  A re-rip whose titles were spelled
 differently, or whose filenames iTunes truncated, lands here.
+
+=item album-number-loose
+
+As C<album-number>, but the album names need only be alike, as
+C<title-duration> judges it.  A re-rip filed under "New Coat of Paint -
+Songs of Tom Waits" finds the catalog's "New Coat Of Paint" here even
+where the artist was spelled differently.
+
+Position and length alone are weak evidence, so this pass is believed
+only where it and the passes before it together account for at least half
+of the files in the disc-album it is claiming from.  Three Misfits tracks
+that sit in the same positions and run the same lengths as Cat Stevens
+tracks in another "Box Set" are a coincidence; fourteen tracks of a
+renamed re-rip are not.
 
 =item title-duration
 
@@ -102,16 +119,15 @@ $dbh->do(<<~'SQL');
 
 $dbh->do('CREATE INDEX IF NOT EXISTS itunes_track_file_file ON itunes_track_file (file_id)');
 
+ensure_views($dbh);
+
 $dbh->begin_work;
 $dbh->do('DELETE FROM itunes_track_file WHERE library = ?', undef, $opt->library);
 
 my $tracks = $dbh->selectall_arrayref(<<~'SQL', { Slice => {} });
   SELECT track_id, music_path, size, artist, album, name, track_number,
          disc_number, total_time
-  FROM itunes_track
-  WHERE track_type = 'File'
-    AND kind LIKE '%audio file'
-    AND music_path IS NOT NULL
+  FROM itunes_audio_track
   SQL
 
 my $files = $dbh->selectall_arrayref(<<~'SQL', { Slice => {} }, $opt->library);
@@ -120,6 +136,11 @@ my $files = $dbh->selectall_arrayref(<<~'SQL', { Slice => {} }, $opt->library);
   FROM file
   WHERE library = ? AND is_audio = 1
   SQL
+
+$_->{album_key} = album_key($_->{album}) for @$tracks, @$files;
+
+my %disc_album_size;
+$disc_album_size{ disc_album_key($_) }++ for @$files;
 
 my $insert = $dbh->prepare(
   'INSERT INTO itunes_track_file (track_id, library, file_id, method) VALUES (?, ?, ?, ?)'
@@ -157,6 +178,15 @@ my @PASSES = (
     filter   => sub ($t, $f) { duration_close($t, $f) },
   },
   {
+    method   => 'album-number-loose',
+    file_key => sub ($f) { position_duration_keys($f) },
+    track_key => sub ($t) { position_duration_keys($t) },
+    filter   => sub ($t, $f) {
+      duration_close($t, $f) && album_keys_alike($t->{album_key}, $f->{album_key})
+    },
+    prune    => \&prune_by_album_majority,
+  },
+  {
     method   => 'title-duration',
     file_key => sub ($f) { artist_title_key($f, 'title') },
     track_key => sub ($t) { artist_title_key($t, 'name') },
@@ -167,25 +197,32 @@ my @PASSES = (
 for my $pass (@PASSES) {
   my %index;
   for my $file (@$files) {
-    my $key = $pass->{file_key}->($file);
-    push @{ $index{$key} }, $file if defined $key;
+    for my $key ($pass->{file_key}->($file)) {
+      push @{ $index{$key} }, $file if defined $key;
+    }
   }
   $pass->{index} = \%index;
 }
 
 my %count;
 my %taken;
+my @claimed;
 my @unmatched = @$tracks;
 
 # Passes run in order over every still-unmatched track, so a strong pass
 # claims its files before a weak one can, and a file is claimed by at most
-# one track. -- claude, 2026-10-14
+# one track.  A pass with a prune routine gets to reconsider its claims as
+# a set, in light of everything claimed so far, before they are kept.
+# -- claude, 2026-10-14
 for my $pass (@PASSES) {
   my @still;
+  my @found;
 
   for my $track (@unmatched) {
-    my $key = $pass->{track_key}->($track);
-    my $candidates = defined $key ? $pass->{index}{$key} : undef;
+    my @keys = grep {; defined } $pass->{track_key}->($track);
+    my $candidates = @keys
+                   ? [ map {; @{ $pass->{index}{$_} // [] } } @keys ]
+                   : undef;
 
     if ($candidates) {
       $candidates = [
@@ -202,8 +239,24 @@ for my $pass (@PASSES) {
       next;
     }
 
-    $insert->execute($track->{track_id}, $opt->library, $file->{file_id}, $pass->{method});
+    push @found, [ $track, $file ];
     $taken{ $file->{file_id} } = 1;
+  }
+
+  if ($pass->{prune}) {
+    my ($keep, $drop) = $pass->{prune}->(\@found, \@claimed);
+    @found = @$keep;
+
+    for my $pair (@$drop) {
+      delete $taken{ $pair->[1]{file_id} };
+      push @still, $pair->[0];
+    }
+  }
+
+  for my $pair (@found) {
+    my ($track, $file) = @$pair;
+    $insert->execute($track->{track_id}, $opt->library, $file->{file_id}, $pass->{method});
+    push @claimed, $pair;
     $count{ $pass->{method} }++;
   }
 
@@ -241,6 +294,47 @@ sub tag_key ($row, $title_field, $with_number) {
 sub album_number_key ($row) {
   return undef unless defined $row->{track_number} && length($row->{album} // '');
   return join "\0", norm_text($row->{album}), $row->{track_number}, ($row->{disc_number} // 1);
+}
+
+# A file is indexed under its position and a two-second duration bucket,
+# and a track looks in its own bucket and the two beside it.  That finds
+# every file within two seconds without scanning every file in the same
+# position, of which there are thousands. -- claude, 2026-10-14
+sub position_duration_keys ($row) {
+  return () unless defined $row->{track_number};
+  my $ms = $row->{total_time} // $row->{duration_ms} // return ();
+  my $bucket = int($ms / 2000);
+  my $base = join "\0", $row->{track_number}, ($row->{disc_number} // 1);
+  return map {; "$base\0$_" } $bucket - 1, $bucket, $bucket + 1;
+}
+
+sub disc_album_key ($file) {
+  return join "\0", norm_text($file->{album}), ($file->{disc_number} // 1);
+}
+
+# Claims are grouped by the catalog album (by its loose key) and the
+# disc-album of the files; a group is believed if the claims in it, from
+# this pass and every pass before, cover at least half the files in that
+# disc-album. -- claude, 2026-10-14
+sub prune_by_album_majority ($found, $claimed) {
+  my %hits;
+
+  for my $pair (@$claimed, @$found) {
+    my ($track, $file) = @$pair;
+    next unless album_keys_alike($track->{album_key}, $file->{album_key});
+    $hits{ join "\0", $track->{album_key}, disc_album_key($file) }++;
+  }
+
+  my (@keep, @drop);
+
+  for my $pair (@$found) {
+    my ($track, $file) = @$pair;
+    my $hits = $hits{ join "\0", $track->{album_key}, disc_album_key($file) };
+    my $size = $disc_album_size{ disc_album_key($file) };
+    push @{ $hits * 2 >= $size ? \@keep : \@drop }, $pair;
+  }
+
+  return (\@keep, \@drop);
 }
 
 sub artist_title_key ($row, $title_field) {

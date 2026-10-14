@@ -4,7 +4,10 @@ use v5.36;
 use Unicode::Normalize qw(NFC);
 
 use Exporter 'import';
-our @EXPORT_OK = qw(norm_text album_key albums_alike safe_filename disc_and_track_from_name);
+our @EXPORT_OK = qw(
+  norm_text album_key albums_alike album_keys_alike
+  safe_filename disc_and_track_from_name
+);
 
 =head1 NAME
 
@@ -62,7 +65,19 @@ nothing.
 =cut
 
 sub albums_alike ($a, $b) {
-  my ($ka, $kb) = (album_key($a), album_key($b));
+  return album_keys_alike(album_key($a), album_key($b));
+}
+
+=head2 album_keys_alike
+
+  if (album_keys_alike(album_key($a), album_key($b))) { ... }
+
+The comparison behind C<albums_alike>, for callers that have computed the
+keys once and compare them many times.
+
+=cut
+
+sub album_keys_alike ($ka, $kb) {
   return 0 unless length $ka && length $kb;
   return 1 if $ka eq $kb;
 
