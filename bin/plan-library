@@ -79,9 +79,13 @@ when the matcher tied one of its tracks to somewhere else.
 Within a unit each disc-and-track slot is filled by one file.  The primary
 library's file wins; the others fill slots it lacks.  If another library's
 copy of a damaged album is whole, it takes the whole album and the
-primary's partial copy goes to Damaged.  Between two different rips of one
-slot the higher average bitrate wins.  A file that loses its slot stays
-where it is; nothing is deleted.
+primary's partial copy goes to Damaged.  If another library's copy is
+whole and fills more slots than the primary's whole copy, a deluxe edition
+beside a standard one, it takes the album too, and the primary's files
+lose their slots to it.  Between two different rips of one slot the higher
+average bitrate wins.  A file that loses its slot stays where it is;
+nothing is deleted, and the plan records which file displaced it, so that
+ratings and play counts can follow it later.
 
 Artwork (jpg, png, gif) moves with its album when every audio file in its
 directory went to the same place.
@@ -309,6 +313,7 @@ for my $row (@ordered) {
       $row->{action} = 'leave';
       $row->{dest}   = undef;
       $row->{reason} = "identical to $holder->{library}/$holder->{rel_path}";
+      $row->{displaced_by} = $holder;
       next;
     }
   }
@@ -330,20 +335,21 @@ for my $row (@ordered) {
 #---- write it out ---------------------------------------------------------
 
 open my $out, '>:encoding(UTF-8)', $opt->out or die "can't write " . $opt->out . ": $!";
-say $out join "\t", qw(library rel_path action dest reason);
+say $out join "\t", qw(library rel_path action dest reason displaced_by);
 
 $dbh->do('DROP TABLE IF EXISTS move_plan');
 $dbh->do(<<~'SQL');
   CREATE TABLE move_plan (
-    file_id INTEGER NOT NULL PRIMARY KEY REFERENCES file (file_id),
-    action  TEXT    NOT NULL,
-    dest    TEXT,
-    reason  TEXT    NOT NULL
+    file_id      INTEGER NOT NULL PRIMARY KEY REFERENCES file (file_id),
+    action       TEXT    NOT NULL,
+    dest         TEXT,
+    reason       TEXT    NOT NULL,
+    displaced_by INTEGER REFERENCES file (file_id)
   )
   SQL
 
 my $insert = $dbh->prepare(
-  'INSERT INTO move_plan (file_id, action, dest, reason) VALUES (?, ?, ?, ?)'
+  'INSERT INTO move_plan (file_id, action, dest, reason, displaced_by) VALUES (?, ?, ?, ?, ?)'
 );
 
 $dbh->begin_work;
@@ -352,9 +358,11 @@ my %summary;
 
 for my $row (@ordered) {
   my $file = $row->{file};
+  my $by   = $row->{displaced_by};
   say $out join "\t",
-    $file->{library}, $file->{rel_path}, $row->{action}, $row->{dest} // '', $row->{reason};
-  $insert->execute($file->{file_id}, $row->{action}, $row->{dest}, $row->{reason});
+    $file->{library}, $file->{rel_path}, $row->{action}, $row->{dest} // '', $row->{reason},
+    ($by ? "$by->{library}/$by->{rel_path}" : '');
+  $insert->execute($file->{file_id}, $row->{action}, $row->{dest}, $row->{reason}, $by ? $by->{file_id} : undef);
 
   my ($root) = $row->{action} eq 'move' ? $row->{dest} =~ m{\A([^/]+)/} : ('(left in place)');
   $summary{$root}{ $file->{library} }{files}++;
@@ -500,14 +508,13 @@ sub plan_unit ($unit) {
 
   for my $other (@others) {
     last if $whole_from;
+    my $superset = slots_superset($by_library{$other}, $by_library{$primary} // [], $album_id);
+
     if (@catalog_tracks) {
       my $missing_other = grep {; ! $covered{$other}{ $_->{track_id} } } @catalog_tracks;
-      $whole_from = $other if $missing_other == 0 && $missing_primary > 0;
+      $whole_from = $other if $missing_other == 0 && ($missing_primary > 0 || $superset);
     } elsif ($by_library{$primary}) {
-      my %primary_slots = map {; slot_key($_, $album_id) => 1 } @{ $by_library{$primary} };
-      my %other_slots   = map {; slot_key($_, $album_id) => 1 } @{ $by_library{$other} };
-      my $superset = ! grep {; ! $other_slots{$_} } keys %primary_slots;
-      $whole_from = $other if $superset && keys %other_slots > keys %primary_slots;
+      $whole_from = $other if $superset;
     }
   }
 
@@ -549,7 +556,7 @@ sub plan_unit ($unit) {
         my $reason = ($holder->{audio_sha256} // '') eq ($file->{audio_sha256} // '')
                    ? "identical to $holder->{library}/$holder->{rel_path}"
                    : "loses slot to $holder->{library}/$holder->{rel_path}";
-        push @rows, { file => $file, action => 'leave', reason => $reason };
+        push @rows, { file => $file, action => 'leave', reason => $reason, displaced_by => $holder };
         next;
       }
 
@@ -570,6 +577,15 @@ sub plan_unit ($unit) {
   }
 
   return @rows;
+}
+
+# True if the first files fill every slot the second do, and more: a
+# deluxe edition beside a standard one.
+sub slots_superset ($more, $fewer, $album_id) {
+  my %more  = map {; slot_key($_, $album_id) => 1 } @$more;
+  my %fewer = map {; slot_key($_, $album_id) => 1 } @$fewer;
+  return 0 if grep {; ! $more{$_} } keys %fewer;
+  return keys %more > keys %fewer;
 }
 
 # A file matched to this unit's catalog album takes its slot from the
