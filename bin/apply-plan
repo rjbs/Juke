@@ -37,6 +37,8 @@ interrupted run can be resumed.
 
 =cut
 
+binmode STDOUT, q{:encoding(UTF-8)};
+
 my ($opt, $usage) = describe_options(
   '%c %o',
   [ 'db=s',        'the SQLite catalog, with its move_plan',           { required => 1 } ],
