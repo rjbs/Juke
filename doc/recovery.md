@@ -138,5 +138,17 @@ looked at (.DS_Store, iTunes LP bundles, booklets, app downloads).  The
 `move_log` table in the catalog maps every file's old path to its new
 one, and `apply-plan --undo` reverses it; `move_plan.displaced_by` says
 which file won each slot a left-behind file lost, which the ratings
-transfer will need.  Next is inventorying each new root, then reviewing
-Damaged.
+transfer will need.
+
+The four new roots were then inventoried as the archive manifest, with
+the `file` table rows for libraries `Undamaged`, `Damaged`, `Audiobooks`
+and `Miscellaneous`.  Every logged move was checked against that fresh
+inventory: all 54,405 files are present, each with the size and audio
+hash its old row recorded (artwork, which has no audio hash, matched on
+size).  One wrinkle: 475 files in 56 planned directories sit at a path
+that differs from `move_log.dest` only in case, because APFS is
+case-insensitive and two units spelled the artist differently (Beck and
+beck, Dntel and DNTEL, Nas and NaS); the later unit landed in the earlier
+one's directory.  Nothing was lost, but the planner should fold case when
+naming directories, and those directories want renaming to one spelling
+(loose thread 2026-10-14-k4zwgt).  Next is reviewing Damaged.
