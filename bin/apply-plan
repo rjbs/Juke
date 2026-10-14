@@ -170,16 +170,27 @@ printf STDERR "%d %s\n", $done, ($opt->dry_run ? 'would move' : 'moved');
 
 =head2 undo
 
-Reverses the moves in C<move_log>.  The log holds the exact byte strings
-the renames used, so no path is recomputed.
+Reverses the moves in C<move_log>, rebuilding each path the way the
+forward run did.
 
 =cut
 
 sub undo {
-  my $moves = $dbh->selectall_arrayref(
-    'SELECT file_id, src, dest FROM move_log ORDER BY file_id DESC',
-    { Slice => {} },
-  );
+  # The log's paths come back from SQLite as character strings, so the
+  # source is rebuilt from the file table exactly as the forward run built
+  # it, raw bytes and all, and the destination is re-encoded.
+  # -- claude, 2026-10-14
+  my $moves = $dbh->selectall_arrayref(<<~'SQL', { Slice => {} });
+    SELECT l.file_id, l.dest AS logged_dest, f.library, f.rel_path, f.rel_path_bytes
+    FROM move_log l
+    JOIN file f ON f.file_id = l.file_id
+    ORDER BY l.file_id DESC
+    SQL
+
+  for my $move (@$moves) {
+    $move->{src}  = source_path($move) // die "no root given for library $move->{library}\n";
+    $move->{dest} = encode('UTF-8', $move->{logged_dest});
+  }
 
   my @problems;
   for my $move (@$moves) {
