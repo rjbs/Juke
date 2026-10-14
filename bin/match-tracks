@@ -75,10 +75,11 @@ where the artist was spelled differently.
 
 Position and length alone are weak evidence, so this pass is believed
 only where it and the passes before it together account for at least half
-of the files in the disc-album it is claiming from.  Three Misfits tracks
-that sit in the same positions and run the same lengths as Cat Stevens
-tracks in another "Box Set" are a coincidence; fourteen tracks of a
-renamed re-rip are not.
+of the disc-album it is claiming from, or half of the catalog's disc where
+that is smaller, as it is when the disk has a deluxe edition.  Three
+Misfits tracks that sit in the same positions and run the same lengths as
+Cat Stevens tracks in another "Box Set" are a coincidence; fourteen tracks
+of a renamed re-rip are not.
 
 =item title-duration
 
@@ -145,6 +146,9 @@ $_->{album_key} = album_key($_->{album}) for @$tracks, @$files;
 
 my %disc_album_size;
 $disc_album_size{ disc_album_key($_) }++ for @$files;
+
+my %catalog_disc_size;
+$catalog_disc_size{ join "\0", $_->{album_key}, ($_->{disc_number} // 1) }++ for @$tracks;
 
 my $insert = $dbh->prepare(
   'INSERT INTO itunes_track_file (track_id, library, file_id, method) VALUES (?, ?, ?, ?)'
@@ -331,10 +335,16 @@ sub prune_by_album_majority ($found, $claimed) {
 
   my (@keep, @drop);
 
+  # A deluxe edition on disk can never match more files than the plain
+  # album had tracks, so the bar is half of whichever side is smaller.
+  # -- claude, 2026-10-14
   for my $pair (@$found) {
     my ($track, $file) = @$pair;
     my $hits = $hits{ join "\0", $track->{album_key}, disc_album_key($file) };
-    my $size = $disc_album_size{ disc_album_key($file) };
+    my $files_here   = $disc_album_size{ disc_album_key($file) };
+    my $tracks_there = $catalog_disc_size{ join "\0", $track->{album_key}, ($file->{disc_number} // 1) }
+                    // $files_here;
+    my $size = $files_here < $tracks_there ? $files_here : $tracks_there;
     push @{ $hits * 2 >= $size ? \@keep : \@drop }, $pair;
   }
 
