@@ -21,12 +21,15 @@ written, before anything was lost.
 
 Prints one album per line, tab-separated:
 
-  artist  album  have  expected  discs_seen  disc_count  missing_now
+  artist  album  have  expected  discs_seen  disc_count  missing_now  reason
 
 C<have> is how many tracks the catalog holds, C<expected> the sum of each
 seen disc's track count, and C<missing_now> how many of the catalog's tracks
 have no file in C<--library> today.  An album appears if it is short of its
-track count or short of its disc count.  Albums without a track count on
+track count or short of its disc count, and C<reason> says which (C<tracks>,
+C<discs>, or C<both>).  A disc-count shortfall is weak evidence on its own:
+a two-disc set whose discs carry different album names, or an album named
+"[Disc 2]", shows one disc of a declared two and is not missing anything.  Albums without a track count on
 any track can't be judged and are left out.
 
 =cut
@@ -74,7 +77,12 @@ my $rows = $dbh->selectall_arrayref(<<~'SQL', { Slice => {} }, $opt->library);
     SUM(expected) AS expected,
     COUNT(*) AS discs_seen,
     MAX(disc_count) AS disc_count,
-    SUM(missing_now) AS missing_now
+    SUM(missing_now) AS missing_now,
+    CASE WHEN SUM(expected) IS NOT NULL AND SUM(have) < SUM(expected)
+         THEN CASE WHEN MAX(disc_count) IS NOT NULL AND COUNT(*) < MAX(disc_count)
+                   THEN 'both' ELSE 'tracks' END
+         ELSE 'discs'
+    END AS reason
   FROM disc
   GROUP BY 1, 2
   HAVING (expected IS NOT NULL AND have < expected)
@@ -85,7 +93,7 @@ my $rows = $dbh->selectall_arrayref(<<~'SQL', { Slice => {} }, $opt->library);
 for my $row (@$rows) {
   say join "\t",
     map {; $_ // '' }
-    @{$row}{qw(artist album have expected discs_seen disc_count missing_now)};
+    @{$row}{qw(artist album have expected discs_seen disc_count missing_now reason)};
 }
 
 printf STDERR "%d albums were already incomplete in the catalog\n", scalar @$rows;
