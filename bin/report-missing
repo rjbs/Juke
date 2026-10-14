@@ -25,9 +25,7 @@ where C<fallback> is how many of the missing tracks were matched in the
 C<--fallback> library instead.  Without C<--fallback> that column is
 omitted.
 
-An album is identified by its album artist, or its artist if it has none.
-Tracks flagged as part of a compilation are grouped under "Compilations",
-which is how iTunes filed them on disk.
+Albums are as C<group-albums> decided them, which must have been run first.
 
 =cut
 
@@ -52,21 +50,17 @@ my $dbh = DBI->connect(
 
 my $rows = $dbh->selectall_arrayref(<<~'SQL', { Slice => {} }, $opt->library, $opt->fallback // '');
   SELECT
-    CASE WHEN t.compilation THEN 'Compilations'
-         ELSE COALESCE(NULLIF(t.album_artist, ''), t.artist, '')
-    END AS artist,
-    COALESCE(t.album, '') AS album,
+    a.artist,
+    a.album,
     COUNT(*) AS total,
     COUNT(m.file_id) AS present,
     SUM(CASE WHEN m.file_id IS NULL AND f.file_id IS NOT NULL THEN 1 ELSE 0 END) AS fallback
-  FROM itunes_track t
-  LEFT JOIN itunes_track_file m ON m.track_id = t.track_id AND m.library = ?
-  LEFT JOIN itunes_track_file f ON f.track_id = t.track_id AND f.library = ?
-  WHERE t.track_type = 'File'
-    AND t.kind LIKE '%audio file'
-    AND t.music_path IS NOT NULL
-  GROUP BY 1, 2
-  ORDER BY 1 COLLATE NOCASE, 2 COLLATE NOCASE
+  FROM itunes_album a
+  JOIN itunes_track_album ta ON ta.album_id = a.album_id
+  LEFT JOIN itunes_track_file m ON m.track_id = ta.track_id AND m.library = ?
+  LEFT JOIN itunes_track_file f ON f.track_id = ta.track_id AND f.library = ?
+  GROUP BY a.album_id
+  ORDER BY a.artist COLLATE NOCASE, a.album COLLATE NOCASE
   SQL
 
 my ($albums, $missing_albums, $missing_tracks) = (0, 0, 0);

@@ -96,7 +96,9 @@ The catalog is `/Volumes/Video/music/catalog.sqlite`.  Every tool takes
     bin/inventory-files --db $DB --root /Volumes/Video/music/jcap-music --library jcap -v
     bin/match-tracks --db $DB --library mine
     bin/match-tracks --db $DB --library jcap
+    bin/group-albums --db $DB
     bin/report-missing --db $DB --library mine --fallback jcap > /Volumes/Video/music/missing.tsv
+    bin/report-incomplete --db $DB --library mine > /Volumes/Video/music/incomplete-2014.tsv
 
 The import and the matcher rebuild their tables from scratch.  The
 inventory is incremental and skips files whose size and mtime haven't

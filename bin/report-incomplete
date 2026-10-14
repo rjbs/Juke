@@ -29,8 +29,11 @@ have no file in C<--library> today.  An album appears if it is short of its
 track count or short of its disc count, and C<reason> says which (C<tracks>,
 C<discs>, or C<both>).  A disc-count shortfall is weak evidence on its own:
 a two-disc set whose discs carry different album names, or an album named
-"[Disc 2]", shows one disc of a declared two and is not missing anything.  Albums without a track count on
-any track can't be judged and are left out.
+"[Disc 2]", shows one disc of a declared two and is not missing anything.
+Albums without a track count on every disc can't be judged on tracks.
+Singletons, tracks with no album name, are left out.
+
+Albums are as C<group-albums> decided them, which must have been run first.
 
 =cut
 
@@ -52,42 +55,26 @@ my $dbh = DBI->connect(
 );
 
 my $rows = $dbh->selectall_arrayref(<<~'SQL', { Slice => {} }, $opt->library);
-  WITH disc AS (
-    SELECT
-      CASE WHEN t.compilation THEN 'Compilations'
-           ELSE COALESCE(NULLIF(t.album_artist, ''), t.artist, '')
-      END AS artist,
-      t.album,
-      COALESCE(t.disc_number, 1) AS disc,
-      COUNT(*) AS have,
-      MAX(t.track_count) AS expected,
-      MAX(t.disc_count) AS disc_count,
-      SUM(CASE WHEN m.file_id IS NULL THEN 1 ELSE 0 END) AS missing_now
-    FROM itunes_track t
-    LEFT JOIN itunes_track_file m ON m.track_id = t.track_id AND m.library = ?
-    WHERE t.track_type = 'File'
-      AND t.kind LIKE '%audio file'
-      AND t.music_path IS NOT NULL
-      AND COALESCE(t.album, '') NOT IN ('', 'Unknown Album')
-    GROUP BY 1, 2, 3
-  )
   SELECT
-    artist, album,
-    SUM(have) AS have,
-    SUM(expected) AS expected,
-    COUNT(*) AS discs_seen,
-    MAX(disc_count) AS disc_count,
-    SUM(missing_now) AS missing_now,
-    CASE WHEN SUM(expected) IS NOT NULL AND SUM(have) < SUM(expected)
-         THEN CASE WHEN MAX(disc_count) IS NOT NULL AND COUNT(*) < MAX(disc_count)
+    a.artist, a.album,
+    a.tracks AS have,
+    a.track_total AS expected,
+    a.discs AS discs_seen,
+    a.disc_total AS disc_count,
+    (SELECT COUNT(*)
+     FROM itunes_track_album ta
+     LEFT JOIN itunes_track_file m ON m.track_id = ta.track_id AND m.library = ?
+     WHERE ta.album_id = a.album_id AND m.file_id IS NULL) AS missing_now,
+    CASE WHEN a.track_total IS NOT NULL AND a.tracks < a.track_total
+         THEN CASE WHEN a.disc_total IS NOT NULL AND a.discs < a.disc_total
                    THEN 'both' ELSE 'tracks' END
          ELSE 'discs'
     END AS reason
-  FROM disc
-  GROUP BY 1, 2
-  HAVING (expected IS NOT NULL AND have < expected)
-      OR (disc_count IS NOT NULL AND discs_seen < disc_count)
-  ORDER BY 1 COLLATE NOCASE, 2 COLLATE NOCASE
+  FROM itunes_album a
+  WHERE a.singleton = 0
+    AND ((a.track_total IS NOT NULL AND a.tracks < a.track_total)
+      OR (a.disc_total IS NOT NULL AND a.discs < a.disc_total))
+  ORDER BY a.artist COLLATE NOCASE, a.album COLLATE NOCASE
   SQL
 
 for my $row (@$rows) {
