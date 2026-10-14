@@ -1,0 +1,673 @@
+#!/usr/bin/env perl
+use v5.36;
+
+use DBI;
+use FindBin;
+use Getopt::Long::Descriptive;
+use Unicode::Normalize qw(NFC);
+
+use lib "$FindBin::Bin/../lib";
+use Juke::Names qw(norm_text album_key safe_filename disc_and_track_from_name);
+
+=head1 NAME
+
+plan-library - decide where every file in the old trees should go
+
+=head1 SYNOPSIS
+
+  plan-library --db catalog.sqlite --dispositions album-dispositions.tsv --out plan.tsv
+
+=head1 DESCRIPTION
+
+Reads the inventory, the catalog, the track matches, the album grouping
+and the per-album dispositions, and decides for every file in every
+inventoried library whether it moves into the new library tree and where.
+Nothing is moved; the decisions are written to C<--out> as tab-separated
+lines of
+
+  library  rel_path  action  dest  reason
+
+and to the C<move_plan> table in the catalog, for C<apply-plan> to carry
+out.  C<action> is C<move> or C<leave>; C<dest> is relative to the new
+library root.
+
+=head2 Roots
+
+The new tree has four roots.
+
+=over
+
+=item Undamaged
+
+Music albums with nothing missing: every track the 2014 catalog listed has
+a file, or the album was never in the catalog.  This seeds Juke.
+
+=item Damaged
+
+Music albums with at least one catalog track missing, or marked damaged by
+hand.  The surviving tracks go here, laid out exactly like Undamaged.
+
+=item Audiobooks
+
+Anything under an Audiobooks directory, any C<.aa> or C<.m4b>, or anything
+whose genre says audiobook or spoken word.
+
+=item Miscellaneous
+
+Ringtones, voice memos, video, protected M4P purchases, albums marked misc
+by hand, and audio with no tags to file it by.  These keep their original
+relative path under C<Miscellaneous/E<lt>kindE<gt>/E<lt>libraryE<gt>/>.
+
+=back
+
+=head2 How files become albums
+
+Each library's music files are first gathered into the albums their own
+tags describe, with the same compilation inference C<group-albums> uses on
+the catalog.  Each such album is then tied to the catalog album most of
+its matched files belong to, if any.  Albums from different libraries that
+tie to the same catalog album, or share a name when uncatalogued, are one
+unit, and a unit gets one destination directory, named from the catalog
+where it can be.
+
+Grouping by the files' own tags first is what keeps an album together even
+when the matcher tied one of its tracks to somewhere else.
+
+=head2 Which copy wins
+
+Within a unit each disc-and-track slot is filled by one file.  The primary
+library's file wins; the others fill slots it lacks.  If another library's
+copy of a damaged album is whole, it takes the whole album and the
+primary's partial copy goes to Damaged.  Between two different rips of one
+slot the higher average bitrate wins.  A file that loses its slot stays
+where it is; nothing is deleted.
+
+Artwork (jpg, png, gif) moves with its album when every audio file in its
+directory went to the same place.
+
+=cut
+
+my ($opt, $usage) = describe_options(
+  '%c %o',
+  [ 'db=s',           'the SQLite catalog',                 { required => 1 } ],
+  [ 'dispositions=s', 'a TSV of per-album decisions' ],
+  [ 'primary=s',      'the library whose files win ties',   { default => 'mine' } ],
+  [ 'out=s',          'where to write the plan as TSV',     { required => 1 } ],
+  [],
+  [ 'help',           'print usage and exit', { shortcircuit => 1 } ],
+);
+
+print($usage->text), exit if $opt->help;
+
+my %AUDIOBOOK_GENRE = map {; fc $_ => 1 } (
+  'Audiobook', 'Audiobooks', 'Books & Spoken', 'Spoken Word', 'Podcast',
+);
+
+my %VIDEO_EXT = map {; $_ => 1 } qw(m4v mp4 mov);
+my %ART_EXT   = map {; $_ => 1 } qw(jpg jpeg png gif);
+
+my $primary = $opt->primary;
+
+my $dbh = DBI->connect(
+  "dbi:SQLite:dbname=" . $opt->db, undef, undef,
+  { RaiseError => 1, sqlite_unicode => 1 },
+);
+
+my %disposition = $opt->dispositions ? read_dispositions($opt->dispositions)->%* : ();
+
+#---- load everything ----------------------------------------------------
+
+my $files = $dbh->selectall_arrayref(
+  'SELECT * FROM file ORDER BY library, rel_path', { Slice => {} },
+);
+
+my $claims = $dbh->selectall_arrayref(<<~'SQL', { Slice => {} });
+  SELECT m.file_id, m.library, m.track_id, ta.album_id
+  FROM itunes_track_file m
+  JOIN itunes_track_album ta ON ta.track_id = m.track_id
+  SQL
+my %claim_by_file = map {; $_->{file_id} => $_ } @$claims;
+
+my $albums = $dbh->selectall_arrayref('SELECT * FROM itunes_album', { Slice => {} });
+my %album_by_id = map {; $_->{album_id} => $_ } @$albums;
+
+my $tracks = $dbh->selectall_arrayref(<<~'SQL', { Slice => {} });
+  SELECT t.track_id, ta.album_id, t.name, t.artist, t.track_number, t.disc_number
+  FROM itunes_track t
+  JOIN itunes_track_album ta ON ta.track_id = t.track_id
+  SQL
+my %track_by_id = map {; $_->{track_id} => $_ } @$tracks;
+
+my %tracks_in_album;
+push @{ $tracks_in_album{ $_->{album_id} } }, $_ for @$tracks;
+
+# Fill in disc and track numbers from the filename where the tags lack
+# them; iTunes put them there. -- claude, 2026-10-14
+for my $file (@$files) {
+  my ($disc, $track) = disc_and_track_from_name(basename($file->{rel_path}));
+  $file->{disc_number}  //= $disc;
+  $file->{track_number} //= $track;
+
+  # A file the catalog matched but whose tags are blank is still a known
+  # track: borrow the catalog's names so it files with its album.
+  my $claim = $claim_by_file{ $file->{file_id} } or next;
+  my $album = $album_by_id{ $claim->{album_id} };
+  my $ctrack = $track_by_id{ $claim->{track_id} };
+  if (! length($file->{album} // '')) {
+    $file->{album}       = $album->{album};
+    $file->{artist}      = $ctrack->{artist} unless length($file->{artist} // '');
+    $file->{compilation} = 1 if $album->{compilation};
+    $file->{album_artist} = $album->{artist} if ! $album->{compilation} && ! $album->{singleton};
+  }
+}
+
+#---- classify, and gather music into disk albums ------------------------
+
+# Whether an album is an audiobook is decided for the album as a whole, by
+# majority of its files, so one track with a stray genre tag does not get
+# filed as a book on its own. -- claude, 2026-10-14
+my %book_votes;
+for my $file (@$files) {
+  next unless $file->{is_audio};
+  my $key = album_vote_key($file);
+  $book_votes{$key}{total}++;
+  $book_votes{$key}{book}++ if looks_like_audiobook($file);
+}
+
+my @plan;
+my %by_library_and_album;
+
+for my $file (@$files) {
+  next unless $file->{is_audio};
+
+  my $kind = classify($file);
+
+  if ($kind eq 'audiobook') {
+    push @plan, plan_audiobook($file);
+  } elsif ($kind ne 'music') {
+    push @plan, plan_misc($file, $kind);
+  } elsif (! length($file->{artist} // '') && ! length($file->{album} // '')) {
+    push @plan, plan_misc($file, 'Untagged');
+  } else {
+    push @{ $by_library_and_album{ $file->{library} }{ norm_text($file->{album}) } }, $file;
+  }
+}
+
+=head2 Disk albums
+
+A disk album is one library's files that, by their tags, make up one
+album.  It carries the artist directory and album name they imply, and the
+catalog album most of its files were matched to.
+
+=cut
+
+my @disk_albums;
+
+for my $library (sort keys %by_library_and_album) {
+  my $by_name = $by_library_and_album{$library};
+
+  for my $name (sort keys %$by_name) {
+    my $group = $by_name->{$name};
+
+    if ($name eq '' || $name eq fc 'unknown album') {
+      push @disk_albums, disk_album($library, $_->{artist} // '', '', 0, 1, [ $_ ]) for @$group;
+      next;
+    }
+
+    if (is_compilation($group)) {
+      push @disk_albums, disk_album($library, 'Compilations', $group->[0]{album}, 1, 0, $group);
+      next;
+    }
+
+    my %by_artist;
+    for my $file (@$group) {
+      my $artist = length($file->{album_artist} // '') ? $file->{album_artist} : ($file->{artist} // '');
+      push @{ $by_artist{ norm_text($artist) } }, $file;
+    }
+
+    for my $key (sort keys %by_artist) {
+      my $part = $by_artist{$key};
+      my $artist = length($part->[0]{album_artist} // '') ? $part->[0]{album_artist} : ($part->[0]{artist} // '');
+      push @disk_albums, disk_album($library, $artist, $part->[0]{album}, 0, 0, $part);
+    }
+  }
+}
+
+sub disk_album ($library, $artist, $album, $compilation, $singleton, $files) {
+  my %votes;
+  for my $file (@$files) {
+    my $claim = $claim_by_file{ $file->{file_id} } or next;
+    $votes{ $claim->{album_id} }++;
+  }
+
+  my ($album_id) = sort {; $votes{$b} <=> $votes{$a} || $a <=> $b } keys %votes;
+
+  return {
+    library     => $library,
+    artist      => length $artist ? $artist : 'Unknown Artist',
+    album       => $album,
+    compilation => $compilation,
+    singleton   => $singleton,
+    files       => $files,
+    album_id    => $album_id,
+  };
+}
+
+#---- disk albums become units ---------------------------------------------
+
+my %unit;
+
+for my $disk (@disk_albums) {
+  my $key = defined $disk->{album_id}
+          ? "catalog:$disk->{album_id}"
+          : "name:" . norm_text($disk->{artist}) . "\0" . norm_text($disk->{album});
+
+  my $unit = $unit{$key} //= { key => $key, album_id => $disk->{album_id}, disks => [] };
+  push @{ $unit->{disks} }, $disk;
+}
+
+for my $key (sort keys %unit) {
+  push @plan, plan_unit($unit{$key});
+}
+
+#---- artwork follows its album --------------------------------------------
+
+my %dest_dirs_for_source_dir;
+for my $row (@plan) {
+  next unless $row->{action} eq 'move';
+  my $src_dir  = dirname("$row->{file}{library}/$row->{file}{rel_path}");
+  my $dest_dir = dirname($row->{dest});
+  $dest_dirs_for_source_dir{$src_dir}{$dest_dir}++;
+}
+
+for my $file (@$files) {
+  next if $file->{is_audio};
+  next unless defined $file->{ext} && $ART_EXT{ $file->{ext} };
+
+  my $src_dir = dirname("$file->{library}/$file->{rel_path}");
+  my @dests   = sort keys %{ $dest_dirs_for_source_dir{$src_dir} // {} };
+
+  if (@dests == 1) {
+    push @plan, {
+      file   => $file,
+      action => 'move',
+      dest   => "$dests[0]/" . basename($file->{rel_path}),
+      reason => 'artwork follows its album',
+    };
+  } elsif (@dests > 1) {
+    push @plan, {
+      file   => $file,
+      action => 'leave',
+      reason => 'artwork, but its directory split across ' . @dests . ' destinations',
+    };
+  } else {
+    push @plan, {
+      file   => $file,
+      action => 'leave',
+      reason => 'artwork, but no audio moved from its directory',
+    };
+  }
+}
+
+#---- resolve destination collisions ---------------------------------------
+
+my @ordered = sort {; $a->{file}{library} cmp $b->{file}{library} || $a->{file}{rel_path} cmp $b->{file}{rel_path} } @plan;
+
+my %dest_taken;
+for my $row (@ordered) {
+  next unless $row->{action} eq 'move';
+
+  my $dest = $row->{dest};
+
+  if (my $holder = $dest_taken{ fc $dest }) {
+    if (($holder->{audio_sha256} // '') ne '' && ($holder->{audio_sha256} // '') eq ($row->{file}{audio_sha256} // '')) {
+      $row->{action} = 'leave';
+      $row->{dest}   = undef;
+      $row->{reason} = "identical to $holder->{library}/$holder->{rel_path}";
+      next;
+    }
+  }
+
+  my $n = 1;
+  while ($dest_taken{ fc $dest }) {
+    $n++;
+    ($dest = $row->{dest}) =~ s{(\.[^./]+)?\z}{ [$n]$1};
+  }
+
+  if ($dest ne $row->{dest}) {
+    $row->{reason} .= '; renamed to avoid a collision';
+    $row->{dest} = $dest;
+  }
+
+  $dest_taken{ fc $dest } = $row->{file};
+}
+
+#---- write it out ---------------------------------------------------------
+
+open my $out, '>:encoding(UTF-8)', $opt->out or die "can't write " . $opt->out . ": $!";
+say $out join "\t", qw(library rel_path action dest reason);
+
+$dbh->do('DROP TABLE IF EXISTS move_plan');
+$dbh->do(<<~'SQL');
+  CREATE TABLE move_plan (
+    file_id INTEGER NOT NULL PRIMARY KEY REFERENCES file (file_id),
+    action  TEXT    NOT NULL,
+    dest    TEXT,
+    reason  TEXT    NOT NULL
+  )
+  SQL
+
+my $insert = $dbh->prepare(
+  'INSERT INTO move_plan (file_id, action, dest, reason) VALUES (?, ?, ?, ?)'
+);
+
+$dbh->begin_work;
+
+my %summary;
+
+for my $row (@ordered) {
+  my $file = $row->{file};
+  say $out join "\t",
+    $file->{library}, $file->{rel_path}, $row->{action}, $row->{dest} // '', $row->{reason};
+  $insert->execute($file->{file_id}, $row->{action}, $row->{dest}, $row->{reason});
+
+  my ($root) = $row->{action} eq 'move' ? $row->{dest} =~ m{\A([^/]+)/} : ('(left in place)');
+  $summary{$root}{ $file->{library} }{files}++;
+  $summary{$root}{ $file->{library} }{bytes} += $file->{size};
+}
+
+$dbh->commit;
+close $out;
+
+for my $root (sort keys %summary) {
+  for my $library (sort keys %{ $summary{$root} }) {
+    my $s = $summary{$root}{$library};
+    printf STDERR "%-16s %-5s %7d files %7.1f GB\n",
+      $root, $library, $s->{files}, $s->{bytes} / 2**30;
+  }
+}
+
+my %album_roots;
+$album_roots{ $_->{root} }++ for grep {; $_->{root} } values %unit;
+printf STDERR "%-16s %5d albums\n", $_, $album_roots{$_} for sort keys %album_roots;
+
+#---- routines -------------------------------------------------------------
+
+=head1 ROUTINES
+
+=head2 classify
+
+  my $kind = classify($file);
+
+Returns C<audiobook>, C<music>, or a Miscellaneous subdirectory name.
+
+=cut
+
+sub classify ($file) {
+  my $ext  = $file->{ext} // '';
+  my $path = $file->{rel_path};
+
+  my $votes = $book_votes{ album_vote_key($file) };
+  return 'audiobook' if $votes->{book} > $votes->{total} / 2;
+
+  return 'Ringtones'   if $ext eq 'm4r' || $path =~ m{(?:\A|/)Ringtones/};
+  return 'Voice Memos' if $path =~ m{(?:\A|/)Voice Memos/};
+  return 'Video'       if $VIDEO_EXT{$ext};
+  return 'Protected'   if $ext eq 'm4p';
+
+  if (my $claim = $claim_by_file{ $file->{file_id} }) {
+    my $album = $album_by_id{ $claim->{album_id} };
+    my $disp  = $disposition{ fc "$album->{artist}\t$album->{album}" } // '';
+    return 'Not Music' if $disp eq 'misc';
+  }
+
+  return 'music';
+}
+
+sub looks_like_audiobook ($file) {
+  my $ext  = $file->{ext} // '';
+  my $path = $file->{rel_path};
+
+  return 1 if $path =~ m{(?:\A|/)Audiobooks/};
+  return 1 if $ext eq 'aa' || $ext eq 'm4b';
+  return 1 if $AUDIOBOOK_GENRE{ fc($file->{genre} // '') };
+
+  my $disp = $disposition{ fc join "\t", ($file->{album_artist} // $file->{artist} // ''), ($file->{album} // '') };
+  $disp = $disposition{ fc join "\t", ($file->{artist} // ''), ($file->{album} // '') } // '' if ! $disp;
+  return 1 if $disp eq 'audiobook';
+
+  return 0;
+}
+
+sub album_vote_key ($file) {
+  return join "\0", $file->{library}, norm_text($file->{album}),
+    length($file->{album} // '') ? '' : $file->{file_id};
+}
+
+sub plan_audiobook ($file) {
+  my $author = length($file->{artist} // '') ? $file->{artist} : 'Unknown Author';
+  my $title  = length($file->{album}  // '') ? $file->{album}  : 'Unknown Title';
+
+  return {
+    file   => $file,
+    action => 'move',
+    dest   => join('/', 'Audiobooks', safe_filename($author), safe_filename($title),
+                   track_filename($file, undef, defined $file->{disc_number})),
+    reason => 'audiobook',
+  };
+}
+
+sub plan_misc ($file, $kind) {
+  return {
+    file   => $file,
+    action => 'move',
+    dest   => join('/', 'Miscellaneous', $kind, $file->{library}, $file->{rel_path}),
+    reason => lc $kind,
+  };
+}
+
+=head2 plan_unit
+
+  my @rows = plan_unit($unit);
+
+Decides the root for one unit and which file fills each of its slots.
+
+=cut
+
+sub plan_unit ($unit) {
+  my @rows;
+
+  my $album_id = $unit->{album_id};
+  my $album    = $album_id ? $album_by_id{$album_id} : undef;
+
+  my @all_files = map {; @{ $_->{files} } } @{ $unit->{disks} };
+
+  my %by_library;
+  push @{ $by_library{ $_->{library} } }, $_ for @all_files;
+
+  # The directory is named from the catalog if we have it, else from the
+  # primary library's tags, else from whichever library is there.
+  my ($naming) = grep {; $_->{library} eq $primary } @{ $unit->{disks} };
+  $naming //= $unit->{disks}[0];
+
+  my $artist = $album ? $album->{artist} : $naming->{artist};
+  my $name   = $album ? $album->{album}  : $naming->{album};
+  $name = 'Unknown Album' unless length $name;
+
+  my $disp = $disposition{ fc "$artist\t$name" } // '';
+
+  my @catalog_tracks = $album_id ? @{ $tracks_in_album{$album_id} } : ();
+
+  my %covered;
+  for my $file (@all_files) {
+    my $claim = $claim_by_file{ $file->{file_id} } or next;
+    next unless $album_id && $claim->{album_id} == $album_id;
+    $covered{ $file->{library} }{ $claim->{track_id} } = 1;
+  }
+
+  my $missing_primary = grep {; ! $covered{$primary}{ $_->{track_id} } } @catalog_tracks;
+  my @others = sort grep {; $_ ne $primary } keys %by_library;
+
+  my $whole_from;
+  if ($disp eq 'jcap') {
+    ($whole_from) = grep {; $_ eq 'jcap' } @others;
+  }
+
+  for my $other (@others) {
+    last if $whole_from;
+    if (@catalog_tracks) {
+      my $missing_other = grep {; ! $covered{$other}{ $_->{track_id} } } @catalog_tracks;
+      $whole_from = $other if $missing_other == 0 && $missing_primary > 0;
+    } elsif ($by_library{$primary}) {
+      my %primary_slots = map {; slot_key($_, $album_id) => 1 } @{ $by_library{$primary} };
+      my %other_slots   = map {; slot_key($_, $album_id) => 1 } @{ $by_library{$other} };
+      my $superset = ! grep {; ! $other_slots{$_} } keys %primary_slots;
+      $whole_from = $other if $superset && keys %other_slots > keys %primary_slots;
+    }
+  }
+
+  my ($root, $why);
+
+  if ($disp eq 'damaged') {
+    ($root, $why) = ('Damaged', 'marked damaged by hand');
+  } elsif ($disp eq 'jcap' && ! $whole_from) {
+    ($root, $why) = ('Damaged', "replaced by jcap's copy, which is filed under its own name");
+  } elsif ($whole_from) {
+    ($root, $why) = ('Undamaged', "whole album from $whole_from");
+  } elsif ($missing_primary) {
+    ($root, $why) = ('Damaged', "$missing_primary of " . @catalog_tracks . ' catalog tracks missing');
+  } else {
+    ($root, $why) = ('Undamaged', @catalog_tracks ? 'whole' : 'not in the 2014 catalog');
+  }
+
+  $unit->{root} = $root;
+
+  my @order = $whole_from
+            ? ($whole_from, grep {; $_ ne $whole_from } sort keys %by_library)
+            : ($primary, @others);
+
+  my $multi_disc = multi_disc(\@all_files, \@catalog_tracks);
+
+  my %slot;
+  for my $library (@order) {
+    next unless $by_library{$library};
+
+    # When another library takes the whole album, the primary's own copy
+    # goes to Damaged as it would have anyway, not into the same directory.
+    my $this_root = ($whole_from && $library eq $primary && ($missing_primary || $disp eq 'jcap'))
+                  ? 'Damaged' : $root;
+
+    for my $file (sort {; ($b->{bitrate} // 0) <=> ($a->{bitrate} // 0) || length($a->{rel_path}) <=> length($b->{rel_path}) } @{ $by_library{$library} }) {
+      my $key = slot_key($file, $album_id);
+
+      if (my $holder = $slot{"$this_root\0$key"}) {
+        my $reason = ($holder->{audio_sha256} // '') eq ($file->{audio_sha256} // '')
+                   ? "identical to $holder->{library}/$holder->{rel_path}"
+                   : "loses slot to $holder->{library}/$holder->{rel_path}";
+        push @rows, { file => $file, action => 'leave', reason => $reason };
+        next;
+      }
+
+      $slot{"$this_root\0$key"} = $file;
+
+      my $claim = $claim_by_file{ $file->{file_id} };
+      my $track = ($claim && $album_id && $claim->{album_id} == $album_id)
+                ? $track_by_id{ $claim->{track_id} } : undef;
+
+      push @rows, {
+        file   => $file,
+        action => 'move',
+        dest   => join('/', $this_root, safe_filename($artist), safe_filename($name),
+                       track_filename($file, $track, $multi_disc)),
+        reason => ($this_root eq $root ? $why : "partial copy; $why"),
+      };
+    }
+  }
+
+  return @rows;
+}
+
+# A file matched to this unit's catalog album takes its slot from the
+# catalog; anything else from its own tags or filename.
+sub slot_key ($file, $album_id) {
+  my $claim = $claim_by_file{ $file->{file_id} };
+  if ($claim && $album_id && $claim->{album_id} == $album_id) {
+    my $track = $track_by_id{ $claim->{track_id} };
+    return join "\0", ($track->{disc_number} // 1), $track->{track_number}
+      if defined $track->{track_number};
+    return join "\0", 't', norm_text($track->{name});
+  }
+
+  return join "\0", ($file->{disc_number} // 1), $file->{track_number}
+    if defined $file->{track_number};
+  return join "\0", 't', norm_text($file->{title} // basename($file->{rel_path}));
+}
+
+sub multi_disc ($files, $catalog_tracks) {
+  my %discs = map {; ($_->{disc_number} // 1) => 1 } @$files, @$catalog_tracks;
+  return 1 if keys %discs > 1;
+  return 1 if grep {; ($_->{disc_count} // 1) > 1 } @$files;
+  return 0;
+}
+
+=head2 track_filename
+
+  my $name = track_filename($file, $catalog_track, $multi_disc);
+
+Builds C<NN Title.ext>, or C<D-NN Title.ext> for multi-disc albums, from
+the catalog's title where the file was matched to one and the file's own
+tag otherwise.  A file with neither keeps its original basename.
+
+=cut
+
+sub track_filename ($file, $track, $multi_disc) {
+  my $title  = $track ? $track->{name} : $file->{title};
+  my $number = $track && defined $track->{track_number} ? $track->{track_number} : $file->{track_number};
+  my $disc   = $track && defined $track->{disc_number}  ? $track->{disc_number}  : $file->{disc_number};
+
+  return basename($file->{rel_path}) unless length($title // '');
+
+  my $prefix = defined $number ? sprintf('%02d ', $number) : '';
+  $prefix = ($disc // 1) . '-' . $prefix if $multi_disc && length $prefix;
+
+  return safe_filename($prefix . $title) . '.' . ($file->{ext} // 'bin');
+}
+
+sub is_compilation ($group) {
+  my $flagged = grep {; $_->{compilation} } @$group;
+  return 1 if $flagged > @$group / 2;
+
+  my %seen;
+  my $distinct = 1;
+  for my $file (@$group) {
+    if (! defined $file->{track_number} || $seen{ join '-', ($file->{disc_number} // 1), $file->{track_number} }++) {
+      $distinct = 0;
+      last;
+    }
+  }
+
+  return 1 if $flagged && $distinct;
+
+  my %artists = map {; norm_text($_->{artist}) => 1 } @$group;
+  my $album_artists = grep {; length($_->{album_artist} // '') } @$group;
+
+  return 1 if keys %artists >= 3 && ! $album_artists && $distinct;
+  return 0;
+}
+
+sub read_dispositions ($path) {
+  open my $fh, '<:encoding(UTF-8)', $path or die "can't read $path: $!";
+  my $header = <$fh>;
+
+  my %decided;
+  while (my $line = <$fh>) {
+    chomp $line;
+    my ($artist, $album, $disposition) = split /\t/, $line;
+    $decided{ fc "$artist\t$album" } = $disposition;
+  }
+
+  return \%decided;
+}
+
+sub dirname  ($path) { $path =~ m{\A(.*)/} ? $1 : '' }
+sub basename ($path) { $path =~ m{([^/]+)\z} ? $1 : $path }
