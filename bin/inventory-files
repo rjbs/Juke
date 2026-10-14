@@ -1,0 +1,397 @@
+#!/usr/bin/env perl
+use v5.36;
+
+BEGIN { $ENV{AUDIO_SCAN_NO_ARTWORK} = 1 }
+
+use Audio::Scan;
+use DBI qw(SQL_BLOB);
+use Digest::SHA;
+use Encode qw(decode);
+use File::Find;
+use Getopt::Long::Descriptive;
+use JSON::MaybeXS;
+use Unicode::Normalize qw(NFC);
+
+=head1 NAME
+
+inventory-files - record every file under a library root in the catalog
+
+=head1 SYNOPSIS
+
+  inventory-files --db catalog.sqlite --root /Volumes/Video/music/music-volume/music --library mine
+  inventory-files --db catalog.sqlite --root /Volumes/Video/music/jcap-music --library jcap
+
+=head1 DESCRIPTION
+
+Walks a directory tree and records every regular file in the C<file> table:
+its path relative to the root, size and mtime, and for audio files, a
+summary of its tags and a hash of its audio bytes.
+
+The audio hash covers only the audio data, skipping ID3 and MP4 metadata, so
+two copies of one rip hash the same even when their tags differ.  This is
+the same identity rule Juke will use for tracks.
+
+Filenames are read as bytes.  A name that is not valid UTF-8 is still
+recorded, with its raw bytes kept and C<name_ok> set to 0, and its path
+column holds a lossy decoding so it can still be read.  All paths are stored
+in NFC so that they compare equal to paths from other sources.
+
+The walk is incremental: a file whose size and mtime are unchanged since the
+last run is skipped.  Files that have vanished from disk are deleted from the
+table at the end of the run.
+
+=cut
+
+my ($opt, $usage) = describe_options(
+  '%c %o',
+  [ 'db=s',      'the SQLite catalog to write',          { required => 1 } ],
+  [ 'root=s',    'the directory to walk',                { required => 1 } ],
+  [ 'library=s', 'a short label for this tree',          { required => 1 } ],
+  [],
+  [ 'rescan',    'rescan files even if size and mtime are unchanged' ],
+  [ 'verbose|v', 'report progress' ],
+  [ 'help',      'print usage and exit', { shortcircuit => 1 } ],
+);
+
+print($usage->text), exit if $opt->help;
+
+my %AUDIO_EXT = map {; $_ => 1 } qw(
+  mp3 mp2 m4a m4p m4b m4r aa aac aif aiff wav mp4 m4v mov flac ogg
+);
+
+my %SKIP_NAME = map {; $_ => 1 } ('.DS_Store', '.apdisk', '.localized');
+
+my %TAG_KEYS = (
+  title        => [ qw(TIT2 TT2 NAM) ],
+  artist       => [ qw(TPE1 TP1 ART) ],
+  album_artist => [ qw(TPE2 TP2 AART) ],
+  album        => [ qw(TALB TAL ALB) ],
+  composer     => [ qw(TCOM TCM WRT) ],
+  genre        => [ qw(TCON TCO GNRE GEN) ],
+  year         => [ qw(TDRC TYER TYE DAY) ],
+  compilation  => [ qw(TCMP TCP CPIL) ],
+);
+
+my $json = JSON::MaybeXS->new(canonical => 1, utf8 => 0);
+
+my $root = $opt->root;
+$root =~ s{/+\z}{};
+die "no such directory: $root\n" unless -d $root;
+
+my $dbh = DBI->connect(
+  "dbi:SQLite:dbname=" . $opt->db, undef, undef,
+  { RaiseError => 1, sqlite_unicode => 1 },
+);
+
+create_schema($dbh);
+
+my %known = %{ $dbh->selectall_hashref(
+  'SELECT rel_path, size, mtime FROM file WHERE library = ?',
+  'rel_path', undef, $opt->library,
+) };
+
+my $insert = $dbh->prepare(<<~'SQL');
+  INSERT OR REPLACE INTO file (
+    library, rel_path, rel_path_bytes, name_ok, ext, size, mtime,
+    is_audio, format, audio_offset, audio_size, audio_sha256,
+    duration_ms, bitrate, samplerate,
+    title, artist, album_artist, album, composer, genre, year,
+    track_number, track_count, disc_number, disc_count, compilation,
+    tags, scan_error, scanned_at
+  ) VALUES (
+    ?, ?, ?, ?, ?, ?, ?,
+    ?, ?, ?, ?, ?,
+    ?, ?, ?,
+    ?, ?, ?, ?, ?, ?, ?,
+    ?, ?, ?, ?, ?,
+    ?, ?, ?
+  )
+  SQL
+
+my %seen;
+my ($scanned, $skipped, $total_bytes) = (0, 0, 0);
+
+$dbh->begin_work;
+
+find(
+  {
+    no_chdir => 1,
+    wanted   => sub {
+      my $bytes_path = $File::Find::name;
+      return unless -f $bytes_path;
+
+      my $bytes_rel = substr $bytes_path, length($root) + 1;
+      my ($basename) = $bytes_rel =~ m{([^/]+)\z};
+      return if $SKIP_NAME{$basename};
+
+      my ($rel_path, $name_ok) = decode_name($bytes_rel);
+      $seen{$rel_path} = 1;
+
+      my ($size, $mtime) = (stat _)[7, 9];
+
+      if (! $opt->rescan
+          && $known{$rel_path}
+          && $known{$rel_path}{size}  == $size
+          && $known{$rel_path}{mtime} == $mtime
+      ) {
+        $skipped++;
+        return;
+      }
+
+      my $row = inventory_file($bytes_path, $size);
+
+      bind_and_execute($insert, [
+        $opt->library, $rel_path, ($name_ok ? undef : $bytes_rel), $name_ok,
+        $row->{ext}, $size, $mtime,
+        $row->{is_audio}, $row->{format},
+        $row->{audio_offset}, $row->{audio_size}, $row->{audio_sha256},
+        $row->{duration_ms}, $row->{bitrate}, $row->{samplerate},
+        (map {; $row->{$_} } qw(
+          title artist album_artist album composer genre year
+          track_number track_count disc_number disc_count compilation
+        )),
+        ($row->{tags} ? $json->encode($row->{tags}) : undef),
+        $row->{scan_error},
+        time,
+      ], { 3 => SQL_BLOB });
+
+      $scanned++;
+      $total_bytes += $size;
+
+      if ($opt->verbose && $scanned % 500 == 0) {
+        printf STDERR "%7d scanned, %7d skipped, %6.1f GB\n",
+          $scanned, $skipped, $total_bytes / 2**30;
+        $dbh->commit;
+        $dbh->begin_work;
+      }
+    },
+  },
+  $root,
+);
+
+my $delete = $dbh->prepare('DELETE FROM file WHERE library = ? AND rel_path = ?');
+my $vanished = 0;
+for my $rel_path (keys %known) {
+  next if $seen{$rel_path};
+  $delete->execute($opt->library, $rel_path);
+  $vanished++;
+}
+
+$dbh->commit;
+
+printf "%s: %d scanned, %d unchanged, %d vanished, %.1f GB read\n",
+  $opt->library, $scanned, $skipped, $vanished, $total_bytes / 2**30;
+
+=head1 ROUTINES
+
+=head2 decode_name
+
+  my ($string, $ok) = decode_name($bytes);
+
+Decodes a filename from bytes to a string, in NFC.  The second return value
+is false if the bytes were not valid UTF-8, in which case the string is a
+lossy decoding with replacement characters.
+
+=cut
+
+sub decode_name ($bytes) {
+  my $string = eval { decode('UTF-8', $bytes, Encode::FB_CROAK | Encode::LEAVE_SRC) };
+  return (NFC($string), 1) if defined $string;
+  return (NFC(decode('UTF-8', $bytes)), 0);
+}
+
+sub bind_and_execute ($sth, $values, $types) {
+  for my $i (0 .. $#$values) {
+    my $n = $i + 1;
+    $sth->bind_param($n, $values->[$i], ($types->{$n} ? $types->{$n} : ()));
+  }
+  $sth->execute;
+}
+
+=head2 inventory_file
+
+  my $row = inventory_file($bytes_path, $size);
+
+Returns a hashref describing one file.  Non-audio files get only an
+extension.  Audio files are scanned for format details and tags, and their
+audio bytes hashed.
+
+=cut
+
+sub inventory_file ($path, $size) {
+  my ($ext) = $path =~ m{\.([^./]+)\z};
+  $ext = defined $ext ? lc $ext : undef;
+
+  my %row = (ext => $ext, is_audio => ($ext && $AUDIO_EXT{$ext}) ? 1 : 0);
+  return \%row unless $row{is_audio};
+
+  my $scan = eval { Audio::Scan->scan($path) };
+
+  if (! $scan) {
+    $row{scan_error} = $@ || 'scan returned nothing';
+    $row{audio_offset} = 0;
+    $row{audio_size}   = $size;
+    $row{audio_sha256} = sha256_range($path, 0, $size);
+    return \%row;
+  }
+
+  my $info = $scan->{info} // {};
+  my $tags = $scan->{tags} // {};
+
+  $row{format}      = detect_format($ext, $info);
+  $row{duration_ms} = $info->{song_length_ms};
+  $row{bitrate}     = $info->{bitrate} // $info->{avg_bitrate};
+  $row{samplerate}  = $info->{samplerate};
+
+  # Audio::Scan reports where the audio data starts and how long it is for
+  # the formats we care about.  When it doesn't, hash the whole file and
+  # say so, so a later pass can tell the two kinds of hash apart.
+  # -- claude, 2026-10-13
+  if (defined $info->{audio_offset} && defined $info->{audio_size}) {
+    $row{audio_offset} = $info->{audio_offset};
+    $row{audio_size}   = $info->{audio_size};
+  } else {
+    $row{audio_offset} = 0;
+    $row{audio_size}   = $size;
+    $row{scan_error}   = 'no audio extent; hashed whole file';
+  }
+
+  $row{audio_sha256} = sha256_range($path, $row{audio_offset}, $row{audio_size});
+
+  my $summary = summarize_tags($row{format}, $tags);
+  $row{$_} = $summary->{$_} for keys %$summary;
+
+  delete $tags->{$_} for qw(APIC PIC COVR);
+  $row{tags} = $tags if %$tags;
+
+  return \%row;
+}
+
+sub detect_format ($ext, $info) {
+  return 'mp3' if defined $info->{layer};
+  return 'mp4' if defined $info->{major_brand} || ($info->{tracks} && @{ $info->{tracks} });
+  return $ext;
+}
+
+sub sha256_range ($path, $offset, $length) {
+  open my $fh, '<:raw', $path or die "can't open $path: $!";
+  seek $fh, $offset, 0 or die "can't seek $path: $!";
+
+  my $sha = Digest::SHA->new(256);
+  my $remaining = $length;
+
+  while ($remaining > 0) {
+    my $want = $remaining < 2**20 ? $remaining : 2**20;
+    my $got  = read($fh, my $buf, $want);
+    die "read error on $path: $!" unless defined $got;
+    last if $got == 0;
+    $sha->add($buf);
+    $remaining -= $got;
+  }
+
+  return $sha->hexdigest;
+}
+
+=head2 summarize_tags
+
+  my $summary = summarize_tags($format, $tags);
+
+Picks the handful of tags the catalog has columns for out of whatever
+Audio::Scan returned, which is keyed by ID3v2.2, ID3v2.3/4, or MP4 atom
+names depending on the file.
+
+=cut
+
+sub summarize_tags ($format, $tags) {
+  my %summary;
+
+  for my $column (keys %TAG_KEYS) {
+    for my $key (@{ $TAG_KEYS{$column} }) {
+      next unless defined $tags->{$key};
+      $summary{$column} = scalar_tag($tags->{$key});
+      last;
+    }
+  }
+
+  $summary{year} =~ s/\A(\d{4}).*/$1/s if defined $summary{year};
+
+  $summary{compilation} = $summary{compilation} ? 1 : 0;
+
+  my $trck = $tags->{TRCK} // $tags->{TRK} // $tags->{TRKN};
+  my $tpos = $tags->{TPOS} // $tags->{TPA} // $tags->{DISK};
+
+  @summary{qw(track_number track_count)} = split_count($trck);
+  @summary{qw(disc_number  disc_count )} = split_count($tpos);
+
+  # ID3 genre as "(17)" or "(17)Rock" is the old numeric form; keep the
+  # text if there is any, otherwise leave the number for later.
+  # -- claude, 2026-10-13
+  if (defined $summary{genre} && $summary{genre} =~ /\A\((\d+)\)(.*)\z/s) {
+    $summary{genre} = length $2 ? $2 : "($1)";
+  }
+
+  return \%summary;
+}
+
+sub scalar_tag ($value) {
+  $value = $value->[0] if ref $value eq 'ARRAY';
+  return $value;
+}
+
+sub split_count ($value) {
+  return (undef, undef) unless defined $value;
+  return (@$value[0, 1]) if ref $value eq 'ARRAY';
+  $value = scalar_tag($value);
+  my ($n, $of) = $value =~ m{\A\s*(\d+)\s*(?:/\s*(\d+))?}s;
+  return ($n, $of);
+}
+
+=head1 SCHEMA
+
+=cut
+
+sub create_schema ($dbh) {
+  $dbh->do(<<~'SQL');
+    CREATE TABLE IF NOT EXISTS file (
+      file_id        INTEGER NOT NULL PRIMARY KEY,
+      library        TEXT    NOT NULL,
+      rel_path       TEXT    NOT NULL,
+      rel_path_bytes BLOB,
+      name_ok        INTEGER NOT NULL DEFAULT 1,
+      ext            TEXT,
+      size           INTEGER NOT NULL,
+      mtime          INTEGER NOT NULL,
+
+      is_audio     INTEGER NOT NULL DEFAULT 0,
+      format       TEXT,
+      audio_offset INTEGER,
+      audio_size   INTEGER,
+      audio_sha256 TEXT,
+      duration_ms  INTEGER,
+      bitrate      INTEGER,
+      samplerate   INTEGER,
+
+      title        TEXT,
+      artist       TEXT,
+      album_artist TEXT,
+      album        TEXT,
+      composer     TEXT,
+      genre        TEXT,
+      year         INTEGER,
+      track_number INTEGER,
+      track_count  INTEGER,
+      disc_number  INTEGER,
+      disc_count   INTEGER,
+      compilation  INTEGER,
+
+      tags       TEXT,
+      scan_error TEXT,
+      scanned_at INTEGER NOT NULL,
+
+      UNIQUE (library, rel_path)
+    )
+    SQL
+
+  $dbh->do('CREATE INDEX IF NOT EXISTS file_audio_sha256 ON file (audio_sha256)');
+  $dbh->do('CREATE INDEX IF NOT EXISTS file_artist_album ON file (library, artist, album)');
+}
