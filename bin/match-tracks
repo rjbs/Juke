@@ -38,11 +38,15 @@ The file is exactly as many bytes as the catalog recorded, and its duration
 is within a tenth of a second, or within two seconds with the title, artist
 or album agreeing too.  Among sixty thousand files a byte size alone is not
 unique, and a Hair cast recording once stood in for a Daydream Anatomy
-single on size and a half-second of slack.  An exact size match with the
-duration to match is near proof that these are the same bytes, so this
-outranks the path: a file that was moved or renamed but never retagged is
-found here, and a re-rip that took over the original path is not mistaken
-for the original.
+single on size and a half-second of slack.  Worse, a constant-bitrate
+file's duration follows from its size, and old downloads padded to whole
+kilobytes collide constantly, so this pass is also believed only by album
+majority: most of a disc-album must match the same catalog album, whatever
+the two are called.  A single such match on a lone-file album still
+counts.  With that, an exact size match is near proof that these are the
+same bytes, so this outranks the path: a file that was moved or renamed but
+never retagged is found here, and a re-rip that took over the original
+path is not mistaken for the original.
 
 =item path
 
@@ -64,7 +68,10 @@ Artist, album and title match, ignoring track number.
 
 Album, disc number and track number match and the durations are within two
 seconds, ignoring artist and title.  A re-rip whose titles were spelled
-differently, or whose filenames iTunes truncated, lands here.
+differently, or whose filenames iTunes truncated, lands here.  Because the
+artist is ignored, a generic name like "Greatest Hits" invites
+coincidences, so this pass is believed only by album majority, as
+C<album-number-loose> is below; four INXS tracks are not Devo's.
 
 =item album-number-loose
 
@@ -163,6 +170,7 @@ my @PASSES = (
     file_key => sub ($f) { $f->{size} },
     track_key => sub ($t) { $t->{size} },
     filter   => sub ($t, $f) { duration_close($t, $f) && (duration_tight($t, $f) || tags_agree($t, $f)) },
+    prune    => sub ($found, $claimed) { prune_by_album_majority($found, $claimed, 0) },
   },
   {
     method   => 'path',
@@ -184,6 +192,7 @@ my @PASSES = (
     file_key => sub ($f) { album_number_key($f) },
     track_key => sub ($t) { album_number_key($t) },
     filter   => sub ($t, $f) { duration_close($t, $f) },
+    prune    => \&prune_by_album_majority,
   },
   {
     method   => 'album-number-loose',
@@ -324,12 +333,12 @@ sub disc_album_key ($file) {
 # disc-album of the files; a group is believed if the claims in it, from
 # this pass and every pass before, cover at least half the files in that
 # disc-album. -- claude, 2026-10-14
-sub prune_by_album_majority ($found, $claimed) {
+sub prune_by_album_majority ($found, $claimed, $alike_only = 1) {
   my %hits;
 
   for my $pair (@$claimed, @$found) {
     my ($track, $file) = @$pair;
-    next unless album_keys_alike($track->{album_key}, $file->{album_key});
+    next if $alike_only && ! album_keys_alike($track->{album_key}, $file->{album_key});
     $hits{ join "\0", $track->{album_key}, disc_album_key($file) }++;
   }
 
