@@ -51,8 +51,14 @@ path is not mistaken for the original.
 =item path
 
 The track's path relative to the iTunes music folder equals the file's path
-relative to the library root.  A leading C<Music/> is ignored on both sides,
-because iTunes moved files in and out of that directory on its own.
+relative to the library root, and either the duration is within two
+seconds or the title, artist or album agrees.  A leading C<Music/> is
+ignored on both sides, because iTunes moved files in and out of that
+directory on its own.  The extra check tells a re-encoding at the same
+path, which is still the track, from a different song that took the path
+over, as happens under "Unknown Artist/Unknown Album"; the duration alone
+would not do, since iTunes misjudged the length of a few hundred files
+by minutes or hours.
 
 =item tags
 
@@ -176,6 +182,7 @@ my @PASSES = (
     method   => 'path',
     file_key => sub ($f) { norm_path($f->{rel_path}) },
     track_key => sub ($t) { norm_path($t->{music_path}) },
+    filter   => sub ($t, $f) { duration_close($t, $f) || tags_agree($t, $f) },
   },
   {
     method   => 'tags',
