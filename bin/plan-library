@@ -17,6 +17,7 @@ plan-library - decide where every file in the old trees should go
 =head1 SYNOPSIS
 
   plan-library --db catalog.sqlite --dispositions album-dispositions.tsv --out plan.tsv
+  plan-library --db catalog.sqlite --library mine --library jcap --out plan.tsv
 
 =head1 DESCRIPTION
 
@@ -100,6 +101,7 @@ my ($opt, $usage) = describe_options(
   [ 'db=s',           'the SQLite catalog',                 { required => 1 } ],
   [ 'dispositions=s', 'a TSV of per-album decisions' ],
   [ 'primary=s',      'the library whose files win ties',   { default => 'mine' } ],
+  [ 'library=s@',     'plan only these libraries (default: every inventoried one)' ],
   [ 'out=s',          'where to write the plan as TSV',     { required => 1 } ],
   [],
   [ 'help',           'print usage and exit', { shortcircuit => 1 } ],
@@ -128,6 +130,11 @@ my %disposition = $opt->dispositions ? read_dispositions($opt->dispositions)->%*
 my $files = $dbh->selectall_arrayref(
   'SELECT * FROM file ORDER BY library, rel_path', { Slice => {} },
 );
+
+if (my $only = $opt->library) {
+  my %want = map {; $_ => 1 } @$only;
+  $files = [ grep {; $want{ $_->{library} } } @$files ];
+}
 
 my $claims = $dbh->selectall_arrayref(<<~'SQL', { Slice => {} });
   SELECT m.file_id, m.library, m.track_id, ta.album_id
