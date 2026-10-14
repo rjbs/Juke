@@ -86,8 +86,11 @@ copy of a damaged album is whole, it takes the whole album and the
 primary's partial copy goes to Damaged.  If another library's copy is
 whole and fills more slots than the primary's whole copy, a deluxe edition
 beside a standard one, it takes the album too, and the primary's files
-lose their slots to it.  Between two different rips of one slot the higher
-average bitrate wins.  A file that loses its slot stays where it is;
+lose their slots to it.  Between two rips of one track from one library
+the higher average bitrate wins; across libraries the primary's wins
+unless the other is the same recording at one and a half times the
+bitrate or better, a 192k rip beside a 128k one.  A file that loses its
+slot stays where it is;
 nothing is deleted, and the plan records which file displaced it, so that
 ratings and play counts can follow it later.
 
@@ -558,7 +561,12 @@ sub plan_unit ($unit) {
     $edition_size{ $_->{file_id} } = @{ $disk->{files} } for @{ $disk->{files} };
   }
 
+  # A unit of albumless files is every "Unknown Album" track of one artist
+  # thrown together; their track numbers mean nothing to each other.
+  my $singleton = ! grep {; ! $_->{singleton} } @{ $unit->{disks} };
+
   my %slot;
+  my %row_by_file;
   for my $library (@order) {
     next unless $by_library{$library};
 
@@ -579,21 +587,36 @@ sub plan_unit ($unit) {
 
       if (my $holder = $slot{"$this_root\0$key"}) {
         if (($holder->{audio_sha256} // '') eq ($file->{audio_sha256} // '')) {
-          $reason = "identical to $holder->{library}/$holder->{rel_path}";
-        } elsif (! different_recordings_from_one_rip($file, $holder)) {
-          $reason = "loses slot to $holder->{library}/$holder->{rel_path}";
-        }
-
-        if ($reason) {
-          push @rows, { file => $file, action => 'leave', reason => $reason, displaced_by => $holder };
+          push @rows, {
+            file => $file, action => 'leave', displaced_by => $holder,
+            reason => "identical to $holder->{library}/$holder->{rel_path}",
+          };
           next;
         }
 
-        # Two different recordings numbered alike in one directory are
-        # both real tracks, a box set without disc numbers say, so the
-        # newcomer keeps its own slot. -- claude, 2026-10-14
-        $key = join "\0", 'f', $file->{file_id};
-        $reason = "numbered like $holder->{rel_path} but a different recording";
+        if (much_better_rip($file, $holder)) {
+          # The other library's copy of this track is so much better that
+          # it takes the slot after all; the holder's row is rewritten.
+          # -- claude, 2026-10-14
+          my $old = $row_by_file{ $holder->{file_id} };
+          @{$old}{qw(action dest displaced_by)} = ('leave', undef, $file);
+          $old->{reason} = sprintf "loses slot to %s/%s, a much better rip (%dk vs %dk)",
+            $file->{library}, $file->{rel_path}, $file->{bitrate} / 1000, $holder->{bitrate} / 1000;
+          $reason = sprintf "takes the slot from %s/%s (%dk vs %dk)",
+            $holder->{library}, $holder->{rel_path}, $file->{bitrate} / 1000, $holder->{bitrate} / 1000;
+        } elsif (different_recordings_from_one_rip($file, $holder, $singleton)) {
+          # Two different recordings numbered alike in one directory are
+          # both real tracks, a box set without disc numbers say, so the
+          # newcomer keeps its own slot. -- claude, 2026-10-14
+          $key = join "\0", 'f', $file->{file_id};
+          $reason = "numbered like $holder->{rel_path} but a different recording";
+        } else {
+          push @rows, {
+            file => $file, action => 'leave', displaced_by => $holder,
+            reason => "loses slot to $holder->{library}/$holder->{rel_path}",
+          };
+          next;
+        }
       }
 
       $slot{"$this_root\0$key"} = $file;
@@ -602,26 +625,41 @@ sub plan_unit ($unit) {
       my $track = ($claim && $album_id && $claim->{album_id} == $album_id)
                 ? $track_by_id{ $claim->{track_id} } : undef;
 
-      push @rows, {
+      my $row = {
         file   => $file,
         action => 'move',
         dest   => join('/', $this_root, safe_filename($artist), safe_filename($name),
                        track_filename($file, $track, $multi_disc)),
         reason => $reason // ($this_root eq $root ? $why : "partial copy; $why"),
       };
+      push @rows, $row;
+      $row_by_file{ $file->{file_id} } = $row;
     }
   }
 
   return @rows;
 }
 
+# True if the first file is the same recording as the second, from another
+# library, at one and a half times the bitrate or better.
+sub much_better_rip ($file, $holder) {
+  return 0 if $file->{library} eq $holder->{library};
+  return 0 unless defined $file->{duration_ms} && defined $holder->{duration_ms};
+  return 0 unless abs($file->{duration_ms} - $holder->{duration_ms}) < 2000;
+  return 0 unless $file->{bitrate} && $holder->{bitrate};
+  return $file->{bitrate} >= 1.5 * $holder->{bitrate};
+}
+
 # Two files from the same directory of the same library whose audio runs
 # different lengths are different recordings that one rip numbered alike,
 # not two rips of one track.  Files from different directories are taken
-# to be two rips of the album, one of which should give way.
-sub different_recordings_from_one_rip ($x, $y) {
-  return 0 unless $x->{library} eq $y->{library};
-  return 0 unless dirname($x->{rel_path}) eq dirname($y->{rel_path});
+# to be two rips of the album, one of which should give way, unless they
+# are albumless singles, which only ever share a number by accident.
+sub different_recordings_from_one_rip ($x, $y, $singleton = 0) {
+  unless ($singleton) {
+    return 0 unless $x->{library} eq $y->{library};
+    return 0 unless dirname($x->{rel_path}) eq dirname($y->{rel_path});
+  }
   return 1 unless defined $x->{duration_ms} && defined $y->{duration_ms};
   return abs($x->{duration_ms} - $y->{duration_ms}) >= 2000;
 }
