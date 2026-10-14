@@ -60,6 +60,9 @@ that belong beside, not under, the rest of the tree.
    the original.  When the second library has a whole album and the original
    has only part of it, keep the second library's copy and discard the
    partial one.  Further rules will emerge once the inventory is in hand.
+   When two different rips of one track survive, from any source, keep
+   the higher bitrate.  The CDs are gone since 2018, so no rip can be
+   redone.
 5. **Reorganize into one tree.**  iTunes-shaped: `Artist/Album/NN Title.ext`,
    with `Compilations/Album/` for various-artists albums.  The 2014 problems
    came from iTunes moving files one at a time as they played, not from the
