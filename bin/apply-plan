@@ -1,0 +1,176 @@
+#!/usr/bin/env perl
+use v5.36;
+
+use DBI;
+use Encode qw(encode);
+use File::Path qw(make_path);
+use Getopt::Long::Descriptive;
+
+=head1 NAME
+
+apply-plan - carry out the moves plan-library decided on
+
+=head1 SYNOPSIS
+
+  apply-plan --db catalog.sqlite --dest /Volumes/Video/library \
+    --library mine=/Volumes/Video/music/music-volume/music \
+    --library jcap=/Volumes/Video/music/jcap-music \
+    --dry-run
+
+=head1 DESCRIPTION
+
+Reads the C<move_plan> table and renames each file marked C<move> from its
+library root to its destination under C<--dest>.  Every rename is recorded
+in C<move_log> with both paths, so it can be reversed.
+
+Before moving anything, every source is checked: it must exist and be the
+size the inventory recorded, and its destination must not already exist.
+If any check fails the run stops before the first rename, and says why.
+
+Renames stay within one volume, so no bytes are copied and nothing is
+deleted.  The old trees are left hollow, with their directories and
+anything the plan said to leave.
+
+With C<--dry-run> the checks run and the moves are printed, but nothing
+changes.  Files already recorded in C<move_log> are skipped, so an
+interrupted run can be resumed.
+
+=cut
+
+my ($opt, $usage) = describe_options(
+  '%c %o',
+  [ 'db=s',        'the SQLite catalog, with its move_plan',           { required => 1 } ],
+  [ 'dest=s',      'the directory the four roots go under',            { required => 1 } ],
+  [ 'library=s@',  'NAME=PATH for each inventoried library root',      { required => 1 } ],
+  [],
+  [ 'dry-run',     'check and print, but move nothing' ],
+  [ 'limit=i',     'stop after this many moves' ],
+  [ 'help',        'print usage and exit', { shortcircuit => 1 } ],
+);
+
+print($usage->text), exit if $opt->help;
+
+my %root;
+for my $spec (@{ $opt->library }) {
+  my ($name, $path) = split /=/, $spec, 2;
+  die "bad --library $spec; want NAME=PATH\n" unless defined $path;
+  $path =~ s{/+\z}{};
+  die "no such directory: $path\n" unless -d $path;
+  $root{$name} = $path;
+}
+
+my $dest_root = $opt->dest;
+$dest_root =~ s{/+\z}{};
+
+my $dbh = DBI->connect(
+  "dbi:SQLite:dbname=" . $opt->db, undef, undef,
+  { RaiseError => 1, sqlite_unicode => 1 },
+);
+
+$dbh->do(<<~'SQL');
+  CREATE TABLE IF NOT EXISTS move_log (
+    file_id  INTEGER NOT NULL PRIMARY KEY REFERENCES file (file_id),
+    src      TEXT    NOT NULL,
+    dest     TEXT    NOT NULL,
+    moved_at INTEGER NOT NULL
+  )
+  SQL
+
+my $moves = $dbh->selectall_arrayref(<<~'SQL', { Slice => {} });
+  SELECT f.file_id, f.library, f.rel_path, f.rel_path_bytes, f.size, p.dest
+  FROM move_plan p
+  JOIN file f ON f.file_id = p.file_id
+  LEFT JOIN move_log l ON l.file_id = p.file_id
+  WHERE p.action = 'move' AND l.file_id IS NULL
+  ORDER BY f.library, f.rel_path
+  SQL
+
+#---- check everything first ----------------------------------------------
+
+my @problems;
+my %dest_seen;
+
+for my $move (@$moves) {
+  my $src  = source_path($move);
+  my $dest = dest_path($move);
+
+  if (! defined $src) {
+    push @problems, "$move->{library}/$move->{rel_path}: no root given for library $move->{library}";
+    next;
+  }
+
+  if (! -e $src) {
+    push @problems, "$move->{library}/$move->{rel_path}: source missing";
+  } elsif (-s $src != $move->{size}) {
+    push @problems, "$move->{library}/$move->{rel_path}: size changed since inventory";
+  }
+
+  if (-e $dest) {
+    push @problems, "$move->{library}/$move->{rel_path}: destination exists: $move->{dest}";
+  }
+
+  if ($dest_seen{$dest}++) {
+    push @problems, "$move->{library}/$move->{rel_path}: destination used twice: $move->{dest}";
+  }
+}
+
+if (@problems) {
+  say STDERR $_ for @problems;
+  die sprintf "%d problems; nothing moved\n", scalar @problems;
+}
+
+printf STDERR "%d moves to make%s\n", scalar @$moves, ($opt->dry_run ? ' (dry run)' : '');
+
+#---- then move ----------------------------------------------------------
+
+my $log = $dbh->prepare(
+  'INSERT INTO move_log (file_id, src, dest, moved_at) VALUES (?, ?, ?, ?)'
+);
+
+my $done = 0;
+
+for my $move (@$moves) {
+  last if $opt->limit && $done >= $opt->limit;
+
+  my $src  = source_path($move);
+  my $dest = dest_path($move);
+
+  if ($opt->dry_run) {
+    say "$move->{library}/$move->{rel_path}\n  -> $move->{dest}";
+    $done++;
+    next;
+  }
+
+  my ($dest_dir) = $dest =~ m{\A(.*)/};
+  make_path($dest_dir) unless -d $dest_dir;
+
+  rename $src, $dest
+    or die "rename failed for $move->{library}/$move->{rel_path}: $!\n";
+
+  $log->execute($move->{file_id}, $src, $dest, time);
+  $done++;
+
+  printf STDERR "%7d moved\n", $done if $done % 1000 == 0;
+}
+
+printf STDERR "%d %s\n", $done, ($opt->dry_run ? 'would move' : 'moved');
+
+=head1 ROUTINES
+
+Paths are handled as bytes.  A source whose name was not valid UTF-8 is
+addressed by the raw bytes the inventory kept; destinations are the plan's
+NFC strings encoded as UTF-8.
+
+=cut
+
+sub source_path ($move) {
+  my $root = $root{ $move->{library} } // return undef;
+  my $rel  = defined $move->{rel_path_bytes}
+           ? $move->{rel_path_bytes}
+           : encode('UTF-8', $move->{rel_path});
+  return "$root/$rel";
+}
+
+sub dest_path ($move) {
+  return "$dest_root/" . encode('UTF-8', $move->{dest});
+}

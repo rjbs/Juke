@@ -99,8 +99,17 @@ The catalog is `/Volumes/Video/music/catalog.sqlite`.  Every tool takes
     bin/group-albums --db $DB
     bin/report-missing --db $DB --library mine --fallback jcap > /Volumes/Video/music/missing.tsv
     bin/report-incomplete --db $DB --library mine --dispositions /Volumes/Video/music/album-dispositions.tsv > /Volumes/Video/music/incomplete-2014.tsv
+    bin/plan-library --db $DB --dispositions /Volumes/Video/music/album-dispositions.tsv --out /Volumes/Video/music/plan.tsv
+    bin/apply-plan --db $DB --dest /Volumes/Video/library \
+      --library mine=/Volumes/Video/music/music-volume/music \
+      --library jcap=/Volumes/Video/music/jcap-music --dry-run
 
-The import and the matcher rebuild their tables from scratch.  The
+The import, the matcher, the grouping and the planner rebuild their
+tables from scratch.  The mover records every rename in a move_log table
+and skips anything already there, so it can be rerun after an interruption.
+After the move, inventory each new root (`--library Undamaged` and so on)
+to re-hash everything as verification; that inventory is the archive
+manifest.  The
 inventory is incremental and skips files whose size and mtime haven't
 changed, so rerunning it after a reorganization only reads what moved.  The
 full first run of both trees took about two hours, limited by the drive.
