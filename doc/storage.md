@@ -10,9 +10,20 @@ plus current tags, so tag edits reach clients without touching originals.
 - **Originals are immutable** and stored under opaque, hash-derived names,
   not a human-browsable tree.  Browsing happens through the app, not the file
   tree.
-- **Track id = hash of the audio frames only**, skipping ID3v2 at the front
-  and ID3v1 at the end.  Retagging leaves the id unchanged, and identical
-  audio with different tags shows up as a duplicate.
+- **Track ids are opaque and minted at ingest.**  They are not derived from
+  the audio.  An earlier draft made the id a hash of the audio frames, on the
+  theory that a later import of the same file would land on the same Track.
+  That is not the import we expect.  The likely second import is a backup
+  found years later, holding tracks lost in the interim; its files may be a
+  different rip or a different bitrate of the same recording, so the bytes
+  would not match anyway.  What that import needs is to identify the artist,
+  album and track by metadata and duration, and then decide which copy to
+  keep.  The recovery tools in `bin/` are the prototype of that: see
+  [recovery](recovery.md).
+- **Audio digest is a property of the Track**, a hash of the audio frames
+  only, skipping ID3v2 at the front and ID3v1 at the end.  Retagging leaves
+  it unchanged.  It catches byte-identical duplicates at ingest and verifies
+  that a stored original is still the bytes that were ingested.
 
 ## Served blobs
 
