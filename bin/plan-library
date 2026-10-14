@@ -77,7 +77,10 @@ when the matcher tied one of its tracks to somewhere else.
 =head2 Which copy wins
 
 Within a unit each disc-and-track slot is filled by one file.  The primary
-library's file wins; the others fill slots it lacks.  If another library's
+library's file wins; the others fill slots it lacks.  Within one library
+the bigger edition picks first.  Two files from one directory that share
+a number but are different recordings, a box set ripped without disc
+numbers say, both stay: only two rips of one track compete.  If another library's
 copy of a damaged album is whole, it takes the whole album and the
 primary's partial copy goes to Damaged.  If another library's copy is
 whole and fills more slots than the primary's whole copy, a deluxe edition
@@ -540,6 +543,14 @@ sub plan_unit ($unit) {
 
   my $multi_disc = multi_disc(\@all_files, \@catalog_tracks);
 
+  # Within one library the bigger edition picks its slots first, so a
+  # deluxe edition beside a standard one wins as a whole rather than
+  # track by track on bitrate. -- claude, 2026-10-14
+  my %edition_size;
+  for my $disk (@{ $unit->{disks} }) {
+    $edition_size{ $_->{file_id} } = @{ $disk->{files} } for @{ $disk->{files} };
+  }
+
   my %slot;
   for my $library (@order) {
     next unless $by_library{$library};
@@ -549,15 +560,33 @@ sub plan_unit ($unit) {
     my $this_root = ($whole_from && $library eq $primary && ($missing_primary || $disp eq 'jcap'))
                   ? 'Damaged' : $root;
 
-    for my $file (sort {; ($b->{bitrate} // 0) <=> ($a->{bitrate} // 0) || length($a->{rel_path}) <=> length($b->{rel_path}) } @{ $by_library{$library} }) {
+    my @files = sort {;
+         $edition_size{ $b->{file_id} } <=> $edition_size{ $a->{file_id} }
+      || ($b->{bitrate} // 0) <=> ($a->{bitrate} // 0)
+      || length($a->{rel_path}) <=> length($b->{rel_path})
+    } @{ $by_library{$library} };
+
+    for my $file (@files) {
       my $key = slot_key($file, $album_id);
+      my $reason;
 
       if (my $holder = $slot{"$this_root\0$key"}) {
-        my $reason = ($holder->{audio_sha256} // '') eq ($file->{audio_sha256} // '')
-                   ? "identical to $holder->{library}/$holder->{rel_path}"
-                   : "loses slot to $holder->{library}/$holder->{rel_path}";
-        push @rows, { file => $file, action => 'leave', reason => $reason, displaced_by => $holder };
-        next;
+        if (($holder->{audio_sha256} // '') eq ($file->{audio_sha256} // '')) {
+          $reason = "identical to $holder->{library}/$holder->{rel_path}";
+        } elsif (! different_recordings_from_one_rip($file, $holder)) {
+          $reason = "loses slot to $holder->{library}/$holder->{rel_path}";
+        }
+
+        if ($reason) {
+          push @rows, { file => $file, action => 'leave', reason => $reason, displaced_by => $holder };
+          next;
+        }
+
+        # Two different recordings numbered alike in one directory are
+        # both real tracks, a box set without disc numbers say, so the
+        # newcomer keeps its own slot. -- claude, 2026-10-14
+        $key = join "\0", 'f', $file->{file_id};
+        $reason = "numbered like $holder->{rel_path} but a different recording";
       }
 
       $slot{"$this_root\0$key"} = $file;
@@ -571,12 +600,23 @@ sub plan_unit ($unit) {
         action => 'move',
         dest   => join('/', $this_root, safe_filename($artist), safe_filename($name),
                        track_filename($file, $track, $multi_disc)),
-        reason => ($this_root eq $root ? $why : "partial copy; $why"),
+        reason => $reason // ($this_root eq $root ? $why : "partial copy; $why"),
       };
     }
   }
 
   return @rows;
+}
+
+# Two files from the same directory of the same library whose audio runs
+# different lengths are different recordings that one rip numbered alike,
+# not two rips of one track.  Files from different directories are taken
+# to be two rips of the album, one of which should give way.
+sub different_recordings_from_one_rip ($x, $y) {
+  return 0 unless $x->{library} eq $y->{library};
+  return 0 unless dirname($x->{rel_path}) eq dirname($y->{rel_path});
+  return 1 unless defined $x->{duration_ms} && defined $y->{duration_ms};
+  return abs($x->{duration_ms} - $y->{duration_ms}) >= 2000;
 }
 
 # True if the first files fill every slot the second do, and more: a
