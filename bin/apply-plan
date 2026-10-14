@@ -35,6 +35,12 @@ With C<--dry-run> the checks run and the moves are printed, but nothing
 changes.  Files already recorded in C<move_log> are skipped, so an
 interrupted run can be resumed.
 
+With C<--undo>, every move in C<move_log> is reversed, newest first, and
+its log row removed; the same checks run first, with source and
+destination swapped.  Directories under C<--dest> left empty by the undo
+are removed, so a corrected plan can be applied to a clean tree.  No file
+is ever deleted.
+
 =cut
 
 binmode STDOUT, q{:encoding(UTF-8)};
@@ -46,6 +52,7 @@ my ($opt, $usage) = describe_options(
   [ 'library=s@',  'NAME=PATH for each inventoried library root',      { required => 1 } ],
   [],
   [ 'dry-run',     'check and print, but move nothing' ],
+  [ 'undo',        'reverse every logged move instead' ],
   [ 'limit=i',     'stop after this many moves' ],
   [ 'help',        'print usage and exit', { shortcircuit => 1 } ],
 );
@@ -77,6 +84,8 @@ $dbh->do(<<~'SQL');
     moved_at INTEGER NOT NULL
   )
   SQL
+
+undo(), exit if $opt->undo;
 
 my $moves = $dbh->selectall_arrayref(<<~'SQL', { Slice => {} });
   SELECT f.file_id, f.library, f.rel_path, f.rel_path_bytes, f.size, p.dest
@@ -158,6 +167,85 @@ for my $move (@$moves) {
 printf STDERR "%d %s\n", $done, ($opt->dry_run ? 'would move' : 'moved');
 
 =head1 ROUTINES
+
+=head2 undo
+
+Reverses the moves in C<move_log>.  The log holds the exact byte strings
+the renames used, so no path is recomputed.
+
+=cut
+
+sub undo {
+  my $moves = $dbh->selectall_arrayref(
+    'SELECT file_id, src, dest FROM move_log ORDER BY file_id DESC',
+    { Slice => {} },
+  );
+
+  my @problems;
+  for my $move (@$moves) {
+    push @problems, "$move->{dest}: not there to move back"    if ! -e $move->{dest};
+    push @problems, "$move->{src}: original path is occupied"  if   -e $move->{src};
+  }
+
+  if (@problems) {
+    say STDERR $_ for @problems;
+    die sprintf "%d problems; nothing moved\n", scalar @problems;
+  }
+
+  printf STDERR "%d moves to undo%s\n", scalar @$moves, ($opt->dry_run ? ' (dry run)' : '');
+
+  my $unlog = $dbh->prepare('DELETE FROM move_log WHERE file_id = ?');
+  my $done = 0;
+
+  for my $move (@$moves) {
+    last if $opt->limit && $done >= $opt->limit;
+
+    if ($opt->dry_run) {
+      say "$move->{dest}\n  <- $move->{src}";
+      $done++;
+      next;
+    }
+
+    my ($src_dir) = $move->{src} =~ m{\A(.*)/};
+    make_path($src_dir) unless -d $src_dir;
+
+    rename $move->{dest}, $move->{src}
+      or die "rename back failed for $move->{dest}: $!\n";
+
+    $unlog->execute($move->{file_id});
+    $done++;
+
+    printf STDERR "%7d moved back\n", $done if $done % 1000 == 0;
+  }
+
+  printf STDERR "%d %s\n", $done, ($opt->dry_run ? 'would move back' : 'moved back');
+
+  remove_empty_dirs($dest_root) unless $opt->dry_run;
+  return;
+}
+
+# Removes directories under $dir that hold nothing, deepest first, and
+# $dir itself if it ends up empty.  Files are never touched; a directory
+# with even a .DS_Store in it stays. -- claude, 2026-10-14
+sub remove_empty_dirs ($dir) {
+  opendir my $dh, $dir or return;
+  my @entries = grep {; $_ ne '.' && $_ ne '..' } readdir $dh;
+  closedir $dh;
+
+  for my $entry (@entries) {
+    my $path = "$dir/$entry";
+    remove_empty_dirs($path) if -d $path && ! -l $path;
+  }
+
+  opendir $dh, $dir or return;
+  my $remaining = grep {; $_ ne '.' && $_ ne '..' } readdir $dh;
+  closedir $dh;
+
+  rmdir $dir if $remaining == 0;
+  return;
+}
+
+=head2 source_path, dest_path
 
 Paths are handled as bytes.  A source whose name was not valid UTF-8 is
 addressed by the raw bytes the inventory kept; destinations are the plan's
