@@ -123,18 +123,20 @@ planner honors the same file.
 
 ## Status
 
-The move ran on 2026-10-14, was undone the same day after review found
-three planner bugs (a byte-size match is not unique, same-named albums
-merged into a compilation, one stray match could rename an album), and
-ran again from the corrected plan.  53,705 files went into the four roots
-under `/Volumes/Video/library`: Undamaged 44,154, Damaged 5,518,
-Audiobooks 3,110, Miscellaneous 923.  The old trees under
-`/Volumes/Video/music` are hollow: what remains there is what the plan
-said to leave, mostly the partner's copies of albums already whole in
-mine, byte-identical duplicates, files that lost their slot to another
-rip, and files the inventory never looked at (.DS_Store, iTunes LP
-bundles, booklets, app downloads).  The `move_log` table in the catalog
-maps every file's old path to its new one, and `apply-plan --undo`
-reverses it; `move_plan.displaced_by` says which file won each slot a
-left-behind file lost.  Next is inventorying each new root, then
-reviewing Damaged.
+The move ran on 2026-10-14, and was undone and redone twice the same day
+as review of the leave-behinds found planner and matcher bugs (byte-size
+and generic-name coincidences, same-named albums merged into a
+compilation, box sets without disc numbers losing tracks, a stray match
+renaming an album).  The third run moved 54,405 files into the four
+roots under `/Volumes/Video/library`: Undamaged 44,949, Damaged 5,422,
+Audiobooks 3,110, Miscellaneous 924; 352 albums are damaged.  The old
+trees under `/Volumes/Video/music` are hollow: 1,444 files of mine and
+3,995 of the partner's remain, which are byte-identical duplicates, the
+same recording at a lower bitrate, other editions of albums mine has
+whole, artwork whose audio did not move, and files the inventory never
+looked at (.DS_Store, iTunes LP bundles, booklets, app downloads).  The
+`move_log` table in the catalog maps every file's old path to its new
+one, and `apply-plan --undo` reverses it; `move_plan.displaced_by` says
+which file won each slot a left-behind file lost, which the ratings
+transfer will need.  Next is inventorying each new root, then reviewing
+Damaged.
