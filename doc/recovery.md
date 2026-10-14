@@ -117,6 +117,18 @@ full first run of both trees took about two hours, limited by the drive.
 Decisions about individual albums live in
 `/Volumes/Video/music/album-dispositions.tsv`: artist, album, disposition,
 note.  Dispositions so far are `keep` (whole, whatever the tags claim),
-`damaged`, `misc` (not music), and `jcap` (take the partner's copy).  The
-incomplete report leaves out any album listed there, and the splitter will
-honor the same file.
+`damaged`, `misc` (not music), `audiobook`, and `jcap` (take the partner's
+copy).  The incomplete report leaves out any album listed there, and the
+planner honors the same file.
+
+## Status
+
+The move ran on 2026-10-14.  53,409 files went into the four roots under
+`/Volumes/Video/library`: Undamaged 43,688, Damaged 5,688, Audiobooks
+3,110, Miscellaneous 923.  The old trees under `/Volumes/Video/music` are
+hollow: what remains there is what the plan said to leave, mostly the
+partner's copies of albums already whole in mine, byte-identical
+duplicates, and files the inventory never looked at (playlists, dotfiles,
+artwork from directories whose audio went two ways).  The `move_log`
+table in the catalog maps every file's old path to its new one.  Next is
+inventorying each new root, then reviewing Damaged.
