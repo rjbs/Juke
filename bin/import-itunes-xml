@@ -1,0 +1,417 @@
+#!/usr/bin/env perl
+use v5.36;
+
+use DBI qw(SQL_BLOB);
+use Encode qw(decode);
+use Getopt::Long::Descriptive;
+use JSON::MaybeXS;
+use MIME::Base64 qw(decode_base64);
+use Path::Tiny;
+use URI::Escape qw(uri_unescape);
+use XML::LibXML;
+
+=head1 NAME
+
+import-itunes-xml - load an iTunes library XML export into a SQLite catalog
+
+=head1 SYNOPSIS
+
+  import-itunes-xml --xml Pre-Oops-Library.xml --db /Volumes/Video/music/catalog.sqlite
+
+=head1 DESCRIPTION
+
+An iTunes "Library.xml" file is a plist with two interesting parts: a dict of
+tracks keyed by track id, and an array of playlists, each with an ordered
+list of track ids.  This program loads both into SQLite so they can be
+queried, joined against an inventory of actual files, and turned into
+reports.
+
+Track properties with a known column go into that column.  Anything else is
+kept in the C<extra> column as JSON, so nothing from the export is lost.
+
+The tables are dropped and recreated on every run; the XML is the source of
+truth and the import is cheap.
+
+=cut
+
+my @TRACK_COLUMNS = qw(
+  name artist album_artist album composer genre grouping comments
+  sort_name sort_artist sort_album_artist sort_album sort_composer
+  kind track_type file_type
+  size total_time bit_rate sample_rate
+  year release_date bpm
+  track_number track_count disc_number disc_count
+  compilation part_of_gapless_album
+  rating album_rating album_rating_computed
+  play_count play_date skip_count skip_date
+  date_added date_modified
+  purchased protected disabled unplayed
+  location
+);
+
+my %TRACK_COLUMN = map {; $_ => 1 } @TRACK_COLUMNS;
+
+# Keys whose column name isn't just the lowercased, underscored key.  "Play
+# Date" is the same instant as "Play Date UTC" in Mac epoch seconds, so we
+# keep only the UTC form. -- claude, 2026-10-13
+my %TRACK_KEY_COLUMN = (
+  'Play Date UTC' => 'play_date',
+  'Play Date'     => undef,
+);
+
+my @PLAYLIST_COLUMNS = qw(
+  name parent_persistent_id
+  distinguished_kind
+  master music movies tv_shows podcasts audiobooks
+  folder all_items visible
+  smart_info smart_criteria
+);
+
+my %PLAYLIST_COLUMN = map {; $_ => 1 } @PLAYLIST_COLUMNS;
+
+# iTunes writes boolean keys only when they are true, so an absent key means
+# the default. -- claude, 2026-10-13
+my %COLUMN_DEFAULT = (
+  (map {; $_ => 0 } qw(
+    compilation part_of_gapless_album album_rating_computed
+    purchased protected disabled unplayed
+    master music movies tv_shows podcasts audiobooks folder all_items
+  )),
+  visible => 1,
+);
+
+my ($opt, $usage) = describe_options(
+  '%c %o',
+  [ 'xml=s', 'the iTunes library XML file', { required => 1 } ],
+  [ 'db=s',  'the SQLite catalog to write',  { required => 1 } ],
+  [],
+  [ 'help',  'print usage and exit', { shortcircuit => 1 } ],
+);
+
+print($usage->text), exit if $opt->help;
+
+my $json = JSON::MaybeXS->new(canonical => 1, utf8 => 0);
+
+my $doc = XML::LibXML->load_xml(location => $opt->xml, huge => 1);
+my ($root) = $doc->findnodes('/plist/dict')
+  or die "no top-level dict in " . $opt->xml . "\n";
+
+my $library = plist_dict($root);
+
+my $dbh = DBI->connect(
+  "dbi:SQLite:dbname=" . $opt->db, undef, undef,
+  { RaiseError => 1, sqlite_unicode => 1 },
+);
+
+create_schema($dbh);
+
+$dbh->begin_work;
+
+import_library($dbh, $library);
+my $track_count    = import_tracks($dbh, $library->{Tracks});
+my $playlist_count = import_playlists($dbh, $library->{Playlists});
+
+$dbh->commit;
+
+say "imported $track_count tracks and $playlist_count playlists into "
+  . $opt->db;
+
+=head1 PLIST DECODING
+
+These routines turn plist DOM nodes into Perl values.  A C<dict> becomes a
+hashref, an C<array> an arrayref, C<true>/C<false> become 1/0, C<data> is
+base64-decoded, and everything else becomes its text.
+
+=cut
+
+sub plist_value ($node) {
+  my $name = $node->nodeName;
+
+  return plist_dict($node)              if $name eq 'dict';
+  return plist_array($node)             if $name eq 'array';
+  return 1                              if $name eq 'true';
+  return 0                              if $name eq 'false';
+  return decode_base64($node->textContent) if $name eq 'data';
+  return $node->textContent;
+}
+
+sub plist_dict ($node) {
+  my @kids = grep {; $_->nodeType == XML_ELEMENT_NODE } $node->childNodes;
+
+  my %dict;
+  while (@kids) {
+    my $key   = shift @kids;
+    my $value = shift @kids;
+    die "dict key without value" unless $value;
+    $dict{ $key->textContent } = plist_value($value);
+  }
+
+  return \%dict;
+}
+
+sub plist_array ($node) {
+  return [
+    map {; plist_value($_) }
+    grep {; $_->nodeType == XML_ELEMENT_NODE } $node->childNodes
+  ];
+}
+
+=head1 SCHEMA
+
+=cut
+
+sub create_schema ($dbh) {
+  $dbh->do("DROP TABLE IF EXISTS $_")
+    for qw(itunes_playlist_item itunes_playlist itunes_track itunes_library);
+
+  $dbh->do(<<~'SQL');
+    CREATE TABLE itunes_library (
+      key   TEXT NOT NULL PRIMARY KEY,
+      value TEXT
+    )
+    SQL
+
+  $dbh->do(<<~'SQL');
+    CREATE TABLE itunes_track (
+      track_id      INTEGER NOT NULL PRIMARY KEY,
+      persistent_id TEXT    NOT NULL UNIQUE,
+
+      name              TEXT,
+      artist            TEXT,
+      album_artist      TEXT,
+      album             TEXT,
+      composer          TEXT,
+      genre             TEXT,
+      grouping          TEXT,
+      comments          TEXT,
+      sort_name         TEXT,
+      sort_artist       TEXT,
+      sort_album_artist TEXT,
+      sort_album        TEXT,
+      sort_composer     TEXT,
+
+      kind        TEXT,
+      track_type  TEXT,
+      file_type   INTEGER,
+      size        INTEGER,
+      total_time  INTEGER,
+      bit_rate    INTEGER,
+      sample_rate INTEGER,
+
+      year          INTEGER,
+      release_date  TEXT,
+      bpm           INTEGER,
+      track_number  INTEGER,
+      track_count   INTEGER,
+      disc_number   INTEGER,
+      disc_count    INTEGER,
+      compilation           INTEGER NOT NULL DEFAULT 0,
+      part_of_gapless_album INTEGER NOT NULL DEFAULT 0,
+
+      rating                INTEGER,
+      album_rating          INTEGER,
+      album_rating_computed INTEGER NOT NULL DEFAULT 0,
+      play_count    INTEGER,
+      play_date     TEXT,
+      skip_count    INTEGER,
+      skip_date     TEXT,
+      date_added    TEXT,
+      date_modified TEXT,
+
+      purchased INTEGER NOT NULL DEFAULT 0,
+      protected INTEGER NOT NULL DEFAULT 0,
+      disabled  INTEGER NOT NULL DEFAULT 0,
+      unplayed  INTEGER NOT NULL DEFAULT 0,
+
+      -- location is the URL as iTunes wrote it; path is that URL decoded to
+      -- a filesystem path, when it is a file: URL; music_path is the path
+      -- relative to the library's Music Folder, when it is under it
+      location   TEXT,
+      path       TEXT,
+      music_path TEXT,
+
+      extra TEXT
+    )
+    SQL
+
+  $dbh->do(<<~'SQL');
+    CREATE TABLE itunes_playlist (
+      playlist_id   INTEGER NOT NULL PRIMARY KEY,
+      persistent_id TEXT    NOT NULL UNIQUE,
+      parent_persistent_id TEXT,
+      name          TEXT,
+
+      distinguished_kind INTEGER,
+      master      INTEGER NOT NULL DEFAULT 0,
+      music       INTEGER NOT NULL DEFAULT 0,
+      movies      INTEGER NOT NULL DEFAULT 0,
+      tv_shows    INTEGER NOT NULL DEFAULT 0,
+      podcasts    INTEGER NOT NULL DEFAULT 0,
+      audiobooks  INTEGER NOT NULL DEFAULT 0,
+      folder      INTEGER NOT NULL DEFAULT 0,
+      all_items   INTEGER NOT NULL DEFAULT 0,
+      visible     INTEGER NOT NULL DEFAULT 1,
+
+      smart_info     BLOB,
+      smart_criteria BLOB,
+
+      extra TEXT
+    )
+    SQL
+
+  $dbh->do(<<~'SQL');
+    CREATE TABLE itunes_playlist_item (
+      playlist_id INTEGER NOT NULL REFERENCES itunes_playlist (playlist_id),
+      position    INTEGER NOT NULL,
+      track_id    INTEGER NOT NULL REFERENCES itunes_track (track_id),
+      PRIMARY KEY (playlist_id, position)
+    )
+    SQL
+
+  $dbh->do('CREATE INDEX itunes_track_artist_album ON itunes_track (artist, album)');
+  $dbh->do('CREATE INDEX itunes_track_music_path   ON itunes_track (music_path)');
+  $dbh->do('CREATE INDEX itunes_playlist_item_track ON itunes_playlist_item (track_id)');
+}
+
+=head1 IMPORT
+
+=cut
+
+sub import_library ($dbh, $library) {
+  my $sth = $dbh->prepare('INSERT INTO itunes_library (key, value) VALUES (?, ?)');
+
+  for my $key (sort keys %$library) {
+    next if ref $library->{$key};
+    $sth->execute($key, $library->{$key});
+  }
+
+  $sth->execute('Source File', path($opt->xml)->absolute->stringify);
+}
+
+sub column_for ($key) {
+  my $column = lc $key;
+  $column =~ s/ /_/g;
+  return $column;
+}
+
+# Splits a plist dict into the columns we know about and the leftovers.  Keys
+# in %$key_column override the derived column name; an undef there means
+# "discard".
+sub split_columns ($dict, $known, $key_column = {}) {
+  my (%columns, %extra);
+
+  for my $key (keys %$dict) {
+    my $column = exists $key_column->{$key}
+               ? $key_column->{$key}
+               : column_for($key);
+
+    next unless defined $column;
+
+    if ($known->{$column}) {
+      $columns{$column} = $dict->{$key};
+    } else {
+      $extra{$key} = $dict->{$key};
+    }
+  }
+
+  return (\%columns, \%extra);
+}
+
+sub file_url_to_path ($url) {
+  return undef unless $url =~ s{\Afile://localhost/}{/};
+  return decode('UTF-8', uri_unescape($url), Encode::FB_CROAK);
+}
+
+sub import_tracks ($dbh, $tracks) {
+  my $music_folder = file_url_to_path($library->{'Music Folder'} // '');
+
+  my @columns = (@TRACK_COLUMNS, qw(path music_path extra));
+  my $sth = $dbh->prepare(sprintf
+    'INSERT INTO itunes_track (track_id, persistent_id, %s) VALUES (%s)',
+    join(', ', @columns),
+    join(', ', ('?') x (2 + @columns)),
+  );
+
+  my $count = 0;
+
+  for my $track_id (sort {; $a <=> $b } keys %$tracks) {
+    my $track = $tracks->{$track_id};
+
+    my ($columns, $extra) = split_columns($track, \%TRACK_COLUMN, \%TRACK_KEY_COLUMN);
+
+    delete $extra->{'Track ID'};
+    my $persistent_id = delete $extra->{'Persistent ID'};
+
+    my $path = defined $columns->{location}
+             ? file_url_to_path($columns->{location})
+             : undef;
+
+    my $music_path;
+    if (defined $path && defined $music_folder) {
+      ($music_path) = $path =~ m{\A\Q$music_folder\E(.+)\z};
+    }
+
+    $sth->execute(
+      $track_id,
+      $persistent_id,
+      (map {; $columns->{$_} // $COLUMN_DEFAULT{$_} } @TRACK_COLUMNS),
+      $path,
+      $music_path,
+      (%$extra ? $json->encode($extra) : undef),
+    );
+
+    $count++;
+  }
+
+  return $count;
+}
+
+sub import_playlists ($dbh, $playlists) {
+  my @columns = (@PLAYLIST_COLUMNS, 'extra');
+  my $sth = $dbh->prepare(sprintf
+    'INSERT INTO itunes_playlist (playlist_id, persistent_id, %s) VALUES (%s)',
+    join(', ', @columns),
+    join(', ', ('?') x (2 + @columns)),
+  );
+
+  my $item_sth = $dbh->prepare(
+    'INSERT INTO itunes_playlist_item (playlist_id, position, track_id) VALUES (?, ?, ?)'
+  );
+
+  my $count = 0;
+
+  for my $playlist (@$playlists) {
+    my ($columns, $extra) = split_columns($playlist, \%PLAYLIST_COLUMN);
+
+    my $playlist_id   = delete $extra->{'Playlist ID'};
+    my $persistent_id = delete $extra->{'Playlist Persistent ID'};
+    my $items         = delete $extra->{'Playlist Items'} // [];
+
+    my @values = (
+      $playlist_id,
+      $persistent_id,
+      (map {; $columns->{$_} // $COLUMN_DEFAULT{$_} } @PLAYLIST_COLUMNS),
+      (%$extra ? $json->encode($extra) : undef),
+    );
+
+    # The smart playlist columns hold binary data, which has to be bound as
+    # a blob or sqlite_unicode will encode it as if it were text.
+    # -- claude, 2026-10-13
+    for my $i (0 .. $#values) {
+      my $column  = $i < 2 ? undef : $columns[$i - 2];
+      my $is_blob = defined $column && $column =~ /\Asmart_/;
+      $sth->bind_param($i + 1, $values[$i], ($is_blob ? SQL_BLOB : ()));
+    }
+
+    $sth->execute;
+
+    my $position = 0;
+    for my $item (@$items) {
+      $item_sth->execute($playlist_id, $position++, $item->{'Track ID'});
+    }
+
+    $count++;
+  }
+
+  return $count;
+}
