@@ -75,3 +75,20 @@ that belong beside, not under, the rest of the tree.
 - Catalog data lives on the SSD under `/Volumes/Video/music`.
 - The library contains M4A and probably M4P alongside MP3.  What else is in
   there is a question for the inventory.
+
+## Running it
+
+The catalog is `/Volumes/Video/music/catalog.sqlite`.  Every tool takes
+`--db` pointing at it.  In order:
+
+    bin/import-itunes-xml --xml Pre-Oops-Library.xml --db $DB
+    bin/inventory-files --db $DB --root /Volumes/Video/music/music-volume/music --library mine -v
+    bin/inventory-files --db $DB --root /Volumes/Video/music/jcap-music --library jcap -v
+    bin/match-tracks --db $DB --library mine
+    bin/match-tracks --db $DB --library jcap
+    bin/report-missing --db $DB --library mine --fallback jcap > /Volumes/Video/music/missing.tsv
+
+The import and the matcher rebuild their tables from scratch.  The
+inventory is incremental and skips files whose size and mtime haven't
+changed, so rerunning it after a reorganization only reads what moved.  The
+full first run of both trees took about two hours, limited by the drive.
