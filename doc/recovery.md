@@ -47,29 +47,36 @@ that belong beside, not under, the rest of the tree.
 
 ## Steps
 
-1. **Catalog what existed.**  Parse the 2014 XML into an easy-to-manage
-   catalog: tracks with artist, album, title, track number, path, play count
-   and rating, plus playlists if present.
+1. **Catalog what existed.**  Parse the 2014 XML into a catalog: tracks with
+   artist, album, title, track number, path, play count and rating, plus
+   playlists.  Done.
 2. **Inventory what exists now.**  Walk both library trees and record every
-   file with its path, size, audio hash, and tag summary.  This has to wait
-   for the NAS copy to finish.
-3. **Report what's missing.**  One line per album: artist, album, tracks
-   present, tracks missing.  From that report comes a by-hand decision per
-   album: buy again, or cut the loss.
-4. **Merge the second library.**  When both libraries have an album, keep
-   the original.  When the second library has a whole album and the original
-   has only part of it, keep the second library's copy and discard the
-   partial one.  Further rules will emerge once the inventory is in hand.
-   When two different rips of one track survive, from any source, keep
-   the higher bitrate.  The CDs are gone since 2018, so no rip can be
-   redone.
-5. **Reorganize into one tree.**  iTunes-shaped: `Artist/Album/NN Title.ext`,
-   with `Compilations/Album/` for various-artists albums.  The 2014 problems
+   file with its path, size, audio hash, and tag summary.  Done.
+3. **Match and report.**  Link each catalog track to a file where one
+   survives, and report per album what is present and what is missing.
+   Done; the report is `/Volumes/Video/music/missing.tsv`.
+4. **Split into two libraries.**  Every album goes to one of two trees:
+   - **Undamaged:** every track the 2014 catalog lists for the album has a
+     file, or the album was never in the catalog at all.  This is the basis
+     for the initial Juke library.
+   - **Damaged:** at least one catalog track has no file.  The surviving
+     tracks go here too.  This tree is a backup and a queue of albums to
+     replace over time, and it does not go into Juke.
+
+   Both trees are iTunes-shaped: `Artist/Album/NN Title.ext`, with
+   `Compilations/Album/` for various-artists albums.  The 2014 problems
    came from iTunes moving files one at a time as they played, not from the
    layout itself.
+5. **Merge the second library.**  When both libraries have an album, keep
+   the original.  When the second library has a whole album and the original
+   has only part of it, take the second library's copy, which makes that
+   album undamaged.  Albums only the second library has go straight to
+   undamaged.  When two different rips of one track survive, from any
+   source, keep the higher bitrate.  The CDs are gone since 2018, so no rip
+   can be redone.
 6. **Fix tags.**  Deferred until the files are organized.
-7. **Archive.**  Write a manifest of audio hashes and tag summaries into the
-   tree, then make the tree immutable.  That manifest is the second
+7. **Archive.**  Write a manifest of audio hashes and tag summaries into
+   each tree, then make them immutable.  That manifest is the second
    comparison, made permanent, and the input to Juke's import.
 
 ## Where things live
