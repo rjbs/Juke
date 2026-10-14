@@ -84,7 +84,12 @@ C<album-number-loose> is below; four INXS tracks are not Devo's.
 As C<album-number>, but the album names need only be alike, as
 C<title-duration> judges it.  A re-rip filed under "New Coat of Paint -
 Songs of Tom Waits" finds the catalog's "New Coat Of Paint" here even
-where the artist was spelled differently.
+where the artist was spelled differently.  Unless one side is a
+compilation, where every track has its own artist, the artists must be
+alike too: equal once punctuation and a leading "The" are gone, or one a
+prefix of the other, as "Jimi Hendrix" is of "The Jimi Hendrix
+Experience".  Without that, a Ween bootleg called "Live At Stubbs,
+7/2000" stood in for Matisyahu's "Live At Stubb's".
 
 Position and length alone are weak evidence, so this pass is believed
 only where it and the passes before it together account for at least half
@@ -144,13 +149,13 @@ $dbh->do('DELETE FROM itunes_track_file WHERE library = ?', undef, $opt->library
 
 my $tracks = $dbh->selectall_arrayref(<<~'SQL', { Slice => {} });
   SELECT track_id, music_path, size, artist, album, name, track_number,
-         disc_number, total_time
+         disc_number, total_time, compilation, album_artist
   FROM itunes_audio_track
   SQL
 
 my $files = $dbh->selectall_arrayref(<<~'SQL', { Slice => {} }, $opt->library);
   SELECT file_id, rel_path, size, artist, album, title, track_number,
-         disc_number, duration_ms
+         disc_number, duration_ms, compilation, album_artist
   FROM file
   WHERE library = ? AND is_audio = 1
   SQL
@@ -206,7 +211,9 @@ my @PASSES = (
     file_key => sub ($f) { position_duration_keys($f) },
     track_key => sub ($t) { position_duration_keys($t) },
     filter   => sub ($t, $f) {
-      duration_close($t, $f) && album_keys_alike($t->{album_key}, $f->{album_key})
+      duration_close($t, $f)
+        && album_keys_alike($t->{album_key}, $f->{album_key})
+        && ($t->{compilation} || $f->{compilation} || artists_alike($t, $f))
     },
     prune    => \&prune_by_album_majority,
   },
@@ -374,6 +381,32 @@ sub artist_title_key ($row, $title_field) {
 sub album_alike_or_absent ($track, $file) {
   return 1 unless length($file->{album} // '');
   return albums_alike($track->{album}, $file->{album});
+}
+
+sub artist_key ($name) {
+  my $key = norm_text($name);
+  $key =~ s/\Athe //;
+  $key =~ s/[^\p{Alnum}]+//g;
+  return $key;
+}
+
+# Either side's album artist counts as well as its track artist, so Tom
+# Tom Club's track on a Talking Heads album still belongs.  "Various
+# Artists" and a blank artist are taken to match anyone.
+sub artists_alike ($track, $file) {
+  my @kt = map {; artist_key($_) } grep {; length } $track->{artist} // '', $track->{album_artist} // '';
+  my @kf = map {; artist_key($_) } grep {; length } $file->{artist}  // '', $file->{album_artist}  // '';
+  return 1 if ! @kt || ! @kf;
+
+  for my $kt (@kt) {
+    for my $kf (@kf) {
+      return 1 if grep {; $_ eq 'various' || $_ eq 'variousartists' } $kt, $kf;
+      return 1 if $kt eq $kf;
+      my ($short, $long) = length $kt <= length $kf ? ($kt, $kf) : ($kf, $kt);
+      return 1 if length $short >= 4 && index($long, $short) == 0;
+    }
+  }
+  return 0;
 }
 
 sub duration_close ($track, $file) {
