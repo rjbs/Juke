@@ -149,6 +149,8 @@ size).  One wrinkle: 475 files in 56 planned directories sit at a path
 that differs from `move_log.dest` only in case, because APFS is
 case-insensitive and two units spelled the artist differently (Beck and
 beck, Dntel and DNTEL, Nas and NaS); the later unit landed in the earlier
-one's directory.  Nothing was lost, but the planner should fold case when
-naming directories, and those directories want renaming to one spelling
-(loose thread 2026-10-14-k4zwgt).  Next is reviewing Damaged.
+one's directory.  Nothing was lost.  Those directories were then renamed
+to the catalog's spelling, or left as found where the catalog had none,
+and `move_log`, `move_plan` and the inventory rows rewritten to match, so
+every logged move again names the exact path on disk.  The planner should
+still fold case when naming directories (loose thread 2026-10-14-k4zwgt).  Next is reviewing Damaged.
