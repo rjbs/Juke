@@ -83,6 +83,10 @@ my $dbh = DBI->connect(
   { RaiseError => 1, sqlite_unicode => 1 },
 );
 
+# A rollback journal blocks readers while a big transaction is pending; WAL
+# lets reports run against the catalog mid-inventory. -- claude, 2026-10-13
+$dbh->do(q{PRAGMA journal_mode = WAL});
+
 create_schema($dbh);
 
 my %known = %{ $dbh->selectall_hashref(
