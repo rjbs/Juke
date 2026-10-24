@@ -13,6 +13,8 @@ disagree, fix one of them.
 
 - **Server:** serves track metadata, playlists and audio blobs over JMAP;
   syncs play counts, recently played and ratings; evaluates smart playlists.
+  It runs long-term on a Linux host on the home Tailscale network, and is
+  developed and tested on macOS.  Go or Rust; not yet chosen.
 - **iOS client:** a self-contained player with its own in-app library.
 - **Out of scope:** appearing in the system Music app or its media library.
   Not needed, and third-party apps can't add to it anyway.
