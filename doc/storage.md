@@ -40,8 +40,13 @@ plus current tags, so tag edits reach clients without touching originals.
   to rebuild them.  A client caught mid-download refetches the Track and gets
   the new blobId.
 
-## Open question: formats other than MP3
+## Formats other than MP3
 
-Tag synthesis is straightforward for MP3.  M4A and FLAC keep metadata inside
-the container, which needs a different approach.  Check what the library
-actually contains before deciding whether this matters.
+The starting library is 42,066 MP3 files, 2,747 M4A files and 4 MP2 files.
+No FLAC.
+
+Tag writing is straightforward for MP3.  M4A keeps metadata inside the
+container, and Go has no mature library for writing it.  Until that
+changes, an edit to an M4A track is kept in the database but never reaches
+the served file: the track stays dirty, its `blobId` is unchanged, and clients
+go on getting the original tags.  The edit is not lost, only unflushed.

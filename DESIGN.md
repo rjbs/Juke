@@ -14,7 +14,9 @@ disagree, fix one of them.
 - **Server:** serves track metadata, playlists and audio blobs over JMAP;
   syncs play counts, recently played and ratings; evaluates smart playlists.
   It runs long-term on a Linux host on the home Tailscale network, and is
-  developed and tested on macOS.  Go or Rust; not yet chosen.
+  developed and tested on macOS.  It is written in Go.  If a move to Rust
+  ever makes sense, it would be a rewrite against these specs; the data is
+  portable either way.
 - **iOS client:** a self-contained player with its own in-app library.
 - **Out of scope:** appearing in the system Music app or its media library.
   Not needed, and third-party apps can't add to it anyway.
@@ -58,8 +60,6 @@ Writing a JMAP server for new data types is treated as a solved problem.
 
 These are also tracked as Loose Threads (`lt list`).
 
-- [ ] Which audio formats are in the library?  M4A or FLAC would need
-      container-aware tag synthesis.
 - [ ] Where does "pinned for offline" live?  Local per-device state is
       simplest; a server-side property would show which devices hold what.
 - [ ] For smart playlists: lazy evaluation on request, or recompute on
