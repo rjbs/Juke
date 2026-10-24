@@ -46,6 +46,8 @@ Writing a JMAP server for new data types is treated as a solved problem.
   calls, evaluated on the server.
 - [iOS client](doc/ios-client.md): a Spotify-shaped model, pinned downloads
   first and a streaming cache later.
+- [Sample library](doc/sample-library.md): a 1 GB slice of the real library
+  for prototyping, chosen to cover the hard cases.
 - [Recovery and reorganization](doc/recovery.md): putting the library back
   together before Juke exists, and the rules for doing it without losing
   anything else.
