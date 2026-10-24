@@ -23,8 +23,8 @@ JMAP carries everything: object sync through state strings and `/changes`,
 and file transfer through the standard blob upload and download endpoints.
 Writing a JMAP server for new data types is treated as a solved problem.
 
-- **Object types:** Track and Playlist at minimum, each its own JMAP type
-  with its own state.
+- **Object types:** Track, Album and Playlist, each its own JMAP type with
+  its own state.  See [object types](doc/types.md).
 - **Updates are last-write-wins** via plain `/set` updates.  Play counts,
   last played and ratings are almost always written by one device.  When two
   devices do collide, the cost is a count off by one, which isn't worth an
@@ -35,6 +35,8 @@ Writing a JMAP server for new data types is treated as a solved problem.
 
 ## The rest of the design
 
+- [Object types](doc/types.md): Track, Album and Playlist, kept small;
+  albums have discs, and own their tracks.
 - [Server storage](doc/storage.md): immutable originals, audio-only track
   ids, and blobs synthesized on request from original audio plus current
   tags.
@@ -58,6 +60,6 @@ These are also tracked as Loose Threads (`lt list`).
       simplest; a server-side property would show which devices hold what.
 - [ ] For smart playlists: lazy evaluation on request, or recompute on
       write?
-- [ ] Exact Track and Playlist property sets, and which properties
-      `Track/query` can filter and sort on.
+- [ ] Which properties `Track/query` can filter and sort on.  The first
+      property sets are proposed in [object types](doc/types.md).
 - [ ] How the initial import reads existing ID3 tags into the database.
