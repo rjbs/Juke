@@ -10,9 +10,24 @@ build.
 - **Server-side evaluation** keeps every client in agreement without
   reimplementing date-relative rules and sort-and-limit per platform.
   Client-side evaluation would only help offline, which isn't worth the cost.
-- **No reactive recomputation.**  Track updates don't cascade into playlist
-  updates.  The server can evaluate lazily on request, or recompute on write
-  and just advance state.  Which of those is still open.
+- **Lazy evaluation with a cache.**  A smart playlist's track list is
+  computed when needed and cached.  Its inputs are Track and Album state,
+  so the cache holds until either changes.  Every play changes Track state,
+  so recomputation must be quick, which a SQL query over the library is.
+- **Report real changes only.**  When an input changes, the server
+  recomputes and compares with the cached list, and bumps the playlist's
+  modseq only if the list differs.  Otherwise every play would make every
+  client refetch every smart playlist.
+- **Deterministic results.**  Sorts break ties by track id.  Random
+  selection orders tracks by a hash of the track id and a seed stored on
+  the playlist, so the selection is stable and changes only where inputs
+  change; reshuffling is an edit that sets a new seed.
+- **Time-relative rules** like "played in the last 30 days" are evaluated
+  against the current day, and the date is part of the cache key, so such
+  a playlist changes at most once a day.
+- **No cycles.**  A rule may draw on another playlist, so playlists form a
+  graph.  `Playlist/set` rejects a change that would close a loop, so
+  evaluation can always run in dependency order.
 - **Two-phase client sync:** the client syncs all Track changes first, then
   fetches playlists.  It never sees playlist membership computed against
   tracks it hasn't received yet.
