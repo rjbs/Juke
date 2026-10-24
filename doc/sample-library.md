@@ -3,8 +3,8 @@
 The full library is 258 GB and 45,000 files, too big to re-import every
 time the importer changes.  The prototype works from a sample of about
 1 GB, plucked from the real library so it has the real library's
-problems.  It is copied, never moved, from `/Volumes/Video/library`; the
-archive stays untouched.
+problems.  It has 189 files and comes to 958 MB.  It is copied, never
+moved, from `/Volumes/Video/library`; the archive stays untouched.
 
 Each album below was picked for a case the data model or the importer has
 to handle.  Many cover more than one.  Sizes come from the inventory and
@@ -30,18 +30,23 @@ are approximate.
 | Non-ASCII: Japanese; one disc of a box set | 山根麻衣, *Cowboy Bebop CD-Box* [Disc 3] | 1 | 6 |
 | Mis-decoded tags (Musiał read as Musia³) | Piotr Musiał, *Anomaly Korea* | 4 | 12 |
 | Large single file, for range requests and streaming | John Digweed mix, no album | 1 | 80 |
-| Total | | about 200 | about 920 |
+| One-track "album" with no album tag | Monty Python, "Brave Sir Robin" | 1 | 1 |
+| Cover art as a loose JPEG; artist and album share a name; M4A | Black Sabbath, *Black Sabbath* | 6 | 36 |
+| Untagged file, which the importer must refuse or quarantine | "Danger Mouse.mp3", from `Miscellaneous/Untagged` | 1 | 1 |
+| Total | | 189 | 958 |
 
-## Still to pick
+## Building it
 
-These need the SSD mounted to choose well:
+The sample lives in `sample/` at the top of this repository, which git
+ignores.  `doc/sample-library.paths` lists each directory or file relative
+to the library root, and the copy keeps those paths, so the sample has the
+archive's layout:
 
-- **A one-track "album" with no album tag,** from one of the small
-  `Unknown Album` directories.
-- **An album with cover art** as a loose JPEG beside the tracks, for when
-  artwork arrives.
-- **One untagged file** from `Miscellaneous/Untagged`, to check the
-  importer refuses or quarantines it cleanly.
+    rsync -a -r --files-from=doc/sample-library.paths \
+      /Volumes/Video/library/ sample/
+
+The copy made on 2026-10-24 was checked byte for byte against the
+originals.
 
 ## Playlists
 
