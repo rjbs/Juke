@@ -60,8 +60,6 @@ Writing a JMAP server for new data types is treated as a solved problem.
 
 These are also tracked as Loose Threads (`lt list`).
 
-- [ ] Where does "pinned for offline" live?  Local per-device state is
-      simplest; a server-side property would show which devices hold what.
 - [ ] For smart playlists: lazy evaluation on request, or recompute on
       write?
 - [ ] Which properties `Track/query` can filter and sort on.  The first

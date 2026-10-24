@@ -16,6 +16,9 @@ plus a streaming cache, built in two phases with downloads first.
 
 ## Decisions
 
+- **Pinning is device-local.**  Which tracks are pinned lives only in the
+  app's own storage, not on the server, so the server cannot say which
+  devices hold what.  Jinx's blob store keeps the pin state.
 - **Storage location:** one store in Application Support for both pinned and
   cached files, told apart by a flag, with app-managed LRU eviction under a
   size cap.  Avoid Caches, where the OS purges on its own schedule.
