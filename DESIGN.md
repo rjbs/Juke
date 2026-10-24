@@ -60,6 +60,4 @@ Writing a JMAP server for new data types is treated as a solved problem.
 
 These are also tracked as Loose Threads (`lt list`).
 
-- [ ] Which properties `Track/query` can filter and sort on.  The first
-      property sets are proposed in [object types](doc/types.md).
 - [ ] How the initial import reads existing ID3 tags into the database.

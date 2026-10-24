@@ -78,6 +78,49 @@ This is the plain playlist only.  Smart playlists, stored `Track/query`
 calls (see [playlists](playlists.md)), come later and will need more
 properties.
 
+## Track/query
+
+Filters are named conditions, as in RFC 8621's `Email/query`, combined
+with the standard `AND`, `OR` and `NOT` operators.  String matches are
+case-insensitive, using the `i;unicode-casemap` collation that JMAP
+defaults to.
+
+| Condition | Type | Matches tracks whose... |
+|-----------|------|-------------------------|
+| `title` | `String` | title equals the value |
+| `titleContains` | `String` | title contains the value |
+| `artist` | `String` | artist equals the value |
+| `artistContains` | `String` | artist contains the value |
+| `albumTitle` | `String` | album's title equals the value |
+| `albumTitleContains` | `String` | album's title contains the value |
+| `ratingAtLeast` | `Number` | rating is at least the value |
+| `ratingAtMost` | `Number` | rating is at most the value |
+| `hasRating` | `Boolean` | rating is set, or is null |
+| `playCountAtLeast` | `UnsignedInt` | play count is at least the value |
+| `playCountAtMost` | `UnsignedInt` | play count is at most the value |
+| `lastPlayedBefore` | `UTCDate` | last play was before the value |
+| `lastPlayedAfter` | `UTCDate` | last play was at or after the value |
+| `lastPlayedWithinDays` | `UnsignedInt` | last play was within that many days of today |
+| `inPlaylist` | `Id` | track is in that playlist |
+| `hasAudio` | `Boolean` | `blobId` is set, or is null |
+
+An unrated track matches neither rating bound, and a track never played
+matches neither `lastPlayed` bound; `hasRating` and `playCountAtMost: 0`
+find those.  A track on no album never matches an album condition.
+
+The last three exist for smart playlists.  A stored filter with an
+absolute date would stop moving, so "played this month" needs
+`lastPlayedWithinDays`.  `inPlaylist` lets one playlist draw on another;
+see [playlists](playlists.md) for why that graph must stay acyclic.
+`hasAudio` lets a playlist leave out gap tracks.
+
+**Sorting** is on the same properties: `title`, `artist`, `albumTitle`,
+`rating`, `playCount` and `lastPlayed`, plus `albumOrder`, which sorts by
+album title and then by disc and track position.  Nulls sort last in
+either direction.  Ties always break by track id, so a sorted, limited
+list is stable.  Random order, seeded per playlist, is a smart playlist
+feature rather than a `Track/query` sort.
+
 ## Sync order
 
 Clients sync Track, then Album, then Playlist.  Even so, a track moved to
