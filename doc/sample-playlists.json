@@ -1,0 +1,28 @@
+[
+  {
+    "title": "Across the Sample",
+    "tracks": [
+      "Undamaged/Johnny Cash/American II_ Unchained/03 Rusty Cage.m4a",
+      "Undamaged/Stan Getz_João Gilberto/Getz_Gilberto/01 The Girl from Ipanema.mp3",
+      "Undamaged/Queensrÿche/Queensryche/01 Queen of the Reich.m4a",
+      "Undamaged/Black Sabbath/Black Sabbath/02 The Wizard.m4a",
+      "Undamaged/Stan Getz_João Gilberto/Getz_Gilberto/03 Para Machuchar Meu Coração (To Hurt My Heart).mp3"
+    ]
+  },
+  {
+    "title": "Brave Sir Robin, Twice",
+    "tracks": [
+      "Undamaged/Monty Python/Unknown Album/Brave Sir Robin.mp3",
+      "Undamaged/Johnny Cash/American II_ Unchained/01 Rowboat.m4a",
+      "Undamaged/Monty Python/Unknown Album/Brave Sir Robin.mp3"
+    ]
+  },
+  {
+    "title": "Mind the Gap",
+    "tracks": [
+      "Damaged/Save Ferris/It Means Everything/01 The World is New.mp3",
+      { "album": "Damaged/Save Ferris/It Means Everything", "title": "Come on Eileen" },
+      "Damaged/Save Ferris/It Means Everything/07 Lies.mp3"
+    ]
+  }
+]
