@@ -11,6 +11,7 @@ struct LibraryView: View {
 
   enum SidebarItem: Hashable {
     case albums
+    case offline
     case playlist(String)
   }
 
@@ -41,6 +42,7 @@ struct LibraryView: View {
     NavigationSplitView {
       List(selection: $selection) {
         Label("Albums", systemImage: "square.stack").tag(SidebarItem.albums)
+        Label("Offline", systemImage: "arrow.down.circle").tag(SidebarItem.offline)
         if !library.playlists.isEmpty {
           Section("Playlists") {
             ForEach(library.playlists) { p in
@@ -56,19 +58,28 @@ struct LibraryView: View {
         }
       }
       .safeAreaInset(edge: .bottom) {
-        if let failure = library.syncFailure {
-          Label("Can't reach the server", systemImage: "exclamationmark.icloud")
-            .help(failure)
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .padding(8)
+        VStack(alignment: .leading, spacing: 4) {
+          if let failure = library.syncFailure {
+            Label("Can't reach the server", systemImage: "exclamationmark.icloud")
+              .help(failure)
+          }
+          let offline = library.offline!
+          if offline.present < offline.wanted {
+            Label("Downloading \(offline.present) of \(offline.wanted)", systemImage: "arrow.down.circle")
+              .help(offline.failure ?? "")
+          }
         }
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .padding(8)
       }
     } detail: {
       NavigationStack {
         switch selection {
         case .albums, nil:
           AlbumListView(library: library, player: player)
+        case .offline:
+          OfflineView(library: library, player: player)
         case .playlist(let id):
           if let playlist = library.playlists.first(where: { $0.id == id }) {
             PlaylistView(library: library, player: player, playlist: playlist)

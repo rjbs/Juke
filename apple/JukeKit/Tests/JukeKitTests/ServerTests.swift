@@ -134,3 +134,56 @@ func offlineStart() async throws {
   let fresh = FileManager.default.temporaryDirectory.appending(path: "jukekit-\(UUID())")
   await #expect(throws: (any Error).self) { try await Library.open(server: nowhere, directory: fresh) }
 }
+
+// checkPinned checks whether every playable track's audio is in the
+// cache, complete and pinned.
+func checkPinned(_ library: Library, _ tracks: [Track], _ pinned: Bool,
+                 sourceLocation: SourceLocation = #_sourceLocation) async throws {
+  for blob in tracks.compactMap(\.blobId) {
+    let record = try await library.blobs.status(blob)
+    #expect((record?.isPinned ?? false) == pinned, "\(blob)", sourceLocation: sourceLocation)
+    if pinned { #expect(record?.isComplete == true, "\(blob)", sourceLocation: sourceLocation) }
+  }
+}
+
+// Keeping an album offline downloads and pins its audio, survives a
+// relaunch, and releasing it unpins the audio again.
+@Test(.enabled(if: testServer != nil))
+@MainActor
+func keepOffline() async throws {
+  let dir = FileManager.default.temporaryDirectory.appending(path: "jukekit-\(UUID())")
+  let server = try #require(testServer)
+  var library = try await Library.open(server: server, directory: dir)
+  library.start()
+  while case .syncing = library.phase { try await Task.sleep(for: .milliseconds(50)) }
+
+  let found = library.albumList.first { (3...6).contains(library.tracks(of: $0).joined().filter(\.isPlayable).count) }
+  let album = try #require(found)
+  let tracks = Array(library.tracks(of: album).joined())
+  library.offline.keep(album, true)
+  #expect(library.offline.isKept(album))
+  try await eventually("album downloaded") {
+    let p = library.offline.progress(of: tracks)
+    return p.present == p.wanted
+  }
+  #expect(library.offline.present == library.offline.wanted)
+  try await checkPinned(library, tracks, true)
+  library.stop()
+
+  library = try await Library.open(server: server, directory: dir)
+  library.start()
+  try await eventually("ready again") { library.phase == .ready }
+  #expect(library.offline.isKept(album))
+  try await eventually("kept audio recognised") {
+    let p = library.offline.progress(of: tracks)
+    return p.present == p.wanted
+  }
+
+  library.offline.keep(album, false)
+  #expect(library.offline.wanted == 0)
+  try await eventually("audio released") {
+    for blob in tracks.compactMap(\.blobId) where try await library.blobs.status(blob)?.isPinned == true { return false }
+    return true
+  }
+  library.stop()
+}

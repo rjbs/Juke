@@ -49,13 +49,16 @@ public final class Library {
   @ObservationIgnored let engine: SyncEngine<GRDBSyncStore>
   @ObservationIgnored let blobs: BlobStore<GRDBSyncStore>
   @ObservationIgnored let playable: URL
+  /// What this device keeps available offline.
+  @ObservationIgnored public private(set) var offline: Offline!
   @ObservationIgnored private var ids: [LocalKey: String] = [:]
   @ObservationIgnored private var tasks: [Task<Void, Never>] = []
 
-  init(engine: SyncEngine<GRDBSyncStore>, blobs: BlobStore<GRDBSyncStore>, playable: URL) {
+  init(engine: SyncEngine<GRDBSyncStore>, blobs: BlobStore<GRDBSyncStore>, directory: URL) {
     self.engine = engine
     self.blobs = blobs
-    self.playable = playable
+    self.playable = directory.appending(path: "playable")
+    self.offline = Offline(library: self, file: directory.appending(path: "offline.json"))
   }
 
   /// Opens the library for the server at `server`, keeping its mirror and
@@ -91,9 +94,8 @@ public final class Library {
       directory: directory.appending(path: "audio"),
       cacheLimit: 2 * 1024 * 1024 * 1024
     ))
-    let playable = directory.appending(path: "playable")
-    try FileManager.default.createDirectory(at: playable, withIntermediateDirectories: true)
-    return Library(engine: engine, blobs: blobs, playable: playable)
+    try FileManager.default.createDirectory(at: directory.appending(path: "playable"), withIntermediateDirectories: true)
+    return Library(engine: engine, blobs: blobs, directory: directory)
   }
 
   private static func account(from transport: JMAPClient, rememberedIn file: URL) async throws -> String {
@@ -190,6 +192,7 @@ public final class Library {
   public func stop() {
     tasks.forEach { $0.cancel() }
     tasks = []
+    offline.stop()
   }
 
   /// Asks for a sync now, as after the app comes to the foreground.
@@ -272,6 +275,7 @@ public final class Library {
     self.playlists = playlists
     sortAlbums()
     sortPlaylists()
+    offline.reconcile()
   }
 
   private func apply(_ changeSet: ChangeSet) async throws {
@@ -296,6 +300,7 @@ public final class Library {
         break
       }
     }
+    offline.reconcile()
   }
 
   private func sortAlbums() {

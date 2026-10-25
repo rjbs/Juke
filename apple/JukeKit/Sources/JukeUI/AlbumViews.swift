@@ -20,9 +20,14 @@ struct AlbumListView: View {
       NavigationLink(value: album.id) {
         VStack(alignment: .leading) {
           Text(album.title)
-          Text(album.artist ?? "Compilation")
-            .font(.caption)
-            .foregroundStyle(.secondary)
+          HStack(spacing: 4) {
+            if library.offline.isKept(album) {
+              Image(systemName: "arrow.down.circle.fill").accessibilityLabel("Kept offline")
+            }
+            Text(album.artist ?? "Compilation")
+          }
+          .font(.caption)
+          .foregroundStyle(.secondary)
         }
       }
     }
@@ -52,6 +57,9 @@ struct AlbumView: View {
           Text("\(all.count) tracks" + (missing > 0 ? ", \(missing) missing" : ""))
             .font(.caption)
             .foregroundStyle(.secondary)
+          OfflineStatus(offline: library.offline, kept: library.offline.isKept(album), tracks: all)
+            .font(.caption)
+            .foregroundStyle(.secondary)
         }
       }
       ForEach(Array(discs.enumerated()), id: \.offset) { d, tracks in
@@ -76,6 +84,9 @@ struct AlbumView: View {
         }
         .disabled(!all.contains(where: \.isPlayable))
       }
+      ToolbarItem {
+        KeepButton(kept: library.offline.isKept(album)) { library.offline.keep(album, $0) }
+      }
     }
   }
 }
@@ -88,6 +99,11 @@ struct PlaylistView: View {
   var body: some View {
     let tracks = library.tracks(of: playlist)
     List {
+      if library.offline.isKept(playlist) {
+        OfflineStatus(offline: library.offline, kept: true, tracks: tracks)
+          .font(.caption)
+          .foregroundStyle(.secondary)
+      }
       ForEach(Array(tracks.enumerated()), id: \.offset) { i, track in
         TrackRow(library: library, player: player, track: track, number: i + 1, showArtist: true) {
           player.play(tracks, at: i)
@@ -95,5 +111,10 @@ struct PlaylistView: View {
       }
     }
     .navigationTitle(playlist.title)
+    .toolbar {
+      ToolbarItem {
+        KeepButton(kept: library.offline.isKept(playlist)) { library.offline.keep(playlist, $0) }
+      }
+    }
   }
 }
