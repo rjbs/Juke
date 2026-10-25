@@ -12,10 +12,11 @@ package so the two share everything they can:
   split view collapses into a stack.
 - **App/** is the entry point, and `project.yml` describes the app target
   for [XcodeGen](https://github.com/yonaskolb/XcodeGen).
-- **Art/icon.png** is the app icon at full size.  The PNGs in
-  `App/Assets.xcassets/AppIcon.appiconset` are scaled from it with
-  `sips -z`: one 1024-pixel image for iOS, and the ten sizes macOS
-  still wants listed one by one.
+- **Art/icon.png** is the app's artwork at full size, on a transparent
+  background.  `Art/make-icons` (run from `apple/`, needs ImageMagick)
+  sets it on an opaque Basalt square and writes the PNGs in
+  `App/Assets.xcassets/AppIcon.appiconset`: one 1024-pixel image for
+  iOS, and the sizes macOS still wants listed one by one.
 
 Jinx is a sibling checkout, at `../../Jinx` from `JukeKit`.
 
