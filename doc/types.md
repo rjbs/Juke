@@ -23,6 +23,7 @@ A recording on an album, usually with audio.
 | `blobId`     | `Id\|null`      | Server-set.  The served audio.  Null when there is no audio. |
 | `playCount`  | `UnsignedInt`   | Default 0. |
 | `lastPlayed` | `UTCDate\|null` | |
+| `dateAdded`  | `UTCDate`       | When the track joined the library. |
 
 **A track with no audio** stands for a gap: a track the 2014 catalog
 knows an album had, whose file is lost.  It keeps the catalog's title,
@@ -136,7 +137,7 @@ Each of these is a likely addition, kept out until it's needed:
   for exceptions, like a skit between two songs.
 - **Duration.**  The player gets it from the audio, but lists will want
   it without downloading anything.
-- **Year, composer, compilation flag, date added, skip count.**
+- **Year, composer, compilation flag, skip count.**
 - **Artwork,** which belongs on Album.
 - **Album rating.**  Every album rating in the 2014 library was computed
   from track ratings, so there is nothing to import.

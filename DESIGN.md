@@ -50,8 +50,8 @@ Writing a JMAP server for new data types is treated as a solved problem.
   calls, evaluated on the server.
 - [iOS client](doc/ios-client.md): a Spotify-shaped model, pinned downloads
   first and a streaming cache later.
-- [Import](doc/import.md): a fresh database from the files and an Apple
-  Music export; tags win for the music, the export for listening data.
+- [Import](doc/import.md): a fresh database from the files and the 2014
+  iTunes XML; tags win for the music, the XML for listening data.
 - [Sample library](doc/sample-library.md): a 1 GB slice of the real library
   for prototyping, chosen to cover the hard cases.
 - [Recovery and reorganization](doc/recovery.md): putting the library back

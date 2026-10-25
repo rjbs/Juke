@@ -1,7 +1,7 @@
 # Import
 
 The import builds a new Juke database from two inputs: the files in the
-library tree, and an XML export of the current Apple Music library.  It
+library tree, and the 2014 iTunes library XML used by the recovery.  It
 always builds a fresh database; it never updates one in place.  While
 prototyping it runs over and over against the [sample
 library](sample-library.md).  The real import runs once, and after that
@@ -15,21 +15,25 @@ the server doesn't recognize resyncs from scratch.
 
 - **The files' tags win** for everything about the music: title, artist,
   album, positions, and anything added later.
-- **The Apple Music XML wins** for what the listener did: rating, play
-  count and last played.  These are almost never in the tags.  Date added
-  and the Favorite flag come from there too, if [object
-  types](types.md) gains them; both are proposed, not decided.
+- **The 2014 XML wins** for what the listener did: rating, play count,
+  last played and date added.  These are almost never in the tags.
 - **Plain playlists** come from the XML too, which is their only source.
 
-Use an export of the current library, not the 2014 one.  Ratings and
-counts have moved on since 2014.
+The 2014 XML is the only listening history there is.  The current Apple
+Music library holds a little more, but the files were set aside for years
+after the loss, so not much; and its database is hard to read without
+scripting the app.  Plays since 2014 are written off.
 
-**Matching XML entries to files** goes by path first.  Where the current
-library points at a file in one of the old trees, the recovery's
-`move_log` maps that path to the file's place in the new library.  Where
-a file's slot went to a better copy, `move_plan.displaced_by` names the
-winner, which inherits the listening data.  Anything left is matched by
-metadata and duration, as the recovery's `match-tracks` did.
+**Matching is already done.**  The recovery linked each 2014 track to its
+surviving file (`itunes_track_file`), and `move_log` says where each file
+went.  Where a file's slot went to a better copy,
+`move_plan.displaced_by` names the winner, which inherits the listening
+data.
+
+**Date added for tracks the 2014 XML lacks,** such as the partner's
+library, comes from the file's modification time.  Import time would make
+thousands of tracks look added on one day and swamp any "recently added"
+playlist.
 
 ## Albums
 
@@ -51,8 +55,7 @@ its results.
 The first real import takes `Undamaged` only.  The sample includes two
 damaged albums so the prototype can import them too.  Each lost track
 becomes a gap: a Track with no `blobId`, built from the 2014 catalog's
-entry, holding its place on the album.  The 2014 catalog is the source
-here because the current library may not list the lost tracks at all.
+entry, holding its place on the album.
 
 ## Original tags
 
