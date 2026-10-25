@@ -95,6 +95,7 @@ public final class Library {
       cacheLimit: 2 * 1024 * 1024 * 1024
     ))
     try FileManager.default.createDirectory(at: directory.appending(path: "playable"), withIntermediateDirectories: true)
+    sweepPlayable(directory.appending(path: "playable"))
     return Library(engine: engine, blobs: blobs, directory: directory)
   }
 
@@ -235,10 +236,15 @@ public final class Library {
   ///
   /// The cache names files by blob id alone, and AVFoundation won't open a
   /// local file without an extension, whatever type it's told.  So this
-  /// returns a symlink to the cached file whose extension follows the
+  /// returns a second name for the cached file whose extension follows the
   /// file's first bytes; the cache's own record of the type is the
-  /// application/octet-stream that Jinx asked for.  A link left dangling
-  /// by eviction is remade on the next call. -- claude, 2026-10-25
+  /// application/octet-stream that Jinx asked for.
+  ///
+  /// The name is a hard link, not a symlink: on iOS another process reads
+  /// the audio, and the access it's granted covers the path it's given,
+  /// not where a symlink leads.  A link to a file the cache has since
+  /// replaced is remade on the next call, and `sweepPlayable` clears out
+  /// links to evicted files at launch. -- claude, 2026-10-25
   public func audioFile(for track: Track) async throws -> URL {
     guard let blobId = track.blobId else { throw LibraryError.noAudio }
     let cached = try await blobs.download(blobId)
@@ -248,11 +254,34 @@ public final class Library {
     let ext = audioType(of: head) == "audio/mp4" ? "m4a" : "mp3"
     let link = playable.appending(path: "\(blobId).\(ext)")
     let fm = FileManager.default
-    if (try? fm.destinationOfSymbolicLink(atPath: link.path)) != cached.path {
+    if !Self.isSameFile(link, cached) {
       try? fm.removeItem(at: link)
-      try fm.createSymbolicLink(at: link, withDestinationURL: cached)
+      try fm.linkItem(at: cached, to: link)
     }
     return link
+  }
+
+  private static func isSameFile(_ a: URL, _ b: URL) -> Bool {
+    let fm = FileManager.default
+    guard let x = try? fm.attributesOfItem(atPath: a.path),
+          let y = try? fm.attributesOfItem(atPath: b.path)
+    else { return false }
+    return x[.type] as? FileAttributeType == .typeRegular
+      && x[.systemNumber] as? Int == y[.systemNumber] as? Int
+      && x[.systemFileNumber] as? Int == y[.systemFileNumber] as? Int
+  }
+
+  /// Removes playable names for audio the cache no longer holds.  A file
+  /// with only one name left is one the cache has let go of.  Symlinks
+  /// left by earlier versions go too.
+  nonisolated static func sweepPlayable(_ playable: URL) {
+    let fm = FileManager.default
+    for url in (try? fm.contentsOfDirectory(at: playable, includingPropertiesForKeys: nil)) ?? [] {
+      guard let attrs = try? fm.attributesOfItem(atPath: url.path) else { continue }
+      if attrs[.type] as? FileAttributeType != .typeRegular || attrs[.referenceCount] as? Int == 1 {
+        try? fm.removeItem(at: url)
+      }
+    }
   }
 
   // MARK: - Index
