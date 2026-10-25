@@ -3,28 +3,25 @@ use v5.36;
 
 # Builds the app icon set from Art/icon.png: the artwork, shrunk so the
 # system's rounded corners don't clip the jukebox's feet, on an opaque
-# square of Basalt (the color picker's "Tungsten" crayon in English).
+# square of Basalt, as OmniGraffle's color picker names #333333.
 # Needs ImageMagick.  Run from apple/.
-
-use File::Temp ();
 
 my $source = 'Art/icon.png';
 my $set    = 'App/Assets.xcassets/AppIcon.appiconset';
-my $color  = '#424242';
+my $color  = q{#333333};
 my $art    = 820;
 
-my $tmp  = File::Temp->new(SUFFIX => '.png');
 my $full = "$set/icon-1024.png";
 
 system(
   'magick', '-size', '1024x1024', "xc:$color",
   '(', $source, '-resize', "${art}x$art", ')',
   '-gravity', 'center', '-composite',
-  '-alpha', 'off',
+  '-alpha', 'off', '-strip',
   $full,
 ) == 0 or die "magick failed on $full\n";
 
 for my $size (16, 32, 64, 128, 256, 512) {
-  system('magick', $full, '-resize', "${size}x$size", "$set/icon-$size.png") == 0
+  system('magick', $full, '-resize', "${size}x$size", '-strip', "$set/icon-$size.png") == 0
     or die "magick failed at $size\n";
 }
