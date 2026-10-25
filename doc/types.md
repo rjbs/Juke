@@ -21,6 +21,7 @@ A recording on an album, usually with audio.
 | `albumId`    | `Id\|null`      | Server-set.  Follows from album membership; null for a track on no album. |
 | `rating`     | `Number\|null`  | 1 to 5 in steps of 0.5, or null for unrated. |
 | `blobId`     | `Id\|null`      | Server-set.  The served audio.  Null when there is no audio. |
+| `blobType`   | `String\|null`  | Server-set.  The audio's media type, such as `audio/mpeg` or `audio/mp4`.  Null when there is no audio. |
 | `playCount`  | `UnsignedInt`   | Default 0. |
 | `lastPlayed` | `UTCDate\|null` | |
 | `dateAdded`  | `UTCDate`       | When the track joined the library. |

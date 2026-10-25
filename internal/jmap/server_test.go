@@ -401,3 +401,18 @@ func TestDownload(t *testing.T) {
 	checkDownload(t, f, robin, "bytes=10-", http.StatusPartialContent, "ROBIN")
 	checkDownload(t, f, "Gnotablob", "", http.StatusNotFound, "")
 }
+
+// checkBlobType gets one track's blobType and compares it with the
+// expected media type, or nil for a track with no audio.
+func checkBlobType(t *testing.T, f *fixture, title string, want any) {
+	t.Helper()
+	r := f.call("Track/get", map[string]any{"ids": []string{f.ids[title]}, "properties": []string{"blobType"}})
+	checkEqual(t, title, r["list"].([]any)[0].(map[string]any)["blobType"], want)
+}
+
+func TestBlobType(t *testing.T) {
+	f := newFixture(t, Config{})
+	checkBlobType(t, f, "Whip It", "audio/mpeg")
+	checkBlobType(t, f, "We Will Rock You", "audio/mp4")
+	checkBlobType(t, f, "Lost Track", nil)
+}

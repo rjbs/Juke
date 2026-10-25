@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -123,6 +124,9 @@ func (f *fixture) addTrack(albumID *string, disc, pos *int, tr fixtureTrack) {
 		}
 		size := int64(len(tr.content))
 		ct := "audio/mpeg"
+		if strings.HasSuffix(tr.file, ".m4a") {
+			ct = "audio/mp4"
+		}
 		nt.Path, nt.Size, nt.ContentType = &tr.file, &size, &ct
 	}
 	id, err := store.InsertTrack(context.Background(), f.store.DB, nt)
