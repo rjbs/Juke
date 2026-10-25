@@ -24,6 +24,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -54,7 +55,7 @@ type Options struct {
 	// Out is the path of the new database.  It must not exist.
 	Out string
 
-	// Log receives a line for each file refused.
+	// Log receives a line for each file titled from its filename.
 	Log io.Writer
 }
 
@@ -67,7 +68,10 @@ type Report struct {
 	AlbumlessTrack int
 	Playlists      int
 	SkippedFiles   int
-	Refused        []string
+
+	// TitledFromName lists the files with no title in their tags or the
+	// catalog, whose titles came from their filenames.
+	TitledFromName []string
 }
 
 var audioTypes = map[string]string{
@@ -124,6 +128,11 @@ type audioFile struct {
 	album        string
 	trackNumber  int
 	discNumber   int
+
+	// fromName is set when neither the tags nor the catalog give a title,
+	// so the filename gives the title and any missing numbers, and the
+	// artist directory above it gives the artist.
+	fromName bool
 
 	// The catalog track whose listening data this file gets, if any, and
 	// every catalog track id that refers to this file, directly or as a
@@ -322,10 +331,9 @@ func (im *run) walk(ctx context.Context) (map[string][]*audioFile, error) {
 			if err != nil {
 				return fmt.Errorf("%s: %w", rel, err)
 			}
-			if f.title == "" && f.catalog == nil {
-				im.report.Refused = append(im.report.Refused, rel)
-				fmt.Fprintf(im.opts.Log, "refused, no title in tags or catalog: %s\n", rel)
-				return nil
+			if f.fromName {
+				im.report.TitledFromName = append(im.report.TitledFromName, rel)
+				fmt.Fprintf(im.opts.Log, "title from filename: %s\n", rel)
 			}
 			dir := path.Dir(rel)
 			dirs[dir] = append(dirs[dir], f)
@@ -407,7 +415,58 @@ func (im *run) readFile(ctx context.Context, p, rel, contentType string) (*audio
 	for _, c := range append(direct, displaced...) {
 		f.catalogID = append(f.catalogID, c.ID)
 	}
+
+	if f.title == "" && f.catalog == nil {
+		f.fromName = true
+		if f.artist == "" {
+			f.artist = dirArtist(path.Dir(rel))
+		}
+		disc, track := numbersFromName(f.name)
+		if f.discNumber <= 0 {
+			f.discNumber = disc
+		}
+		if f.trackNumber <= 0 {
+			f.trackNumber = track
+		}
+	}
 	return f, nil
+}
+
+// dirArtist is the artist an album directory is filed under, or "" for a
+// compilation or a directory with no artist above it.
+func dirArtist(dir string) string {
+	switch parent := path.Base(path.Dir(dir)); parent {
+	case "Compilations", "_", ".":
+		return ""
+	default:
+		return parent
+	}
+}
+
+// numberPrefix is the "NN " or "D-NN " that iTunes put before a title in
+// a filename.  Three digits at most, so "1999 Prince.mp3" keeps its title.
+var numberPrefix = regexp.MustCompile(`^(?:(\d{1,2})-)?(\d{1,3})[-. ]+`)
+
+// numbersFromName returns the disc and track numbers a filename starts
+// with, zero for either that is absent.
+func numbersFromName(name string) (disc, track int) {
+	m := numberPrefix.FindStringSubmatch(name)
+	if m == nil {
+		return 0, 0
+	}
+	disc, _ = strconv.Atoi(m[1])
+	track, _ = strconv.Atoi(m[2])
+	return disc, track
+}
+
+// titleFromName is a filename less its extension and number prefix, or
+// the whole filename if that leaves nothing.
+func titleFromName(name string) string {
+	stem := strings.TrimSpace(numberPrefix.ReplaceAllString(strings.TrimSuffix(name, path.Ext(name)), ""))
+	if stem == "" {
+		return name
+	}
+	return stem
 }
 
 func queryCatalogTracks(ctx context.Context, st *sql.Stmt, args ...any) ([]catalogTrack, error) {
@@ -608,8 +667,7 @@ func (im *run) albumNaming(dir string, files []*audioFile) (string, *string) {
 
 	title := firstNonEmpty(majority(tagAlbums), majority(catAlbums), path.Base(dir))
 
-	parent := path.Base(path.Dir(dir))
-	if parent == "Compilations" {
+	if path.Base(path.Dir(dir)) == "Compilations" {
 		return title, nil
 	}
 	artist := firstNonEmpty(
@@ -618,8 +676,8 @@ func (im *run) albumNaming(dir string, files []*audioFile) (string, *string) {
 		majority(catAlbumArtists),
 		unanimous(catArtists),
 	)
-	if artist == "" && parent != "_" && parent != "." {
-		artist = parent
+	if artist == "" {
+		artist = dirArtist(dir)
 	}
 	if artist == "" {
 		return title, nil
@@ -693,8 +751,6 @@ func listening(c *catalogTrack) (rating *float64, playCount int64, lastPlayed *s
 	return rating, playCount, lastPlayed, c.DateAdded.String
 }
 
-var leadingNumber = regexp.MustCompile(`^\d+[-. ]+`)
-
 func (im *run) insertFile(ctx context.Context, dir string, f *audioFile, albumID *string, disc, pos *int) (string, error) {
 	rating, playCount, lastPlayed, dateAdded := listening(f.catalog)
 	if dateAdded == "" {
@@ -704,7 +760,7 @@ func (im *run) insertFile(ctx context.Context, dir string, f *audioFile, albumID
 	if f.catalog != nil {
 		catName, catArtist = f.catalog.Name.String, f.catalog.Artist.String
 	}
-	stem := leadingNumber.ReplaceAllString(strings.TrimSuffix(f.name, path.Ext(f.name)), "")
+	stem := titleFromName(f.name)
 
 	rel := f.rel
 	id, err := store.InsertTrack(ctx, im.tx, store.NewTrack{

@@ -87,7 +87,10 @@ func syntheticImport(t *testing.T) (*sql.DB, *Report) {
 	write("Undamaged/Band/Unknown Album/Loose.mp3", id3(map[string]string{"TIT2": "Loose", "TPE1": "Band"}))
 	write("Undamaged/Compilations/Mix/01 A.mp3", id3(map[string]string{"TIT2": "A", "TPE1": "X", "TALB": "Mix", "TRCK": "1"}))
 	write("Undamaged/Compilations/Mix/02 B.mp3", id3(map[string]string{"TIT2": "B", "TPE1": "Y", "TALB": "Mix", "TRCK": "2"}))
-	write("Undamaged/Other/Thing/noise.mp3", []byte("\xff\xfbNO-TAGS-AT-ALL"))
+	write("Undamaged/Other/Thing/10 Static.mp3", []byte("\xff\xfbNO-TAGS-AT-ALL"))
+	write("Undamaged/Other/Thing/9 Hiss.mp3", []byte("\xff\xfbNO-TAGS-AT-ALL"))
+	write("Undamaged/Other/Thing/1999 Prince.mp3", []byte("\xff\xfbNO-TAGS-AT-ALL"))
+	write("Undamaged/Other/Thing/2-01 Hum.mp3", []byte("\xff\xfbNO-TAGS-AT-ALL"))
 	write("Damaged/Ignored/Album/01 X.mp3", id3(map[string]string{"TIT2": "X"}))
 
 	loose := filepath.Join(library, "Undamaged/Band/Unknown Album/Loose.mp3")
@@ -155,10 +158,10 @@ func checkTrack(t *testing.T, db *sql.DB, title, album string, pos int, rating f
 func TestSyntheticImport(t *testing.T) {
 	db, r := syntheticImport(t)
 
-	if len(r.Refused) != 1 || r.Refused[0] != "Undamaged/Other/Thing/noise.mp3" {
-		t.Errorf("refused %q, want only the untagged file", r.Refused)
+	if len(r.TitledFromName) != 4 {
+		t.Errorf("titled from filename %q, want the four untagged files", r.TitledFromName)
 	}
-	if r.Tracks != 5 || r.GapTracks != 1 || r.Albums != 2 || r.AlbumlessTrack != 1 || r.SkippedFiles != 1 || r.Playlists != 1 {
+	if r.Tracks != 9 || r.GapTracks != 1 || r.Albums != 3 || r.AlbumlessTrack != 1 || r.SkippedFiles != 1 || r.Playlists != 1 {
 		t.Errorf("report = %+v", r)
 	}
 
@@ -167,6 +170,15 @@ func TestSyntheticImport(t *testing.T) {
 	checkTrack(t, db, "Three", "Album", 2, 3, 9, "2005-01-02T00:00:00Z", true)
 	checkTrack(t, db, "Loose", "", 0, 0, 0, "2019-03-04T05:06:07Z", true)
 	checkTrack(t, db, "A", "Mix", 0, 0, 0, mtimeOf(t, db, "A"), true)
+
+	// Untagged files the catalog doesn't know take their titles and
+	// numbers from their filenames: "9 Hiss" before "10 Static", whatever
+	// the alphabet says, and "2-01 Hum" first on a second disc.
+	checkTrack(t, db, "Hiss", "Thing", 0, 0, 0, mtimeOf(t, db, "Hiss"), true)
+	checkTrack(t, db, "Static", "Thing", 1, 0, 0, mtimeOf(t, db, "Static"), true)
+	checkTrack(t, db, "1999 Prince", "Thing", 2, 0, 0, mtimeOf(t, db, "1999 Prince"), true)
+	checkTrack(t, db, "Hum", "Thing", 0, 0, 0, mtimeOf(t, db, "Hum"), true)
+	checkTrackArtist(t, db, "Hiss", "Other")
 
 	var compilationArtist sql.NullString
 	db.QueryRow(`SELECT artist FROM album WHERE title = 'Mix'`).Scan(&compilationArtist)
@@ -205,4 +217,17 @@ func mtimeOf(t *testing.T, db *sql.DB, title string) string {
 		t.Errorf("track %q date added %q is not a date", title, s)
 	}
 	return s
+}
+
+// checkTrackArtist checks the artist of one imported track, found by title.
+func checkTrackArtist(t *testing.T, db *sql.DB, title, artist string) {
+	t.Helper()
+	var got sql.NullString
+	if err := db.QueryRow(`SELECT artist FROM track WHERE title = ?`, title).Scan(&got); err != nil {
+		t.Errorf("track %q: %v", title, err)
+		return
+	}
+	if got.String != artist {
+		t.Errorf("track %q: artist %q, want %q", title, got.String, artist)
+	}
 }

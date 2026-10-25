@@ -17,6 +17,11 @@ the server doesn't recognize resyncs from scratch.
   album, positions, and anything added later.
 - **The 2014 XML wins** for what the listener did: rating, play count,
   last played and date added.  These are almost never in the tags.
+- **A file with no title** in its tags or the XML takes its title, and any
+  missing disc and track numbers, from its filename, which iTunes wrote as
+  "1-02 Title.mp3", and its artist from the directory above the album.
+  Undamaged has 114 such files, from albums that never reached the 2014
+  library.
 - **Plain playlists** come from the XML too, which is their only source.
 
 The 2014 XML is the only listening history there is.  The current Apple

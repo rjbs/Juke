@@ -33,7 +33,7 @@ func runImport(ctx context.Context, args []string) error {
 	}
 	fmt.Printf("files seen:       %d\n", r.Files)
 	fmt.Printf("  not audio:      %d\n", r.SkippedFiles)
-	fmt.Printf("  refused:        %d\n", len(r.Refused))
+	fmt.Printf("  titled by name: %d\n", len(r.TitledFromName))
 	fmt.Printf("tracks:           %d\n", r.Tracks)
 	fmt.Printf("  with no album:  %d\n", r.AlbumlessTrack)
 	fmt.Printf("gap tracks:       %d\n", r.GapTracks)
