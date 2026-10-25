@@ -2,6 +2,7 @@ import AVFoundation
 import Foundation
 import MediaPlayer
 import Observation
+import os
 
 /// Plays a queue of tracks.  Each track's audio comes through the
 /// library's blob cache: the whole file is fetched before it plays, and
@@ -27,6 +28,8 @@ public final class Player {
   @ObservationIgnored let player = AVPlayer()
   @ObservationIgnored private var loadTask: Task<Void, Never>?
   @ObservationIgnored private var endObserver: (any NSObjectProtocol)?
+  @ObservationIgnored private var statusObserver: NSKeyValueObservation?
+  @ObservationIgnored private let log = Logger(subsystem: "systems.semiotic.juke", category: "player")
 
   public init(library: Library) {
     self.library = library
@@ -103,11 +106,40 @@ public final class Player {
       MainActor.assumeIsolated { self?.finished(track) }
     }
 
+    // AVPlayer fails quietly: a file it can't open just never starts.
+    // Watching the item is the only way to hear about it.  -- claude, 2026-10-25
+    statusObserver = item.observe(\.status) { [weak self] item, _ in
+      guard item.status == .failed else { return }
+      let error = item.error
+      Task { @MainActor in self?.failed(track, url: url, error: error) }
+    }
+
     player.replaceCurrentItem(with: item)
     player.play()
     isLoading = false
     isPlaying = true
     updateNowPlaying()
+  }
+
+  private func failed(_ track: Track, url: URL, error: (any Error)?) {
+    guard current?.id == track.id else { return }
+    let detail = error.map(Self.describe) ?? "unknown error"
+    log.error("can't play \(url.path, privacy: .public): \(detail, privacy: .public)")
+    isPlaying = false
+    failure = "Couldn't play “\(track.title)”: \(detail)"
+    updateNowPlaying()
+  }
+
+  /// An error's description with its underlying errors' domains and codes,
+  /// which is where AVFoundation puts the useful part.
+  static func describe(_ error: any Error) -> String {
+    var parts = [error.localizedDescription]
+    var next = (error as NSError).userInfo[NSUnderlyingErrorKey] as? NSError
+    while let e = next {
+      parts.append("\(e.domain) \(e.code)")
+      next = e.userInfo[NSUnderlyingErrorKey] as? NSError
+    }
+    return parts.joined(separator: "; ")
   }
 
   private func finished(_ track: Track) {
