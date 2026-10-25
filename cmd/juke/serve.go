@@ -9,6 +9,7 @@ import (
 
 	"semiotic.systems/juke/internal/jmap"
 	"semiotic.systems/juke/internal/store"
+	"semiotic.systems/juke/internal/web"
 )
 
 func runServe(ctx context.Context, args []string) error {
@@ -19,6 +20,7 @@ func runServe(ctx context.Context, args []string) error {
 	baseURL := fs.String("base-url", "", "the URL clients reach the server at, if not the request's own")
 	username := fs.String("username", "juke", "the username the session reports")
 	maxGet := fs.Int("max-objects-in-get", 0, "the most objects one /get may return (default 5000)")
+	webDir := fs.String("web-dir", "", "serve the review page from this directory, not the built-in copy")
 	parse(fs, args, "db", "library")
 
 	s, err := store.Open(*dbPath)
@@ -36,6 +38,10 @@ func runServe(ctx context.Context, args []string) error {
 		MaxObjectsInGet: *maxGet,
 		Log:             logger,
 	})
+	mux := http.NewServeMux()
+	mux.Handle("/", srv.Handler())
+	mux.Handle("GET /{$}", web.Handler(*webDir))
+
 	logger.Printf("serving %s on http://%s/", *dbPath, *listen)
-	return http.ListenAndServe(*listen, srv.Handler())
+	return http.ListenAndServe(*listen, mux)
 }

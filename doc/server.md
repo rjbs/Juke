@@ -31,9 +31,14 @@ which is what the first real import uses.
 
     var/juke serve --db var/sample.sqlite --library sample
 
-It listens on `localhost:8737`.  The session is at
-`/.well-known/jmap`, with one account, `music`, under the capability
-`https://semiotic.systems/jmap/juke`.  `--max-objects-in-get` lowers the
+It listens on `localhost:8737`, where `/` is a review page: a single HTML
+file, built into the binary, that browses albums, tracks and playlists,
+plays them, and sets ratings, all through the JMAP API.  A track played
+to its end there counts as a play.  `--web-dir internal/web` serves the
+page from the source tree instead, so edits show on reload.
+
+The session is at `/.well-known/jmap`, with one account, `music`, under
+the capability `https://semiotic.systems/jmap/juke`.  `--max-objects-in-get` lowers the
 per-request object limit, which makes clients page through `/query`;
 useful for testing.
 
