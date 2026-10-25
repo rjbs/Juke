@@ -50,6 +50,8 @@ Writing a JMAP server for new data types is treated as a solved problem.
   calls, evaluated on the server.
 - [iOS client](doc/ios-client.md): a Spotify-shaped model, pinned downloads
   first and a streaming cache later.
+- [Import](doc/import.md): a fresh database from the files and an Apple
+  Music export; tags win for the music, the export for listening data.
 - [Sample library](doc/sample-library.md): a 1 GB slice of the real library
   for prototyping, chosen to cover the hard cases.
 - [Recovery and reorganization](doc/recovery.md): putting the library back
@@ -58,6 +60,5 @@ Writing a JMAP server for new data types is treated as a solved problem.
 
 ## Open questions
 
-These are also tracked as Loose Threads (`lt list`).
-
-- [ ] How the initial import reads existing ID3 tags into the database.
+None of the questions these notes started with are still open.  Smaller
+ones are tracked as Loose Threads (`lt list`).
