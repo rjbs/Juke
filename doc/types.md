@@ -141,8 +141,7 @@ Each of these is a likely addition, kept out until it's needed:
 - **Artwork,** which belongs on Album.
 - **Album rating.**  Every album rating in the 2014 library was computed
   from track ratings, so there is nothing to import.
-- **Audio digest.**  [Storage](storage.md) makes it a property of the
-  track, but it is server-internal until a client needs it.
+- **Audio digest.**  Deferred entirely; see [storage](storage.md).
 - **Metadata flush state.**  Edits mark a track dirty, and a later flush
   writes its tags and changes its `blobId`, so a burst of edits costs one
   re-download.  This is server bookkeeping; whether clients see it is

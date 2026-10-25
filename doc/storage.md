@@ -20,10 +20,10 @@ plus current tags, so tag edits reach clients without touching originals.
   album and track by metadata and duration, and then decide which copy to
   keep.  The recovery tools in `bin/` are the prototype of that: see
   [recovery](recovery.md).
-- **Audio digest is a property of the Track**, a hash of the audio frames
-  only, skipping ID3v2 at the front and ID3v1 at the end.  Retagging leaves
-  it unchanged.  It catches byte-identical duplicates at ingest and verifies
-  that a stored original is still the bytes that were ingested.
+- **Audio digest: deferred.**  A hash of the audio frames only, skipping
+  the tags, would catch byte-identical duplicates at ingest and verify
+  stored originals.  Nothing needs it yet, and finding the audio inside an
+  M4A file takes real work, so it waits until something does.
 
 ## Served blobs
 

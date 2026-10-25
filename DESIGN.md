@@ -28,7 +28,8 @@ and file transfer through the standard blob upload and download endpoints.
 Writing a JMAP server for new data types is treated as a solved problem.
 
 - **Object types:** Track, Album and Playlist, each its own JMAP type with
-  its own state.  See [object types](doc/types.md).
+  its own state.  See [object types](doc/types.md).  They live under
+  the capability `https://semiotic.systems/jmap/juke`.
 - **Updates are last-write-wins** via plain `/set` updates.  Play counts,
   last played and ratings are almost always written by one device.  When two
   devices do collide, the cost is a count off by one, which isn't worth an
