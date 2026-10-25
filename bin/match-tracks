@@ -8,7 +8,9 @@ use Unicode::Normalize qw(NFC);
 
 use lib "$FindBin::Bin/../lib";
 use Juke::Catalog qw(ensure_views);
-use Juke::Names qw(norm_text album_key albums_alike album_keys_alike);
+use Juke::Names qw(
+  norm_text album_key albums_alike album_keys_alike disc_and_track_from_name
+);
 
 =head1 NAME
 
@@ -105,6 +107,18 @@ Artist and title match, the durations are within two seconds, and the album
 names are alike once punctuation and disc markers are stripped, or the file
 has no album at all.  This catches re-rips filed under a renamed album
 without taking the same recording on some other album as a stand-in.
+
+=item filename
+
+For a file with no title tag at all, the title comes from its filename,
+less any leading "NN " or "D-NN " track number, and the artist and album
+from the two directories above it, as iTunes laid them out.  The titles
+must match once punctuation is gone, because iTunes wrote "?" and ":" in
+filenames as "_".  The durations must be within two seconds, the album and
+artist must be alike (any artist, for a compilation), and a number in the
+filename must agree with the catalog's.  In 2015, something rewrote the
+files of Bob Dylan's I<Bootleg Series, Vols. 1-3> without their text tags,
+and this is how they are found.
 
 =back
 
@@ -222,6 +236,12 @@ my @PASSES = (
     file_key => sub ($f) { artist_title_key($f, 'title') },
     track_key => sub ($t) { artist_title_key($t, 'name') },
     filter   => sub ($t, $f) { duration_close($t, $f) && album_alike_or_absent($t, $f) },
+  },
+  {
+    method   => 'filename',
+    file_key => sub ($f) { my $n = from_filename($f); $n && $n->{title_key} },
+    track_key => sub ($t) { punctless_key($t->{name}) },
+    filter   => sub ($t, $f) { duration_close($t, $f) && filename_agrees($t, $f) },
   },
 );
 
@@ -407,6 +427,45 @@ sub artists_alike ($track, $file) {
     }
   }
   return 0;
+}
+
+sub punctless_key ($text) {
+  my $key = norm_text($text);
+  $key =~ s/[^\p{Alnum}]+//g;
+  return length $key ? $key : undef;
+}
+
+# What an untagged file's path says it is: Artist/Album/NN Title.ext, as
+# iTunes filed it.  A file with any title tag gets nothing here, since its
+# tags already had their chance in the passes before. -- claude, 2026-10-25
+sub from_filename ($file) {
+  return $file->{from_name} if exists $file->{from_name};
+  return $file->{from_name} = undef if length($file->{title} // '');
+
+  my @parts = split m{/}, $file->{rel_path};
+  return $file->{from_name} = undef unless @parts >= 3;
+
+  my ($artist, $album, $base) = @parts[-3, -2, -1];
+  $base =~ s/\.[^.]+\z//;
+  my ($disc, $number) = disc_and_track_from_name($base);
+  $base =~ s/\A(?:\d{1,2}-)?\d{2,3} // if defined $number;
+
+  return $file->{from_name} = {
+    title_key => punctless_key($base),
+    artist    => $artist,
+    album_key => album_key($album),
+    disc      => $disc,
+    track     => $number,
+  };
+}
+
+sub filename_agrees ($track, $file) {
+  my $n = from_filename($file);
+  return 0 unless album_keys_alike($track->{album_key}, $n->{album_key});
+  return 0 unless $track->{compilation} || artists_alike($track, { artist => $n->{artist} });
+  return 0 if defined $n->{track} && ($track->{track_number} // 0) != $n->{track};
+  return 0 if defined $n->{disc}  && ($track->{disc_number} // 1) != $n->{disc};
+  return 1;
 }
 
 sub duration_close ($track, $file) {
