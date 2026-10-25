@@ -31,8 +31,24 @@ targets:
       path: App/Info.plist
       properties:
         CFBundleDisplayName: Juke
+        # The release script sets the build number; see bin/release.
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        # Juke uses no encryption beyond what the system provides, which
+        # App Store Connect would otherwise ask about on every upload.
+        ITSAppUsesNonExemptEncryption: false
         UILaunchScreen: {}
         UIBackgroundModes: [audio]
+        # An iPad app that allows multitasking must allow every orientation.
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UISupportedInterfaceOrientations~iphone:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
         LSApplicationCategoryType: public.app-category.music
         # The server speaks plain HTTP on the tailnet for now.
         NSAppTransportSecurity:

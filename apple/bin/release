@@ -1,0 +1,93 @@
+#!/usr/bin/env perl
+use v5.36;
+
+# bin/release: archive the iOS app and upload it to App Store Connect,
+# from which it goes to TestFlight.  Run from apple/:
+#
+#   bin/release            # archive and upload
+#   bin/release --no-upload  # archive and export an .ipa, but don't upload
+#
+# The build number is the count of commits on HEAD, so every upload from a
+# new commit gets a larger one, and the same commit always gets the same
+# one.  That's why the working tree must be clean: a build from uncommitted
+# changes would share its number with the commit underneath.
+#
+# Signing is automatic, using the Apple ID signed in to Xcode, which must
+# belong to the team in project.yml.
+
+use Getopt::Long::Descriptive;
+
+my ($opt, $usage) = describe_options(
+  '%c %o',
+  [ 'upload!', 'upload to App Store Connect (default: yes)', { default => 1 } ],
+  [],
+  [ 'help|h', 'show this help', { shortcircuit => 1 } ],
+);
+print($usage->text), exit if $opt->help;
+
+-e 'project.yml' or die "run this from apple/\n";
+
+my $dirty = `git status --porcelain -- .`;
+die "the working tree has uncommitted changes:\n$dirty" if length $dirty;
+
+my ($team) = `grep DEVELOPMENT_TEAM project.yml` =~ /DEVELOPMENT_TEAM:\s*(\S+)/
+  or die "no DEVELOPMENT_TEAM in project.yml\n";
+
+chomp(my $build = `git rev-list --count HEAD`);
+$build =~ /\A[0-9]+\z/ or die "couldn't count commits\n";
+
+my $archive = "build/release/Juke-$build.xcarchive";
+my $export  = "build/release/Juke-$build";
+
+run('xcodegen', '-q');
+run(
+  'xcodebuild', 'archive',
+  '-project', 'Juke.xcodeproj',
+  '-scheme', 'Juke',
+  '-destination', 'generic/platform=iOS',
+  '-archivePath', $archive,
+  '-allowProvisioningUpdates',
+  "CURRENT_PROJECT_VERSION=$build",
+);
+
+my $options = "build/release/ExportOptions-$build.plist";
+my $destination = $opt->upload ? 'upload' : 'export';
+open my $fh, '>', $options or die "can't write $options: $!\n";
+print {$fh} <<~"END";
+  <?xml version="1.0" encoding="UTF-8"?>
+  <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+  <plist version="1.0">
+  <dict>
+    <key>method</key>
+    <string>app-store-connect</string>
+    <key>destination</key>
+    <string>$destination</string>
+    <key>teamID</key>
+    <string>$team</string>
+    <key>signingStyle</key>
+    <string>automatic</string>
+    <key>manageAppVersionAndBuildNumber</key>
+    <false/>
+    <key>uploadSymbols</key>
+    <true/>
+  </dict>
+  </plist>
+  END
+close $fh or die "can't write $options: $!\n";
+
+run(
+  'xcodebuild', '-exportArchive',
+  '-archivePath', $archive,
+  '-exportOptionsPlist', $options,
+  '-exportPath', $export,
+  '-allowProvisioningUpdates',
+);
+
+say $opt->upload
+  ? "uploaded build $build; it appears in TestFlight once App Store Connect has processed it"
+  : "exported build $build to $export";
+
+sub run (@command) {
+  say "+ @command";
+  system(@command) == 0 or die "failed: @command\n";
+}

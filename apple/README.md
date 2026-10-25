@@ -44,3 +44,33 @@ The tests that need a server run only when `JUKE_TEST_SERVER` names one,
 such as `http://localhost:8737`.  They sync a fresh mirror, play a track's
 audio through the cache, and write a rating and a play, so point them at
 a scratch database.
+
+## Releasing to TestFlight
+
+This needs a paid Apple Developer Program membership on the team named in
+`project.yml`; a free personal team can't upload.
+
+Once, in [App Store Connect](https://appstoreconnect.apple.com):
+
+1. **Apps → + → New App.**  Platform iOS, name "Juke" (or whatever is
+   free: App Store names are global, even for an app that never leaves
+   TestFlight), primary language English, bundle ID
+   `systems.semiotic.juke`, and any SKU, such as `juke`.  If the bundle ID
+   isn't offered, build once from Xcode with the paid team selected,
+   which registers it.
+2. **TestFlight → Internal Testing → +.**  Make a group and add yourself.
+   Internal testers get every build without Apple's review.
+3. Install the TestFlight app on each device, signed in with the same
+   Apple ID.
+
+Then, for each build, from a clean working tree:
+
+    cd apple
+    bin/release
+
+That archives the app, signs it for distribution, and uploads it.  The
+build number is the number of commits on HEAD, so commit before
+releasing; the version shown to testers is `MARKETING_VERSION` in
+`project.yml`.  App Store Connect takes some minutes to process an
+upload, then TestFlight offers it.  `bin/release --no-upload` stops
+short, leaving an `.ipa` under `build/release`.
