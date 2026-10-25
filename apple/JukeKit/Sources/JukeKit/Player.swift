@@ -24,7 +24,7 @@ public final class Player {
   public var hasPrevious: Bool { (index ?? 0) > 0 }
 
   @ObservationIgnored let library: Library
-  @ObservationIgnored private let player = AVPlayer()
+  @ObservationIgnored let player = AVPlayer()
   @ObservationIgnored private var loadTask: Task<Void, Never>?
   @ObservationIgnored private var endObserver: (any NSObjectProtocol)?
 

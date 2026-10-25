@@ -77,3 +77,32 @@ func writes() async throws {
                        write: { try await library.recordPlay(of: track) },
                        shows: { $0.playCount == track.playCount + 1 && $0.lastPlayed != nil })
 }
+
+// The player itself, not just the audio file: plays an album from its
+// second playable track and checks that the audio is really advancing,
+// that the queue is the album's playable tracks, and that next moves on.
+@Test(.enabled(if: testServer != nil))
+@MainActor
+func player() async throws {
+  let library = try await openLibrary()
+  let found = library.albumList.first { library.tracks(of: $0).joined().filter(\.isPlayable).count >= 3 }
+  let album = try #require(found)
+  let tracks = Array(library.tracks(of: album).joined())
+  let start = try #require(tracks.indices.filter { tracks[$0].isPlayable }.dropFirst().first)
+
+  let player = Player(library: library)
+  player.play(tracks, at: start)
+  #expect(player.current == tracks[start])
+  #expect(player.queue == tracks.filter(\.isPlayable))
+  try await eventually("audio advancing") { player.player.currentTime().seconds > 0.5 }
+  #expect(player.isPlaying)
+  #expect(player.failure == nil)
+
+  player.next()
+  #expect(player.index == 2)
+  try await eventually("next track advancing") {
+    player.player.currentTime().seconds > 0.5 && player.player.currentItem != nil
+  }
+  player.togglePause()
+  #expect(!player.isPlaying)
+}
