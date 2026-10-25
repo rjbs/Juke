@@ -108,24 +108,38 @@ func scanCatalogTrack(rows interface{ Scan(...any) error }) (catalogTrack, error
 		&c.TrackNumber, &c.DiscNumber, &c.Rating, &c.PlayCount,
 		&c.PlayDate, &c.DateAdded, &c.AlbumID,
 	)
-	for _, s := range []*sql.NullString{&c.Artist, &c.AlbumArtist} {
-		if isPlaceholderArtist(s.String) {
-			*s = sql.NullString{}
-		}
-	}
+	c.Artist.String = artistName(c.Artist.String)
+	c.AlbumArtist.String = albumArtistName(c.AlbumArtist.String)
 	return c, err
 }
 
-// isPlaceholderArtist reports whether an artist name is iTunes's stand-in
-// for no artist at all.
-func isPlaceholderArtist(name string) bool {
+// isUnknownArtist reports whether an artist name is iTunes's stand-in for
+// no artist at all.
+func isUnknownArtist(name string) bool {
 	return strings.EqualFold(strings.TrimSpace(name), "Unknown Artist")
 }
 
-// artistName is a tag's artist, or "" for a placeholder.
+// isVariousArtists reports whether an artist name says "many artists":
+// as an album artist, a compilation; as a track artist, nothing.
+func isVariousArtists(name string) bool {
+	name = strings.TrimSpace(name)
+	return strings.EqualFold(name, "Various Artists") || strings.EqualFold(name, "Various")
+}
+
+// artistName is a track's artist, or "" for a placeholder.
 func artistName(name string) string {
 	name = strings.TrimSpace(name)
-	if isPlaceholderArtist(name) {
+	if isUnknownArtist(name) || isVariousArtists(name) {
+		return ""
+	}
+	return name
+}
+
+// albumArtistName is an album artist, or "" for "Unknown Artist".
+// "Various Artists" is kept, so album naming can see a compilation.
+func albumArtistName(name string) string {
+	name = strings.TrimSpace(name)
+	if isUnknownArtist(name) {
 		return ""
 	}
 	return name
@@ -399,7 +413,7 @@ func (im *run) readFile(ctx context.Context, p, rel, contentType string) (*audio
 		f.originalTags = &raw
 		f.title = strings.TrimSpace(m.Title())
 		f.artist = artistName(m.Artist())
-		f.albumArtist = artistName(m.AlbumArtist())
+		f.albumArtist = albumArtistName(m.AlbumArtist())
 		f.album = strings.TrimSpace(m.Album())
 		f.trackNumber, _ = m.Track()
 		f.discNumber, _ = m.Disc()
@@ -449,7 +463,7 @@ func (im *run) readFile(ctx context.Context, p, rel, contentType string) (*audio
 }
 
 // dirArtist is the artist an album directory is filed under, or "" for a
-// compilation or a directory with no artist above it.
+// compilation, a placeholder, or a directory with no artist above it.
 func dirArtist(dir string) string {
 	switch parent := path.Base(path.Dir(dir)); parent {
 	case "Compilations", "_", ".":
@@ -542,7 +556,7 @@ func (im *run) importDir(ctx context.Context, dir string, files []*audioFile) er
 	if path.Base(dir) == "Unknown Album" {
 		sort.Slice(files, func(i, j int) bool { return files[i].name < files[j].name })
 		for _, f := range files {
-			if _, err := im.insertFile(ctx, dir, f, nil, nil, nil); err != nil {
+			if _, err := im.insertFile(ctx, dir, f, dirArtist(dir), nil, nil, nil); err != nil {
 				return err
 			}
 			im.report.AlbumlessTrack++
@@ -615,6 +629,10 @@ func (im *run) importDir(ctx context.Context, dir string, files []*audioFile) er
 	// discs were met in sorted order, so their indexes follow disc order.
 
 	title, artist := im.albumNaming(dir, files)
+	var albumArtist string
+	if artist != nil {
+		albumArtist = *artist
+	}
 	albumID, err := store.InsertAlbum(ctx, im.tx, store.NewAlbum{
 		Title:      title,
 		Artist:     artist,
@@ -631,7 +649,7 @@ func (im *run) importDir(ctx context.Context, dir string, files []*audioFile) er
 		pos := positions[di]
 		positions[di]++
 		if e.file != nil {
-			if _, err := im.insertFile(ctx, dir, e.file, &albumID, &di, &pos); err != nil {
+			if _, err := im.insertFile(ctx, dir, e.file, albumArtist, &albumID, &di, &pos); err != nil {
 				return err
 			}
 			continue
@@ -667,7 +685,9 @@ func (im *run) findGaps(ctx context.Context, files []*audioFile) ([]catalogTrack
 
 // albumNaming picks an album's title and artist.  The tags win; the
 // catalog fills in when they are silent; the directory names are the
-// last resort.  An album under Compilations has no artist.
+// last resort.  A compilation has no artist: an album filed under
+// Compilations or Various Artists, or whose album artist says "Various
+// Artists".
 func (im *run) albumNaming(dir string, files []*audioFile) (string, *string) {
 	var tagAlbums, catAlbums, tagAlbumArtists, tagArtists, catAlbumArtists, catArtists []string
 	for _, f := range files {
@@ -683,7 +703,7 @@ func (im *run) albumNaming(dir string, files []*audioFile) (string, *string) {
 
 	title := firstNonEmpty(majority(tagAlbums), majority(catAlbums), path.Base(dir))
 
-	if path.Base(path.Dir(dir)) == "Compilations" {
+	if parent := path.Base(path.Dir(dir)); parent == "Compilations" || isVariousArtists(parent) {
 		return title, nil
 	}
 	artist := firstNonEmpty(
@@ -695,7 +715,7 @@ func (im *run) albumNaming(dir string, files []*audioFile) (string, *string) {
 	if artist == "" {
 		artist = dirArtist(dir)
 	}
-	if artist == "" {
+	if artist == "" || isVariousArtists(artist) {
 		return title, nil
 	}
 	return title, &artist
@@ -767,7 +787,10 @@ func listening(c *catalogTrack) (rating *float64, playCount int64, lastPlayed *s
 	return rating, playCount, lastPlayed, c.DateAdded.String
 }
 
-func (im *run) insertFile(ctx context.Context, dir string, f *audioFile, albumID *string, disc, pos *int) (string, error) {
+// insertFile inserts one file's track.  fallbackArtist is the artist for a
+// track that neither its tags nor the catalog name: its album's artist,
+// none on a compilation, or for a track on no album, its directory's.
+func (im *run) insertFile(ctx context.Context, dir string, f *audioFile, fallbackArtist string, albumID *string, disc, pos *int) (string, error) {
 	rating, playCount, lastPlayed, dateAdded := listening(f.catalog)
 	if dateAdded == "" {
 		dateAdded = f.mtime.Format("2006-01-02T15:04:05Z")
@@ -781,7 +804,7 @@ func (im *run) insertFile(ctx context.Context, dir string, f *audioFile, albumID
 	rel := f.rel
 	id, err := store.InsertTrack(ctx, im.tx, store.NewTrack{
 		Title:        firstNonEmpty(f.title, catName, stem),
-		Artist:       nonEmpty(firstNonEmpty(f.artist, catArtist, dirArtist(dir))),
+		Artist:       nonEmpty(firstNonEmpty(f.artist, catArtist, fallbackArtist)),
 		AlbumID:      albumID,
 		DiscIndex:    disc,
 		Position:     pos,

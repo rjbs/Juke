@@ -93,6 +93,10 @@ func syntheticImport(t *testing.T) (*sql.DB, *Report) {
 	write("Undamaged/Other/Thing/2-01 Hum.mp3", []byte("\xff\xfbNO-TAGS-AT-ALL"))
 	write("Undamaged/Solo/Record/01 Song.mp3", id3(map[string]string{"TIT2": "Song", "TALB": "Record", "TRCK": "1"}))
 	write("Undamaged/Unknown Artist/Mystery/01 Riddle.mp3", id3(map[string]string{"TIT2": "Riddle", "TPE1": "Unknown Artist", "TALB": "Mystery", "TRCK": "1"}))
+	write("Undamaged/Various Artists/Sampler/01 Taster.mp3", id3(map[string]string{"TIT2": "Taster", "TPE1": "Solo Act", "TALB": "Sampler", "TRCK": "1"}))
+	write("Undamaged/Some DJ/Mixtape/01 Cut.mp3", id3(map[string]string{"TIT2": "Cut", "TPE1": "DJ Real", "TPE2": "Various Artists", "TALB": "Mixtape", "TRCK": "1"}))
+	write("Undamaged/Some DJ/Mixtape/02 Filler.mp3", id3(map[string]string{"TIT2": "Filler", "TPE1": "Various", "TPE2": "Various Artists", "TALB": "Mixtape", "TRCK": "2"}))
+	write("Undamaged/Loner/Unknown Album/Stray.mp3", id3(map[string]string{"TIT2": "Stray"}))
 	write("Damaged/Ignored/Album/01 X.mp3", id3(map[string]string{"TIT2": "X"}))
 
 	loose := filepath.Join(library, "Undamaged/Band/Unknown Album/Loose.mp3")
@@ -163,7 +167,7 @@ func TestSyntheticImport(t *testing.T) {
 	if len(r.TitledFromName) != 4 {
 		t.Errorf("titled from filename %q, want the four untagged files", r.TitledFromName)
 	}
-	if r.Tracks != 11 || r.GapTracks != 1 || r.Albums != 5 || r.AlbumlessTrack != 1 || r.SkippedFiles != 1 || r.Playlists != 1 {
+	if r.Tracks != 15 || r.GapTracks != 1 || r.Albums != 7 || r.AlbumlessTrack != 2 || r.SkippedFiles != 1 || r.Playlists != 1 {
 		t.Errorf("report = %+v", r)
 	}
 
@@ -185,8 +189,17 @@ func TestSyntheticImport(t *testing.T) {
 	// A track with no artist tag takes its artist directory's name, but
 	// "Unknown Artist" is no artist, in a tag or a directory.
 	checkTrackArtist(t, db, "Song", "Solo")
+	checkTrackArtist(t, db, "Stray", "Loner")
 	checkTrackArtist(t, db, "Riddle", "")
 	checkAlbumArtist(t, db, "Mystery", "")
+
+	// "Various Artists" makes an album a compilation, and means nothing
+	// as a track's artist.
+	checkAlbumArtist(t, db, "Sampler", "")
+	checkTrackArtist(t, db, "Taster", "Solo Act")
+	checkAlbumArtist(t, db, "Mixtape", "")
+	checkTrackArtist(t, db, "Cut", "DJ Real")
+	checkTrackArtist(t, db, "Filler", "")
 
 	var compilationArtist sql.NullString
 	db.QueryRow(`SELECT artist FROM album WHERE title = 'Mix'`).Scan(&compilationArtist)
