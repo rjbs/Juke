@@ -1,0 +1,87 @@
+#!/usr/bin/env perl
+use v5.36;
+
+# gh-as-claude: run gh as the Juke GitHub App, so issues and comments
+# Claude writes show as the app's bot rather than as rjbs.
+#
+#   bin/gh-as-claude issue create --title ... --body ...
+#
+# The app's settings live outside the repo, in ~/.config/juke-claude:
+#
+#   app-id    the App ID from the app's settings page
+#   key.pem   a private key generated there
+#
+# The app signs a short-lived JWT with its key, trades it for an
+# installation token good for an hour, and gh runs with that token.  The
+# token is cached in the same directory until shortly before it expires.
+
+use HTTP::Tiny;
+use IPC::Run3 qw(run3);
+use JSON::MaybeXS qw(decode_json encode_json);
+use MIME::Base64 qw(encode_base64url);
+
+my $dir   = "$ENV{HOME}/.config/juke-claude";
+my $owner = 'rjbs';
+
+$ENV{GH_TOKEN} = token();
+exec 'gh', @ARGV;
+die "can't run gh: $!\n";
+
+sub token {
+  my $cache = "$dir/token.json";
+  if (-e $cache) {
+    my $cached = decode_json(slurp($cache));
+    return $cached->{token} if $cached->{expires} > time + 300;
+  }
+
+  my $http = HTTP::Tiny->new(default_headers => {
+    Authorization => 'Bearer ' . jwt(),
+    Accept        => 'application/vnd.github+json',
+  });
+
+  my $res = $http->get('https://api.github.com/app/installations');
+  die "listing installations: $res->{status} $res->{content}\n" unless $res->{success};
+  my ($install) = grep { $_->{account}{login} eq $owner } decode_json($res->{content})->@*
+    or die "the app isn't installed on $owner\n";
+
+  $res = $http->post("https://api.github.com/app/installations/$install->{id}/access_tokens");
+  die "minting a token: $res->{status} $res->{content}\n" unless $res->{success};
+  my $token = decode_json($res->{content})->{token};
+
+  # An installation token lasts an hour from issue. -- claude, 2026-10-25
+  write_private($cache, encode_json({ token => $token, expires => time + 3600 }));
+  return $token;
+}
+
+sub jwt {
+  my ($app_id) = slurp("$dir/app-id") =~ /([0-9]+)/ or die "no App ID in $dir/app-id\n";
+
+  # GitHub allows ten minutes at most; backdating covers clock drift.
+  my $now     = time;
+  my $header  = encode_base64url(encode_json({ alg => 'RS256', typ => 'JWT' }));
+  my $payload = encode_base64url(encode_json({ iat => $now - 60, exp => $now + 540, iss => $app_id }));
+  return "$header.$payload." . encode_base64url(sign("$header.$payload"));
+}
+
+# RS256 is PKCS#1 v1.5 signing, which Crypt::OpenSSL::RSA now refuses
+# outright, though the attack it guards against is on decryption.  The
+# openssl command still signs that way. -- claude, 2026-10-25
+sub sign ($data) {
+  run3 [ qw(openssl dgst -sha256 -sign), "$dir/key.pem" ], \$data, \my $sig;
+  die "openssl couldn't sign\n" if $? or !length $sig;
+  return $sig;
+}
+
+sub slurp ($path) {
+  open my $fh, '<', $path or die "can't read $path: $!\n";
+  local $/;
+  return scalar <$fh>;
+}
+
+sub write_private ($path, $content) {
+  my $old = umask 077;
+  open my $fh, '>', $path or die "can't write $path: $!\n";
+  print {$fh} $content;
+  close $fh or die "can't write $path: $!\n";
+  umask $old;
+}
