@@ -19,6 +19,9 @@ public struct Track: Identifiable, Hashable, Sendable {
   public var albumId: String?
   public var rating: Double?
   public var blobId: String?
+  /// The audio's media type.  Nil in a mirror synced before the server
+  /// sent it, until the track next changes.
+  public var blobType: String?
   public var playCount: Int
   public var lastPlayed: Date?
   public var dateAdded: Date?
@@ -38,6 +41,7 @@ public struct Track: Identifiable, Hashable, Sendable {
     self.albumId = v["albumId"]?.stringValue
     self.rating = v["rating"]?.doubleValue
     self.blobId = v["blobId"]?.stringValue
+    self.blobType = v["blobType"]?.stringValue
     self.playCount = v["playCount"]?.intValue ?? 0
     self.lastPlayed = v["lastPlayed"]?.stringValue.flatMap(parseUTCDate)
     self.dateAdded = v["dateAdded"]?.stringValue.flatMap(parseUTCDate)

@@ -8,7 +8,7 @@ import Testing
 // views use; nil expectations mean "absent".
 func checkTrack(
   _ json: String, title: String?, artist: String? = nil, rating: Double? = nil,
-  playable: Bool = true, playCount: Int = 0, lastPlayed: String? = nil,
+  playable: Bool = true, blobType: String? = nil, playCount: Int = 0, lastPlayed: String? = nil,
   sourceLocation: SourceLocation = #_sourceLocation
 ) throws {
   let track = Track(key: LocalKey(1), id: "T1", value: try JSONValue(parsing: json))
@@ -21,6 +21,7 @@ func checkTrack(
   #expect(t.artist == artist, sourceLocation: sourceLocation)
   #expect(t.rating == rating, sourceLocation: sourceLocation)
   #expect(t.isPlayable == playable, sourceLocation: sourceLocation)
+  #expect(t.blobType == blobType, sourceLocation: sourceLocation)
   #expect(t.playCount == playCount, sourceLocation: sourceLocation)
   #expect(t.lastPlayed.map(formatUTCDate) == lastPlayed, sourceLocation: sourceLocation)
 }
@@ -38,8 +39,8 @@ func checkAlbum(
 }
 
 @Test func tracks() throws {
-  try checkTrack(#"{"title":"Whip It","artist":"Devo","rating":4.5,"blobId":"G1","playCount":3,"lastPlayed":"2014-06-10T08:00:00Z"}"#,
-                 title: "Whip It", artist: "Devo", rating: 4.5, playCount: 3, lastPlayed: "2014-06-10T08:00:00Z")
+  try checkTrack(#"{"title":"Whip It","artist":"Devo","rating":4.5,"blobId":"G1","blobType":"audio/mpeg","playCount":3,"lastPlayed":"2014-06-10T08:00:00Z"}"#,
+                 title: "Whip It", artist: "Devo", rating: 4.5, blobType: "audio/mpeg", playCount: 3, lastPlayed: "2014-06-10T08:00:00Z")
   try checkTrack(#"{"title":"Lost Track","artist":null,"rating":null,"blobId":null,"playCount":0,"lastPlayed":null}"#,
                  title: "Lost Track", playable: false)
   try checkTrack(#"{"artist":"Nobody"}"#, title: nil)

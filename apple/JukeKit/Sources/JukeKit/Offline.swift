@@ -29,6 +29,8 @@ public final class Offline {
   /// title order, and each one's tracks in play order.
   @ObservationIgnored private var order: [String] = []
   @ObservationIgnored private var desired: Set<String> = []
+  /// Each wanted blob's media type, where the track says.
+  @ObservationIgnored private var types: [String: String] = [:]
   /// Wanted blobs known to be here and pinned.  Observed, since each
   /// album's progress is read from it.
   private var ready: Set<String> = []
@@ -82,15 +84,19 @@ public final class Offline {
   func reconcile() {
     var order: [String] = []
     var seen: Set<String> = []
+    var types: [String: String] = [:]
     let albums = albumIds.compactMap { library.albums[$0] }
       .sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
     let playlists = library.playlists.filter { playlistIds.contains($0.id) }
     for tracks in albums.map({ library.tracks(of: $0).flatMap(\.self) }) + playlists.map({ library.tracks(of: $0) }) {
-      for blob in tracks.compactMap(\.blobId) where seen.insert(blob).inserted {
-        order.append(blob)
+      for track in tracks {
+        guard let blob = track.blobId else { continue }
+        if let type = track.blobType { types[blob] = type }
+        if seen.insert(blob).inserted { order.append(blob) }
       }
     }
     self.order = order
+    self.types = types
     desired = seen
     ready.formIntersection(desired)
     wanted = desired.count
@@ -126,7 +132,7 @@ public final class Offline {
         continue
       }
       do {
-        try await blobs.download(next, pin: true)
+        try await blobs.download(next, contentType: types[next], pin: true)
         failure = nil
       } catch {
         failure = error.localizedDescription

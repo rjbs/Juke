@@ -48,7 +48,6 @@ public final class Library {
 
   @ObservationIgnored let engine: SyncEngine<GRDBSyncStore>
   @ObservationIgnored let blobs: BlobStore<GRDBSyncStore>
-  @ObservationIgnored let playable: URL
   /// What this device keeps available offline.
   @ObservationIgnored public private(set) var offline: Offline!
   @ObservationIgnored private var ids: [LocalKey: String] = [:]
@@ -57,7 +56,6 @@ public final class Library {
   init(engine: SyncEngine<GRDBSyncStore>, blobs: BlobStore<GRDBSyncStore>, directory: URL) {
     self.engine = engine
     self.blobs = blobs
-    self.playable = directory.appending(path: "playable")
     self.offline = Offline(library: self, file: directory.appending(path: "offline.json"))
   }
 
@@ -94,8 +92,9 @@ public final class Library {
       directory: directory.appending(path: "audio"),
       cacheLimit: 2 * 1024 * 1024 * 1024
     ))
-    try FileManager.default.createDirectory(at: directory.appending(path: "playable"), withIntermediateDirectories: true)
-    sweepPlayable(directory.appending(path: "playable"))
+    // Earlier versions linked audio here under names with extensions;
+    // Jinx now names its files that way itself.  -- claude, 2026-10-25
+    try? FileManager.default.removeItem(at: directory.appending(path: "playable"))
     return Library(engine: engine, blobs: blobs, directory: directory)
   }
 
@@ -234,54 +233,21 @@ public final class Library {
   /// A track's audio as a local file that AVFoundation can play,
   /// downloading it into the cache if it isn't there.
   ///
-  /// The cache names files by blob id alone, and AVFoundation won't open a
-  /// local file without an extension, whatever type it's told.  So this
-  /// returns a second name for the cached file whose extension follows the
-  /// file's first bytes; the cache's own record of the type is the
-  /// application/octet-stream that Jinx asked for.
-  ///
-  /// The name is a hard link, not a symlink: on iOS another process reads
-  /// the audio, and the access it's granted covers the path it's given,
-  /// not where a symlink leads.  A link to a file the cache has since
-  /// replaced is remade on the next call, and `sweepPlayable` clears out
-  /// links to evicted files at launch. -- claude, 2026-10-25
+  /// AVFoundation won't open a local file without an extension, and Jinx
+  /// names a cached file by the type it's given, so the track's type is
+  /// passed along.  A track synced before the server sent its type has
+  /// its first bytes read instead; the second download call only renames
+  /// the file. -- claude, 2026-10-25
   public func audioFile(for track: Track) async throws -> URL {
     guard let blobId = track.blobId else { throw LibraryError.noAudio }
+    if let type = track.blobType {
+      return try await blobs.download(blobId, contentType: type)
+    }
     let cached = try await blobs.download(blobId)
     let file = try FileHandle(forReadingFrom: cached)
     defer { try? file.close() }
     let head = try file.read(upToCount: 12) ?? Data()
-    let ext = audioType(of: head) == "audio/mp4" ? "m4a" : "mp3"
-    let link = playable.appending(path: "\(blobId).\(ext)")
-    let fm = FileManager.default
-    if !Self.isSameFile(link, cached) {
-      try? fm.removeItem(at: link)
-      try fm.linkItem(at: cached, to: link)
-    }
-    return link
-  }
-
-  private static func isSameFile(_ a: URL, _ b: URL) -> Bool {
-    let fm = FileManager.default
-    guard let x = try? fm.attributesOfItem(atPath: a.path),
-          let y = try? fm.attributesOfItem(atPath: b.path)
-    else { return false }
-    return x[.type] as? FileAttributeType == .typeRegular
-      && x[.systemNumber] as? Int == y[.systemNumber] as? Int
-      && x[.systemFileNumber] as? Int == y[.systemFileNumber] as? Int
-  }
-
-  /// Removes playable names for audio the cache no longer holds.  A file
-  /// with only one name left is one the cache has let go of.  Symlinks
-  /// left by earlier versions go too.
-  nonisolated static func sweepPlayable(_ playable: URL) {
-    let fm = FileManager.default
-    for url in (try? fm.contentsOfDirectory(at: playable, includingPropertiesForKeys: nil)) ?? [] {
-      guard let attrs = try? fm.attributesOfItem(atPath: url.path) else { continue }
-      if attrs[.type] as? FileAttributeType != .typeRegular || attrs[.referenceCount] as? Int == 1 {
-        try? fm.removeItem(at: url)
-      }
-    }
+    return try await blobs.download(blobId, contentType: audioType(of: head) ?? "audio/mpeg")
   }
 
   // MARK: - Index

@@ -21,11 +21,13 @@ func openLibrary() async throws -> Library {
 }
 
 // checkPlayable fetches a track's audio through the cache and checks
-// that AVFoundation can play it and finds it the given length or longer.
+// that it has an audio file's extension, that AVFoundation can play
+// it, and that it is the given length or longer.
 func checkPlayable(_ library: Library, _ track: Track, atLeast seconds: Double) async throws {
   let url = try await library.audioFile(for: track)
   let asset = AVURLAsset(url: url)
   let (playable, duration) = try await asset.load(.isPlayable, .duration)
+  #expect(["mp3", "mp4", "m4a"].contains(url.pathExtension), "\(url.lastPathComponent)")
   #expect(playable, "\(track.title) at \(url.path)")
   #expect(duration.seconds >= seconds, "\(track.title): \(duration.seconds) s")
 }
