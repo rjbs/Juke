@@ -61,3 +61,27 @@ targets:
         CODE_SIGN_STYLE: Automatic
         GENERATE_INFOPLIST_FILE: YES
         ENABLE_USER_SCRIPT_SANDBOXING: YES
+  # Drives the iOS app in the simulator; see bin/ui-test.
+  JukeUITests:
+    type: bundle.ui-testing
+    supportedDestinations: [iOS]
+    sources: [UITests]
+    dependencies:
+      - target: Juke
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: systems.semiotic.juke.uitests
+        DEVELOPMENT_TEAM: RF24M9W2UV
+        CODE_SIGN_STYLE: Automatic
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: Juke
+schemes:
+  Juke:
+    build:
+      targets:
+        Juke: all
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets: [JukeUITests]

@@ -86,9 +86,9 @@ struct PlayerBar: View {
       HStack(spacing: 16) {
         VStack(alignment: .leading) {
           if let failure = player.failure {
-            Text(failure).foregroundStyle(.red).lineLimit(2)
+            Text(failure).foregroundStyle(.red).lineLimit(2).accessibilityIdentifier("player.failure")
           } else if let track = player.current {
-            Text(track.title).lineLimit(1)
+            Text(track.title).lineLimit(1).accessibilityIdentifier("player.title")
             if let artist = track.artist {
               Text(artist).font(.caption).foregroundStyle(.secondary).lineLimit(1)
             }
@@ -103,6 +103,7 @@ struct PlayerBar: View {
         }
         .disabled(player.current == nil || player.isLoading)
         .keyboardShortcut(.space, modifiers: [])
+        .accessibilityIdentifier("player.playPause")
         Button("Next", systemImage: "forward.fill") { player.next() }
           .disabled(!player.hasNext)
       }

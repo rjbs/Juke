@@ -1,0 +1,109 @@
+#!/usr/bin/env perl
+use v5.36;
+
+# bin/ui-test: run the app's UI tests in the iPhone simulator and export
+# their screenshots.  Run from apple/, with a scratch server running
+# (../bin/scratch-server):
+#
+#   bin/ui-test                          # every UI test
+#   bin/ui-test testPlayFromAlbum        # just these tests
+#   bin/ui-test --server http://...      # against another server
+#
+# Screenshots land in build/ui-test/screenshots, named by test and step.
+
+use Getopt::Long::Descriptive;
+use JSON::MaybeXS qw(decode_json);
+
+my ($opt, $usage) = describe_options(
+  '%c %o [test ...]',
+  [ 'server=s',    'the server the app talks to', { default => 'http://localhost:8738' } ],
+  [ 'simulator=s', 'the simulator to use, made if missing', { default => 'Juke iPhone' } ],
+  [],
+  [ 'help|h', 'show this help', { shortcircuit => 1 } ],
+);
+print($usage->text), exit if $opt->help;
+
+-e 'project.yml' or die "run this from apple/\n";
+
+my $sim  = simulator($opt->simulator);
+my $out  = 'build/ui-test';
+my $bundle = "$out/result.xcresult";
+system('rm', '-rf', $out) == 0 or die "can't clear $out\n";
+
+run('xcodegen', '-q');
+system('mkdir', '-p', $out) == 0 or die "can't make $out\n";
+
+# xcodebuild says thousands of lines; keep them in a log, and show only
+# how each test went and why any failed.  -- claude, 2026-10-25
+my $log = "$out/xcodebuild.log";
+open my $all, '>', $log or die "can't write $log: $!\n";
+$all->autoflush(1);
+open my $stderr, '>&', \*STDERR or die "can't save stderr: $!\n";
+open STDERR, '>>', $log or die "can't send stderr to $log: $!\n";
+open my $xcodebuild, '-|',
+  'xcodebuild', 'test',
+  '-project', 'Juke.xcodeproj',
+  '-scheme', 'Juke',
+  '-destination', "id=$sim",
+  '-derivedDataPath', 'build/dd',
+  '-resultBundlePath', $bundle,
+  # On a failure, xcodebuild otherwise spends up to ten minutes on a
+  # simulator sysdiagnose.
+  '-collect-test-diagnostics', 'never',
+  (map { "-only-testing:JukeUITests/JukeUITests/$_" } @ARGV),
+  'TEST_RUNNER_JUKE_TEST_SERVER=' . $opt->server
+  or die "can't run xcodebuild: $!\n";
+open STDERR, '>&', $stderr or die "can't restore stderr: $!\n";
+while (my $line = <$xcodebuild>) {
+  print {$all} $line;
+  print $line if $line =~ /^Test Case .* (passed|failed)|: error: |^\*\* TEST /;
+}
+close $all;
+my $ok = close $xcodebuild;
+say "full log in $log";
+
+if (-e $bundle) {
+  export_screenshots($bundle, "$out/screenshots");
+  say "screenshots in $out/screenshots";
+}
+exit($ok ? 0 : 1);
+
+# xcresulttool exports attachments under UUIDs, with a manifest giving
+# each one's test and name; this renames them "test - name.png", in the
+# order they were taken.
+sub export_screenshots ($bundle, $dir) {
+  system("xcrun xcresulttool export attachments --path '$bundle' --output-path '$dir' >/dev/null") == 0
+    or die "exporting attachments failed\n";
+  open my $fh, '<', "$dir/manifest.json" or die "no manifest in $dir\n";
+  my $manifest = decode_json(do { local $/; <$fh> });
+  for my $test (@$manifest) {
+    my ($name) = $test->{testIdentifier} =~ m{/(\w+)\(\)\z} or next;
+    my @shots = sort { $a->{timestamp} <=> $b->{timestamp} } $test->{attachments}->@*;
+    for my $i (keys @shots) {
+      my $shot = $shots[$i];
+      (my $label = $shot->{suggestedHumanReadableName}) =~ s/_\d+_[-0-9A-F]+(\.\w+)\z//;
+      my $ext = $1 // '.png';
+      $label =~ tr{/}{-};
+      rename "$dir/$shot->{exportedFileName}", sprintf('%s/%s %02d %s%s', $dir, $name, $i + 1, $label, $ext)
+        or warn "can't rename $shot->{exportedFileName}: $!\n";
+    }
+  }
+}
+
+# The UDID of the named simulator, making it from the newest iPhone that
+# the newest iOS runtime supports if it doesn't exist.
+sub simulator ($name) {
+  my $devices = decode_json(`xcrun simctl list devices available -j`)->{devices};
+  for my $runtime (sort keys %$devices) {
+    for my $d ($devices->{$runtime}->@*) {
+      return $d->{udid} if $d->{name} eq $name;
+    }
+  }
+  chomp(my $udid = `xcrun simctl create '$name' com.apple.CoreSimulator.SimDeviceType.iPhone-18-Pro com.apple.CoreSimulator.SimRuntime.iOS-27-0`);
+  $udid =~ /\A[-0-9A-F]+\z/ or die "couldn't make a simulator named $name\n";
+  return $udid;
+}
+
+sub run (@command) {
+  system(@command) == 0 or die "failed: @command\n";
+}

@@ -40,10 +40,10 @@ settings; see [the server](../doc/server.md) for running one.
     cd apple/JukeKit
     swift test
 
-The tests that need a server run only when `JUKE_TEST_SERVER` names one,
-such as `http://localhost:8737`.  They sync a fresh mirror, play a track's
-audio through the cache, and write a rating and a play, so point them at
-a scratch database.
+The tests that need a server run only when `JUKE_TEST_SERVER` names one.
+They sync a fresh mirror, play a track's audio through the cache, and
+write a rating and a play, so point them at the scratch server (see UI
+tests, below): `JUKE_TEST_SERVER=http://localhost:8738`.
 
 ## Releasing to TestFlight
 
@@ -74,3 +74,24 @@ releasing; the version shown to testers is `MARKETING_VERSION` in
 `project.yml`.  App Store Connect takes some minutes to process an
 upload, then TestFlight offers it.  `bin/release --no-upload` stops
 short, leaving an `.ipa` under `build/release`.
+
+## UI tests
+
+`UITests/` drives the iOS app in the simulator: it launches it against a
+server, searches, opens albums, plays tracks, and saves screenshots along
+the way.  They play audio and record plays, so they run against a scratch
+copy of the library rather than the one you listen to:
+
+    bin/scratch-server --fresh     # from the repo root: var/scratch.sqlite on :8738
+    cd apple
+    bin/ui-test                    # every UI test
+    bin/ui-test testPlayFromAlbum  # some of them
+
+`bin/ui-test` prints how each test went, keeps xcodebuild's full output in
+`build/ui-test/xcodebuild.log`, and exports the screenshots to
+`build/ui-test/screenshots`, named by test and step.  It uses a simulator
+called "Juke iPhone", making one if there isn't one.  The first run in a
+fresh simulator syncs the whole library first, which takes a minute.
+
+The app is pointed at the server with a launch argument, `-serverURL`,
+which lands in the same `UserDefaults` key the settings screen writes.
