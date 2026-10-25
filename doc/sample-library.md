@@ -32,7 +32,7 @@ are approximate.
 | Large single file, for range requests and streaming | John Digweed mix, no album | 1 | 80 |
 | One-track "album" with no album tag | Monty Python, "Brave Sir Robin" | 1 | 1 |
 | Cover art as a loose JPEG; artist and album share a name; M4A | Black Sabbath, *Black Sabbath* | 6 | 36 |
-| Untagged file, which the importer must refuse or quarantine | "Danger Mouse.mp3", from `Miscellaneous/Untagged` | 1 | 1 |
+| Filed as untagged, but has a title in an old ID3v2.2 tag and a 2014 catalog entry, so it imports | "Danger Mouse.mp3", from `Miscellaneous/Untagged` | 1 | 1 |
 | Total | | 189 | 958 |
 
 ## Building it
