@@ -57,7 +57,8 @@ struct LibraryView: View {
       }
       .safeAreaInset(edge: .bottom) {
         if let failure = library.syncFailure {
-          Label(failure, systemImage: "exclamationmark.icloud")
+          Label("Can't reach the server", systemImage: "exclamationmark.icloud")
+            .help(failure)
             .font(.caption)
             .foregroundStyle(.secondary)
             .padding(8)

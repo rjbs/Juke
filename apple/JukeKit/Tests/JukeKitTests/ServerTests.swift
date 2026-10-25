@@ -106,3 +106,31 @@ func player() async throws {
   player.togglePause()
   #expect(!player.isPlaying)
 }
+
+// A library opened once opens again with its server unreachable: the
+// account is remembered, the index comes from the mirror, and the
+// failure to sync is reported rather than fatal.
+@Test(.enabled(if: testServer != nil))
+@MainActor
+func offlineStart() async throws {
+  let dir = FileManager.default.temporaryDirectory.appending(path: "jukekit-\(UUID())")
+  let online = try await Library.open(server: try #require(testServer), directory: dir)
+  online.start()
+  while case .syncing = online.phase { try await Task.sleep(for: .milliseconds(50)) }
+  let count = online.tracks.count
+  let cached = try #require(online.tracks.values.first { $0.isPlayable })
+  _ = try await online.audioFile(for: cached)
+  online.stop()
+
+  let nowhere = URL(string: "http://127.0.0.1:9")!
+  let offline = try await Library.open(server: nowhere, directory: dir)
+  offline.start()
+  try await eventually("ready offline") { offline.phase == .ready }
+  #expect(offline.tracks.count == count)
+  _ = try await offline.audioFile(for: cached)
+  try await eventually("a sync failure reported") { offline.syncFailure != nil }
+  offline.stop()
+
+  let fresh = FileManager.default.temporaryDirectory.appending(path: "jukekit-\(UUID())")
+  await #expect(throws: (any Error).self) { try await Library.open(server: nowhere, directory: fresh) }
+}

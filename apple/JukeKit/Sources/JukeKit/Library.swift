@@ -59,16 +59,21 @@ public final class Library {
   }
 
   /// Opens the library for the server at `server`, keeping its mirror and
-  /// cached audio under `directory`.  Contacting the server is needed to
-  /// learn the account, so this fails when the server can't be reached.
+  /// cached audio under `directory`.
+  ///
+  /// The server names the account, and the name is remembered in
+  /// `directory`, so once a library has been opened it opens again with
+  /// the server unreachable.  Only a first open needs the server.
   public static func open(server: URL, directory: URL) async throws -> Library {
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    let config = URLSessionConfiguration.default
+    config.timeoutIntervalForRequest = 15
     let transport = JMAPClient(
       sessionUrl: server.appending(path: ".well-known/jmap"),
-      authenticator: NoAuthentication()
+      authenticator: NoAuthentication(),
+      urlSession: URLSession(configuration: config)
     )
-    let session = try await transport.fetchSession()
-    guard let accountId = session.primaryAccountId(for: jukeCapability) else { throw LibraryError.noAccount }
+    let accountId = try await account(from: transport, rememberedIn: directory.appending(path: "account"))
     let store = try GRDBSyncStore(path: directory.appending(path: "library.sqlite").path)
     let engine = try SyncEngine(
       configuration: SyncConfiguration(
@@ -91,6 +96,18 @@ public final class Library {
     return Library(engine: engine, blobs: blobs, playable: playable)
   }
 
+  private static func account(from transport: JMAPClient, rememberedIn file: URL) async throws -> String {
+    do {
+      let session = try await transport.fetchSession()
+      guard let id = session.primaryAccountId(for: jukeCapability) else { throw LibraryError.noAccount }
+      try Data(id.utf8).write(to: file)
+      return id
+    } catch {
+      guard let saved = try? String(contentsOf: file, encoding: .utf8), !saved.isEmpty else { throw error }
+      return saved
+    }
+  }
+
   /// The directory a server's library lives in, under Application
   /// Support: one per server, so pointing the app at another server
   /// never mixes two libraries.
@@ -102,10 +119,32 @@ public final class Library {
     return base.appending(path: "Juke").appending(path: name)
   }
 
-  /// Syncs, builds the index, and then keeps syncing until `stop`.
+  /// Builds the index and keeps syncing until `stop`.  With a mirror from
+  /// an earlier launch, the library is ready at once and syncs behind;
+  /// otherwise the first sync comes first, with progress in `phase`.
   public func start() {
     let engine = engine
     tasks.append(Task { [weak self] in
+      // A sync failure is recorded in the engine's status rather than
+      // thrown from its run loop, so it's read from there. -- claude, 2026-10-25
+      while !Task.isCancelled {
+        if let status = try? await engine.currentStatus() {
+          self?.syncFailure = status.lastFailure
+        }
+        try? await Task.sleep(for: .seconds(2))
+      }
+    })
+    tasks.append(Task { [weak self] in
+      if (try? await engine.serverState(of: "Track")) != nil {
+        do {
+          try await self?.loadAll()
+        } catch {
+          self?.phase = .failed(error.localizedDescription)
+          return
+        }
+        await self?.run()
+        return
+      }
       let progress = Task { [weak self] in
         while !Task.isCancelled {
           if let status = try? await engine.currentStatus(), let t = status.initialSync["Track"] {
@@ -117,8 +156,8 @@ public final class Library {
       do {
         try await engine.sync()
       } catch {
-        // With a mirror from an earlier launch there is still a library
-        // to show; the run loop below keeps retrying. -- claude, 2026-10-25
+        // A first sync that fails shows whatever arrived, and the run
+        // loop keeps retrying. -- claude, 2026-10-25
         self?.syncFailure = error.localizedDescription
       }
       progress.cancel()
@@ -129,18 +168,23 @@ public final class Library {
         self?.phase = .failed(error.localizedDescription)
         return
       }
-      // Subscribing only now skips the change sets of the first sync, which
-      // loadAll has already read; nothing else writes before the run loop
-      // starts and the views appear. -- claude, 2026-10-25
-      let stream = await engine.changes()
-      self?.tasks.append(Task { [weak self] in
-        for await changeSet in stream {
-          try? await self?.apply(changeSet)
-        }
-      })
-      self?.phase = .ready
-      await engine.run(pollInterval: .seconds(60))
+      await self?.run()
     })
+  }
+
+  /// Follows changes into the index and runs the sync loop.  Subscribing
+  /// only after loadAll skips the change sets loadAll has already read;
+  /// nothing else writes before the views appear.  -- claude, 2026-10-25
+  private func run() async {
+    let engine = engine
+    let stream = await engine.changes()
+    tasks.append(Task { [weak self] in
+      for await changeSet in stream {
+        try? await self?.apply(changeSet)
+      }
+    })
+    phase = .ready
+    await engine.run(pollInterval: .seconds(60))
   }
 
   public func stop() {
