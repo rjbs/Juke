@@ -22,6 +22,10 @@ the server doesn't recognize resyncs from scratch.
   "1-02 Title.mp3", and its artist from the directory above the album.
   Undamaged has 114 such files, from albums that never reached the 2014
   library.
+- **A track with no artist** in its tags or the XML takes the name of the
+  artist directory it is filed under, unless that is `_` or `Compilations`.
+- **"Unknown Artist"** is iTunes's placeholder, not a name.  Wherever it
+  appears, in a tag, the XML or a directory, it means no artist.
 - **Plain playlists** come from the XML too, which is their only source.
 
 The 2014 XML is the only listening history there is.  The current Apple

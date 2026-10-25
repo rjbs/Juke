@@ -91,6 +91,8 @@ func syntheticImport(t *testing.T) (*sql.DB, *Report) {
 	write("Undamaged/Other/Thing/9 Hiss.mp3", []byte("\xff\xfbNO-TAGS-AT-ALL"))
 	write("Undamaged/Other/Thing/1999 Prince.mp3", []byte("\xff\xfbNO-TAGS-AT-ALL"))
 	write("Undamaged/Other/Thing/2-01 Hum.mp3", []byte("\xff\xfbNO-TAGS-AT-ALL"))
+	write("Undamaged/Solo/Record/01 Song.mp3", id3(map[string]string{"TIT2": "Song", "TALB": "Record", "TRCK": "1"}))
+	write("Undamaged/Unknown Artist/Mystery/01 Riddle.mp3", id3(map[string]string{"TIT2": "Riddle", "TPE1": "Unknown Artist", "TALB": "Mystery", "TRCK": "1"}))
 	write("Damaged/Ignored/Album/01 X.mp3", id3(map[string]string{"TIT2": "X"}))
 
 	loose := filepath.Join(library, "Undamaged/Band/Unknown Album/Loose.mp3")
@@ -161,7 +163,7 @@ func TestSyntheticImport(t *testing.T) {
 	if len(r.TitledFromName) != 4 {
 		t.Errorf("titled from filename %q, want the four untagged files", r.TitledFromName)
 	}
-	if r.Tracks != 9 || r.GapTracks != 1 || r.Albums != 3 || r.AlbumlessTrack != 1 || r.SkippedFiles != 1 || r.Playlists != 1 {
+	if r.Tracks != 11 || r.GapTracks != 1 || r.Albums != 5 || r.AlbumlessTrack != 1 || r.SkippedFiles != 1 || r.Playlists != 1 {
 		t.Errorf("report = %+v", r)
 	}
 
@@ -179,6 +181,12 @@ func TestSyntheticImport(t *testing.T) {
 	checkTrack(t, db, "1999 Prince", "Thing", 2, 0, 0, mtimeOf(t, db, "1999 Prince"), true)
 	checkTrack(t, db, "Hum", "Thing", 0, 0, 0, mtimeOf(t, db, "Hum"), true)
 	checkTrackArtist(t, db, "Hiss", "Other")
+
+	// A track with no artist tag takes its artist directory's name, but
+	// "Unknown Artist" is no artist, in a tag or a directory.
+	checkTrackArtist(t, db, "Song", "Solo")
+	checkTrackArtist(t, db, "Riddle", "")
+	checkAlbumArtist(t, db, "Mystery", "")
 
 	var compilationArtist sql.NullString
 	db.QueryRow(`SELECT artist FROM album WHERE title = 'Mix'`).Scan(&compilationArtist)
@@ -229,5 +237,19 @@ func checkTrackArtist(t *testing.T, db *sql.DB, title, artist string) {
 	}
 	if got.String != artist {
 		t.Errorf("track %q: artist %q, want %q", title, got.String, artist)
+	}
+}
+
+// checkAlbumArtist checks the artist of one imported album, found by
+// title; "" means none.
+func checkAlbumArtist(t *testing.T, db *sql.DB, title, artist string) {
+	t.Helper()
+	var got sql.NullString
+	if err := db.QueryRow(`SELECT artist FROM album WHERE title = ?`, title).Scan(&got); err != nil {
+		t.Errorf("album %q: %v", title, err)
+		return
+	}
+	if got.String != artist {
+		t.Errorf("album %q: artist %q, want %q", title, got.String, artist)
 	}
 }

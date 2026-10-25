@@ -108,7 +108,27 @@ func scanCatalogTrack(rows interface{ Scan(...any) error }) (catalogTrack, error
 		&c.TrackNumber, &c.DiscNumber, &c.Rating, &c.PlayCount,
 		&c.PlayDate, &c.DateAdded, &c.AlbumID,
 	)
+	for _, s := range []*sql.NullString{&c.Artist, &c.AlbumArtist} {
+		if isPlaceholderArtist(s.String) {
+			*s = sql.NullString{}
+		}
+	}
 	return c, err
+}
+
+// isPlaceholderArtist reports whether an artist name is iTunes's stand-in
+// for no artist at all.
+func isPlaceholderArtist(name string) bool {
+	return strings.EqualFold(strings.TrimSpace(name), "Unknown Artist")
+}
+
+// artistName is a tag's artist, or "" for a placeholder.
+func artistName(name string) string {
+	name = strings.TrimSpace(name)
+	if isPlaceholderArtist(name) {
+		return ""
+	}
+	return name
 }
 
 // audioFile is one file found in the tree, with what its tags and the
@@ -130,8 +150,7 @@ type audioFile struct {
 	discNumber   int
 
 	// fromName is set when neither the tags nor the catalog give a title,
-	// so the filename gives the title and any missing numbers, and the
-	// artist directory above it gives the artist.
+	// so the filename gives the title and any missing numbers.
 	fromName bool
 
 	// The catalog track whose listening data this file gets, if any, and
@@ -379,8 +398,8 @@ func (im *run) readFile(ctx context.Context, p, rel, contentType string) (*audio
 		}
 		f.originalTags = &raw
 		f.title = strings.TrimSpace(m.Title())
-		f.artist = strings.TrimSpace(m.Artist())
-		f.albumArtist = strings.TrimSpace(m.AlbumArtist())
+		f.artist = artistName(m.Artist())
+		f.albumArtist = artistName(m.AlbumArtist())
 		f.album = strings.TrimSpace(m.Album())
 		f.trackNumber, _ = m.Track()
 		f.discNumber, _ = m.Disc()
@@ -418,9 +437,6 @@ func (im *run) readFile(ctx context.Context, p, rel, contentType string) (*audio
 
 	if f.title == "" && f.catalog == nil {
 		f.fromName = true
-		if f.artist == "" {
-			f.artist = dirArtist(path.Dir(rel))
-		}
 		disc, track := numbersFromName(f.name)
 		if f.discNumber <= 0 {
 			f.discNumber = disc
@@ -439,7 +455,7 @@ func dirArtist(dir string) string {
 	case "Compilations", "_", ".":
 		return ""
 	default:
-		return parent
+		return artistName(parent)
 	}
 }
 
@@ -765,7 +781,7 @@ func (im *run) insertFile(ctx context.Context, dir string, f *audioFile, albumID
 	rel := f.rel
 	id, err := store.InsertTrack(ctx, im.tx, store.NewTrack{
 		Title:        firstNonEmpty(f.title, catName, stem),
-		Artist:       nonEmpty(firstNonEmpty(f.artist, catArtist)),
+		Artist:       nonEmpty(firstNonEmpty(f.artist, catArtist, dirArtist(dir))),
 		AlbumID:      albumID,
 		DiscIndex:    disc,
 		Position:     pos,
