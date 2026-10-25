@@ -28,6 +28,9 @@ public final class Player {
   @ObservationIgnored let player = AVPlayer()
   @ObservationIgnored private var loadTask: Task<Void, Never>?
   @ObservationIgnored private var endObserver: (any NSObjectProtocol)?
+  /// The current track's length in seconds, once its audio is open.
+  public private(set) var duration: Double?
+
   @ObservationIgnored private var statusObserver: NSKeyValueObservation?
   @ObservationIgnored private let log = Logger(subsystem: "systems.semiotic.juke", category: "player")
 
@@ -73,6 +76,7 @@ public final class Player {
   private func load(_ i: Int) {
     loadTask?.cancel()
     index = i
+    duration = nil
     failure = nil
     isLoading = true
     player.pause()
@@ -109,15 +113,28 @@ public final class Player {
     // AVPlayer fails quietly: a file it can't open just never starts.
     // Watching the item is the only way to hear about it.  -- claude, 2026-10-25
     statusObserver = item.observe(\.status) { [weak self] item, _ in
-      guard item.status == .failed else { return }
-      let error = item.error
-      Task { @MainActor in self?.failed(track, url: url, error: error) }
+      switch item.status {
+      case .readyToPlay:
+        let seconds = item.duration.seconds
+        Task { @MainActor in self?.ready(track, duration: seconds) }
+      case .failed:
+        let error = item.error
+        Task { @MainActor in self?.failed(track, url: url, error: error) }
+      default:
+        break
+      }
     }
 
     player.replaceCurrentItem(with: item)
     player.play()
     isLoading = false
     isPlaying = true
+    updateNowPlaying()
+  }
+
+  private func ready(_ track: Track, duration: Double) {
+    guard current?.id == track.id, duration.isFinite else { return }
+    self.duration = duration
     updateNowPlaying()
   }
 
@@ -188,6 +205,7 @@ public final class Player {
     var info: [String: Any] = [MPMediaItemPropertyTitle: track.title]
     if let artist = track.artist { info[MPMediaItemPropertyArtist] = artist }
     if let album = track.albumId.flatMap({ library.albums[$0] }) { info[MPMediaItemPropertyAlbumTitle] = album.title }
+    if let duration { info[MPMediaItemPropertyPlaybackDuration] = duration }
     info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = player.currentTime().seconds
     info[MPNowPlayingInfoPropertyPlaybackRate] = isPlaying ? 1.0 : 0.0
     center.nowPlayingInfo = info

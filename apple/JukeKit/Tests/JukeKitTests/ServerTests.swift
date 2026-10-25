@@ -97,6 +97,7 @@ func player() async throws {
   try await eventually("audio advancing") { player.player.currentTime().seconds > 0.5 }
   #expect(player.isPlaying)
   #expect(player.failure == nil)
+  try await eventually("duration known") { (player.duration ?? 0) > 1 }
 
   player.next()
   #expect(player.index == 2)
