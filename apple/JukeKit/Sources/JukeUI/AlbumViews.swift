@@ -1,0 +1,99 @@
+import JukeKit
+import SwiftUI
+
+struct AlbumListView: View {
+  let library: Library
+  let player: Player
+  @State private var search = ""
+
+  private var shown: [Album] {
+    let words = search.split(separator: " ").map(String.init)
+    guard !words.isEmpty else { return library.albumList }
+    return library.albumList.filter { a in
+      let hay = "\(a.artist ?? "") \(a.title)"
+      return words.allSatisfy { hay.localizedStandardContains($0) }
+    }
+  }
+
+  var body: some View {
+    List(shown) { album in
+      NavigationLink(value: album.id) {
+        VStack(alignment: .leading) {
+          Text(album.title)
+          Text(album.artist ?? "Compilation")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+      }
+    }
+    .searchable(text: $search, prompt: "Artist or title")
+    .navigationTitle("Albums")
+    .navigationDestination(for: String.self) { id in
+      if let album = library.albums[id] {
+        AlbumView(library: library, player: player, album: album)
+      }
+    }
+  }
+}
+
+struct AlbumView: View {
+  let library: Library
+  let player: Player
+  let album: Album
+
+  var body: some View {
+    let discs = library.tracks(of: album)
+    let all = discs.flatMap(\.self)
+    List {
+      Section {
+        VStack(alignment: .leading, spacing: 4) {
+          Text(album.artist ?? "Compilation").foregroundStyle(.secondary)
+          let missing = all.count(where: { !$0.isPlayable })
+          Text("\(all.count) tracks" + (missing > 0 ? ", \(missing) missing" : ""))
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+      }
+      ForEach(Array(discs.enumerated()), id: \.offset) { d, tracks in
+        Section(discs.count > 1 ? (album.discs[d].title ?? "Disc \(d + 1)") : "") {
+          ForEach(Array(tracks.enumerated()), id: \.offset) { i, track in
+            // Positions count across discs, since the queue is the
+            // whole album. -- claude, 2026-10-25
+            let position = discs[..<d].reduce(0) { $0 + $1.count } + i
+            TrackRow(library: library, player: player, track: track, number: i + 1,
+                     showArtist: track.artist != album.artist) {
+              player.play(all, at: position)
+            }
+          }
+        }
+      }
+    }
+    .navigationTitle(album.title)
+    .toolbar {
+      ToolbarItem {
+        Button("Play", systemImage: "play.fill") {
+          if let first = all.firstIndex(where: \.isPlayable) { player.play(all, at: first) }
+        }
+        .disabled(!all.contains(where: \.isPlayable))
+      }
+    }
+  }
+}
+
+struct PlaylistView: View {
+  let library: Library
+  let player: Player
+  let playlist: Playlist
+
+  var body: some View {
+    let tracks = library.tracks(of: playlist)
+    List {
+      ForEach(Array(tracks.enumerated()), id: \.offset) { i, track in
+        TrackRow(library: library, player: player, track: track, number: i + 1, showArtist: true) {
+          player.play(tracks, at: i)
+        }
+      }
+    }
+    .navigationTitle(playlist.title)
+  }
+}

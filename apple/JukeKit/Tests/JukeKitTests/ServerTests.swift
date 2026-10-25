@@ -1,0 +1,79 @@
+import AVFoundation
+import Foundation
+import Testing
+@testable import JukeKit
+
+// These run against a live server, named by JUKE_TEST_SERVER (such as
+// http://localhost:8737), and are skipped without one.
+let testServer = ProcessInfo.processInfo.environment["JUKE_TEST_SERVER"].flatMap(URL.init(string:))
+
+// openLibrary syncs a fresh mirror of the test server into a temporary
+// directory and waits for its index.
+@MainActor
+func openLibrary() async throws -> Library {
+  let dir = FileManager.default.temporaryDirectory.appending(path: "jukekit-\(UUID())")
+  let server = try #require(testServer)
+  let library = try await Library.open(server: server, directory: dir)
+  library.start()
+  while case .syncing = library.phase { try await Task.sleep(for: .milliseconds(50)) }
+  #expect(library.phase == .ready)
+  return library
+}
+
+// checkPlayable fetches a track's audio through the cache and checks
+// that AVFoundation can play it and finds it the given length or longer.
+func checkPlayable(_ library: Library, _ track: Track, atLeast seconds: Double) async throws {
+  let url = try await library.audioFile(for: track)
+  let asset = AVURLAsset(url: url)
+  let (playable, duration) = try await asset.load(.isPlayable, .duration)
+  #expect(playable, "\(track.title) at \(url.path)")
+  #expect(duration.seconds >= seconds, "\(track.title): \(duration.seconds) s")
+}
+
+@Test(.enabled(if: testServer != nil))
+@MainActor
+func syncAndPlay() async throws {
+  let library = try await openLibrary()
+  #expect(!library.albumList.isEmpty)
+  let album = try #require(library.albumList.first { library.tracks(of: $0).joined().contains(where: \.isPlayable) })
+  let playable = library.tracks(of: album).joined().first { $0.isPlayable }
+  let track = try #require(playable)
+  try await checkPlayable(library, track, atLeast: 1)
+}
+
+// eventually waits up to five seconds for a condition.
+@MainActor
+func eventually(_ what: String, _ condition: () async throws -> Bool) async throws {
+  for _ in 0..<100 {
+    if try await condition() { return }
+    try await Task.sleep(for: .milliseconds(50))
+  }
+  Issue.record("never: \(what)")
+}
+
+// checkWrite applies a write to a track and checks that the index shows
+// the result and that the write reaches the server.
+@MainActor
+func checkWrite(_ library: Library, _ track: Track, _ what: String,
+                write: () async throws -> Void, shows: @escaping (Track) -> Bool) async throws {
+  try await write()
+  try await eventually("\(what) in the index") { library.tracks[track.id].map(shows) ?? false }
+  try await eventually("\(what) sent to the server") {
+    try await library.engine.object(key: track.key)?.pending == nil
+  }
+}
+
+@Test(.enabled(if: testServer != nil))
+@MainActor
+func writes() async throws {
+  let library = try await openLibrary()
+  let candidate = library.tracks.values.first { $0.isPlayable }
+  let track = try #require(candidate)
+  let rating: Double = track.rating == 2.5 ? 3.5 : 2.5
+  try await checkWrite(library, track, "rating \(rating)",
+                       write: { try await library.setRating(rating, on: track) },
+                       shows: { $0.rating == rating })
+  try await checkWrite(library, track, "a play",
+                       write: { try await library.recordPlay(of: track) },
+                       shows: { $0.playCount == track.playCount + 1 && $0.lastPlayed != nil })
+}
