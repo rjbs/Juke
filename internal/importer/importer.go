@@ -213,9 +213,15 @@ type run struct {
 	tx      *sql.Tx
 	report  *Report
 
-	byDest    *sql.Stmt
-	displaced *sql.Stmt
-	gaps      *sql.Stmt
+	// The catalog's move_log and move_plan have no index on the columns
+	// the import looks files up by, and are opened read-only, so they are
+	// read into memory once instead of scanned once per file.
+	// -- claude, 2026-10-24
+	fileByDest  map[string]int64
+	displacedBy map[int64][]int64
+
+	byFile *sql.Stmt
+	gaps   *sql.Stmt
 
 	trackByCatalogID map[int64]string
 	trackByPath      map[string]string
@@ -223,26 +229,49 @@ type run struct {
 }
 
 func (im *run) prepare(ctx context.Context) error {
-	var err error
-	im.byDest, err = im.catalog.PrepareContext(ctx, `
-		SELECT `+catalogTrackColumns+`
-		FROM move_log l
-		JOIN itunes_track_file tf ON tf.file_id = l.file_id
-		JOIN itunes_track t ON t.track_id = tf.track_id
-		LEFT JOIN itunes_track_album ta ON ta.track_id = t.track_id
-		WHERE l.dest = ?
-		ORDER BY coalesce(t.play_count, 0) DESC, t.track_id`)
+	im.fileByDest = map[string]int64{}
+	rows, err := im.catalog.QueryContext(ctx, `SELECT file_id, dest FROM move_log`)
 	if err != nil {
 		return err
 	}
-	im.displaced, err = im.catalog.PrepareContext(ctx, `
+	for rows.Next() {
+		var id int64
+		var dest string
+		if err := rows.Scan(&id, &dest); err != nil {
+			rows.Close()
+			return err
+		}
+		im.fileByDest[dest] = id
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	im.displacedBy = map[int64][]int64{}
+	rows, err = im.catalog.QueryContext(ctx, `SELECT file_id, displaced_by FROM move_plan WHERE displaced_by IS NOT NULL`)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var id, winner int64
+		if err := rows.Scan(&id, &winner); err != nil {
+			rows.Close()
+			return err
+		}
+		im.displacedBy[winner] = append(im.displacedBy[winner], id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	im.byFile, err = im.catalog.PrepareContext(ctx, `
 		SELECT `+catalogTrackColumns+`
-		FROM move_log l
-		JOIN move_plan p ON p.displaced_by = l.file_id
-		JOIN itunes_track_file tf ON tf.file_id = p.file_id
+		FROM itunes_track_file tf
 		JOIN itunes_track t ON t.track_id = tf.track_id
 		LEFT JOIN itunes_track_album ta ON ta.track_id = t.track_id
-		WHERE l.dest = ?
+		WHERE tf.file_id = ?
 		ORDER BY coalesce(t.play_count, 0) DESC, t.track_id`)
 	if err != nil {
 		return err
@@ -258,7 +287,7 @@ func (im *run) prepare(ctx context.Context) error {
 }
 
 func (im *run) close() {
-	for _, st := range []*sql.Stmt{im.byDest, im.displaced, im.gaps} {
+	for _, st := range []*sql.Stmt{im.byFile, im.gaps} {
 		if st != nil {
 			st.Close()
 		}
@@ -349,14 +378,22 @@ func (im *run) readFile(ctx context.Context, p, rel, contentType string) (*audio
 		f.discNumber, _ = m.Disc()
 	}
 
+	var direct, displaced []catalogTrack
 	dest := strings.TrimSuffix(im.opts.CatalogRoot, "/") + "/" + rel
-	direct, err := queryCatalogTracks(ctx, im.byDest, dest)
-	if err != nil {
-		return nil, err
-	}
-	displaced, err := queryCatalogTracks(ctx, im.displaced, dest)
-	if err != nil {
-		return nil, err
+	if fileID, ok := im.fileByDest[dest]; ok {
+		if direct, err = queryCatalogTracks(ctx, im.byFile, fileID); err != nil {
+			return nil, err
+		}
+		for _, loser := range im.displacedBy[fileID] {
+			got, err := queryCatalogTracks(ctx, im.byFile, loser)
+			if err != nil {
+				return nil, err
+			}
+			displaced = append(displaced, got...)
+		}
+		sort.SliceStable(displaced, func(i, j int) bool {
+			return displaced[i].PlayCount.Int64 > displaced[j].PlayCount.Int64
+		})
 	}
 
 	// The file's own catalog entry wins; failing that, the busiest entry

@@ -23,7 +23,7 @@ elsewhere it skips.
       --out var/sample.sqlite
 
 The output must not exist; remove it to import again.  The sample
-imports in about ten seconds as 188 tracks with audio, 4 gap tracks,
+imports in under a second as 188 tracks with audio, 4 gap tracks,
 19 albums and 3 playlists.  `--include` defaults to `Undamaged` alone,
 which is what the first real import uses.
 
