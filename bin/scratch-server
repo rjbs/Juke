@@ -1,0 +1,38 @@
+#!/usr/bin/env perl
+use v5.36;
+
+# scratch-server: serve a disposable copy of a library database, for tests
+# that write to the server (JukeKit's live tests, the app's UI tests).
+#
+#   bin/scratch-server                 # serve var/scratch.sqlite on :8738
+#   bin/scratch-server --fresh         # first recopy it from the source
+#
+# The copy is made with SQLite's online backup, never cp, since the source
+# may be in use by a running server.  Audio comes from the same library
+# directory as the real server; the server only ever reads it.
+
+use Getopt::Long::Descriptive;
+
+my ($opt, $usage) = describe_options(
+  '%c %o',
+  [ 'source=s',  'database to copy', { default => 'var/trial-full.sqlite' } ],
+  [ 'db=s',      'the scratch copy', { default => 'var/scratch.sqlite' } ],
+  [ 'library=s', 'audio library',    { default => '/Volumes/Video/library' } ],
+  [ 'listen=s',  'address to serve', { default => 'localhost:8738' } ],
+  [ 'fresh',     'recopy the source first, discarding the scratch copy' ],
+  [],
+  [ 'help|h', 'show this help', { shortcircuit => 1 } ],
+);
+print($usage->text), exit if $opt->help;
+
+-x 'var/juke' or die "build the server first: go build -o var/juke ./cmd/juke\n";
+
+if ($opt->fresh || !-e $opt->db) {
+  unlink $opt->db, $opt->db . '-wal', $opt->db . '-shm';
+  say "copying @{[ $opt->source ]} to @{[ $opt->db ]}";
+  system('sqlite3', $opt->source, ".backup '" . $opt->db . "'") == 0
+    or die "copying the database failed\n";
+}
+
+exec 'var/juke', 'serve', '--db', $opt->db, '--library', $opt->library, '--listen', $opt->listen;
+die "can't run var/juke: $!\n";
