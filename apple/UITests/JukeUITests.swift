@@ -65,7 +65,7 @@ final class JukeUITests: XCTestCase {
     let field = app.alerts.textFields.firstMatch
     field.clearAndType(renamed)
     XCTAssertEqual(field.value as? String, renamed)
-    app.alerts.buttons["Rename"].tap()
+    confirmAlert("Rename")
     XCTAssertTrue(app.navigationBars[renamed].waitForExistence(timeout: 5), "never renamed")
 
     app.buttons["playlist.menu"].tap()
@@ -74,6 +74,32 @@ final class JukeUITests: XCTestCase {
     XCTAssertTrue(app.staticTexts["No Such Playlist"].waitForExistence(timeout: 5), "never deleted")
     showSidebar()
     XCTAssertFalse(sidebarRow(renamed).exists, "still in the sidebar")
+  }
+
+  func testQueueControls() throws {
+    openAlbum("Anti EP [WAP54CD]")
+    contextMenu(on: "Flutter", choose: "Play Next")
+    checkPlaying("Flutter")
+    contextMenu(on: "Lost", choose: "Add to Queue")
+    contextMenu(on: "Djarum", choose: "Play Next")
+    snapshot("queued")
+    app.buttons["Next"].tap()
+    checkPlaying("Djarum")
+    app.buttons["Next"].tap()
+    checkPlaying("Lost")
+
+    let shuffle = app.buttons["player.shuffle"]
+    XCTAssertEqual(shuffle.value as? String, "off")
+    shuffle.tap()
+    XCTAssertEqual(shuffle.value as? String, "on")
+    let repeatButton = app.buttons["player.repeat"]
+    for want in ["all", "one", "off"] {
+      repeatButton.tap()
+      XCTAssertEqual(repeatButton.value as? String, want)
+    }
+    // Let the repeat symbol finish changing before the screenshot.
+    Thread.sleep(forTimeInterval: 1)
+    snapshot("shuffled")
   }
 
   // MARK: - Helpers
@@ -98,6 +124,32 @@ final class JukeUITests: XCTestCase {
       row.frame.maxY, bar.frame.minY,
       "\(last) ends at \(row.frame.maxY), below the bar's top at \(bar.frame.minY)", file: file, line: line
     )
+  }
+
+  /// Taps an alert's button until the alert goes.  A tap made while the
+  /// keyboard is still settling can be swallowed.
+  func confirmAlert(_ button: String, file: StaticString = #filePath, line: UInt = #line) {
+    let alert = app.alerts.firstMatch
+    for _ in 0..<3 where alert.exists {
+      alert.buttons[button].tap()
+      _ = alert.waitForNonExistence(timeout: 2)
+    }
+    XCTAssertFalse(alert.exists, "the alert stayed up", file: file, line: line)
+  }
+
+  /// Long-presses the row for a track and picks from its context menu.
+  func contextMenu(on track: String, choose item: String, file: StaticString = #filePath, line: UInt = #line) {
+    let row = app.buttons.containing(.staticText, identifier: track).firstMatch
+    XCTAssertTrue(row.waitForExistence(timeout: 10), "no row for \(track)", file: file, line: line)
+    row.press(forDuration: 1)
+    let choice = app.buttons[item]
+    XCTAssertTrue(choice.waitForExistence(timeout: 5), "no \(item) in the menu", file: file, line: line)
+    choice.tap()
+  }
+
+  func checkPlaying(_ track: String, file: StaticString = #filePath, line: UInt = #line) {
+    XCTAssertTrue(app.staticTexts["player.title"].waitFor(label: track, timeout: 30),
+                  "\(track) never started; playing \(app.staticTexts["player.title"].label)", file: file, line: line)
   }
 
   /// Goes back to the sidebar, on an iPhone the root of the stack.
@@ -125,7 +177,7 @@ final class JukeUITests: XCTestCase {
     showSidebar()
     app.buttons["playlist.new"].tap()
     app.alerts.textFields.firstMatch.typeText(title)
-    app.alerts.buttons["Create"].tap()
+    confirmAlert("Create")
     XCTAssertTrue(app.navigationBars[title].waitForExistence(timeout: 5), "\(title) never opened", file: file, line: line)
   }
 

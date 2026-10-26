@@ -53,6 +53,10 @@ struct TrackRow: View {
           Text(Self.stars(r)).tag(r)
         }
       }
+      if track.isPlayable {
+        Button("Play Next", systemImage: "text.line.first.and.arrowtriangle.forward") { player.playNext([track]) }
+        Button("Add to Queue", systemImage: "text.line.last.and.arrowtriangle.forward") { player.addToQueue([track]) }
+      }
       AddToPlaylistMenu(library: library, tracks: [track])
       if let remove {
         Button("Remove from Playlist", systemImage: "minus.circle", role: .destructive, action: remove)
@@ -113,6 +117,8 @@ struct PlayerBar: View {
         .accessibilityIdentifier("player.playPause")
         Button("Next", systemImage: "forward.fill") { player.next() }
           .disabled(!player.hasNext)
+        ShuffleButton(player: player)
+        RepeatButton(player: player)
       }
       .labelStyle(.iconOnly)
       .buttonStyle(.borderless)
@@ -121,6 +127,38 @@ struct PlayerBar: View {
       .background(.bar)
       .accessibilityElement(children: .contain)
       .accessibilityIdentifier("player")
+    }
+  }
+}
+
+/// Turns shuffle on and off; tinted while it's on.
+struct ShuffleButton: View {
+  let player: Player
+
+  var body: some View {
+    Button("Shuffle", systemImage: "shuffle") { player.setShuffle(!player.isShuffled) }
+      .foregroundStyle(player.isShuffled ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
+      .accessibilityValue(player.isShuffled ? "on" : "off")
+      .accessibilityIdentifier("player.shuffle")
+  }
+}
+
+/// Steps repeat from off, to all, to one; tinted while it's on.
+struct RepeatButton: View {
+  let player: Player
+
+  var body: some View {
+    Button("Repeat", systemImage: player.repeatMode == .one ? "repeat.1" : "repeat") { player.cycleRepeat() }
+      .foregroundStyle(player.repeatMode == .off ? AnyShapeStyle(.secondary) : AnyShapeStyle(.tint))
+      .accessibilityValue(value)
+      .accessibilityIdentifier("player.repeat")
+  }
+
+  private var value: String {
+    switch player.repeatMode {
+    case .off: "off"
+    case .all: "all"
+    case .one: "one"
     }
   }
 }

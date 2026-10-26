@@ -74,6 +74,9 @@ struct PlaylistView: View {
             newTitle = playlist.title
             renaming = true
           }
+          Button("Shuffle by Album", systemImage: "square.stack") {
+            player.playShuffledByAlbum(library.tracks(of: playlist))
+          }
           Button("Delete Playlist…", systemImage: "trash", role: .destructive) { confirmingDelete = true }
         }
         .accessibilityIdentifier("playlist.menu")
