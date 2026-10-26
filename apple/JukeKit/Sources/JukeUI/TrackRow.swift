@@ -2,7 +2,8 @@ import JukeKit
 import SwiftUI
 
 /// One track in a list.  Tapping a playable track plays the list from
-/// there; its context menu sets the rating.  A gap is shown dimmed and
+/// there; its context menu sets the rating, adds it to a playlist, and may
+/// remove it from the list.  A gap is shown dimmed and
 /// does nothing.
 struct TrackRow: View {
   let library: Library
@@ -10,6 +11,8 @@ struct TrackRow: View {
   let track: Track
   let number: Int
   let showArtist: Bool
+  /// Removes the track from the list it's in, for a list that allows it.
+  var remove: (() -> Void)? = nil
   let play: () -> Void
 
   var body: some View {
@@ -49,6 +52,10 @@ struct TrackRow: View {
         ForEach(Array(stride(from: 0.5, through: 5, by: 0.5)), id: \.self) { r in
           Text(Self.stars(r)).tag(r)
         }
+      }
+      AddToPlaylistMenu(library: library, tracks: [track])
+      if let remove {
+        Button("Remove from Playlist", systemImage: "minus.circle", role: .destructive, action: remove)
       }
     }
   }

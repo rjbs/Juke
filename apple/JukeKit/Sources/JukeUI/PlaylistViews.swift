@@ -1,0 +1,144 @@
+import JukeKit
+import SwiftUI
+
+/// A playlist's tracks, which can be played, removed and reordered, with
+/// the playlist itself renamed or deleted from the toolbar.
+///
+/// It looks the playlist up by key each time, rather than holding a copy,
+/// so it shows its own edits and notices when the playlist is deleted.
+struct PlaylistView: View {
+  let library: Library
+  let player: Player
+  let key: Playlist.ID
+
+  @State private var renaming = false
+  @State private var newTitle = ""
+  @State private var confirmingDelete = false
+
+  /// A track on the playlist and its position in trackIds.  Only tracks
+  /// the index knows are shown, so the two can differ.
+  private struct Entry: Identifiable {
+    let position: Int
+    let track: Track
+    var id: Int { position }
+  }
+
+  var body: some View {
+    if let playlist = library.playlists.first(where: { $0.key == key }) {
+      list(of: playlist)
+    } else {
+      ContentUnavailableView("No Such Playlist", systemImage: "music.note.list",
+                             description: Text("This playlist has been deleted."))
+    }
+  }
+
+  private func list(of playlist: Playlist) -> some View {
+    let entries = playlist.trackIds.enumerated().compactMap { i, id in
+      library.tracks[id].map { Entry(position: i, track: $0) }
+    }
+    let tracks = entries.map(\.track)
+    return List {
+      if library.offline.isKept(playlist) {
+        OfflineStatus(offline: library.offline, kept: true, tracks: tracks)
+          .font(.caption)
+          .foregroundStyle(.secondary)
+      }
+      ForEach(Array(entries.enumerated()), id: \.element.id) { i, entry in
+        TrackRow(library: library, player: player, track: entry.track, number: i + 1, showArtist: true,
+                 remove: { edit { try await library.removeTracks(at: [entry.position], from: playlist) } }) {
+          player.play(tracks, at: i)
+        }
+      }
+      .onDelete { offsets in
+        let positions = offsets.map { entries[$0].position }
+        edit { try await library.removeTracks(at: positions, from: playlist) }
+      }
+      .onMove { offsets, destination in
+        let positions = offsets.map { entries[$0].position }
+        let to = destination < entries.count ? entries[destination].position : playlist.trackIds.count
+        edit { try await library.moveTracks(at: positions, to: to, in: playlist) }
+      }
+    }
+    .navigationTitle(playlist.title)
+    .toolbar {
+      #if os(iOS)
+      ToolbarItem { EditButton() }
+      #endif
+      ToolbarItem {
+        KeepButton(kept: library.offline.isKept(playlist)) { library.offline.keep(playlist, $0) }
+          .disabled(playlist.serverId == nil)
+      }
+      ToolbarItem {
+        Menu("Playlist", systemImage: "ellipsis.circle") {
+          Button("Rename…", systemImage: "pencil") {
+            newTitle = playlist.title
+            renaming = true
+          }
+          Button("Delete Playlist…", systemImage: "trash", role: .destructive) { confirmingDelete = true }
+        }
+        .accessibilityIdentifier("playlist.menu")
+      }
+    }
+    .alert("Rename Playlist", isPresented: $renaming) {
+      TextField("Title", text: $newTitle)
+      Button("Rename") {
+        let title = newTitle.trimmingCharacters(in: .whitespaces)
+        if !title.isEmpty { edit { try await library.rename(playlist, to: title) } }
+      }
+      Button("Cancel", role: .cancel) {}
+    }
+    .confirmationDialog("Delete “\(playlist.title)”?", isPresented: $confirmingDelete, titleVisibility: .visible) {
+      Button("Delete Playlist", role: .destructive) { edit { try await library.delete(playlist) } }
+    }
+  }
+
+  private func edit(_ body: @escaping @MainActor () async throws -> Void) {
+    Task { try? await body() }
+  }
+}
+
+/// A menu of playlists to add some tracks to.
+struct AddToPlaylistMenu: View {
+  let library: Library
+  let tracks: [Track]
+
+  var body: some View {
+    Menu("Add to Playlist", systemImage: "text.badge.plus") {
+      ForEach(library.playlists) { playlist in
+        Button(playlist.title) {
+          Task { try? await library.add(tracks, to: playlist) }
+        }
+      }
+    }
+    .disabled(library.playlists.isEmpty || tracks.isEmpty)
+  }
+}
+
+/// The button that makes a new, empty playlist, asking for its title.
+/// `made` gets the new playlist's key, to show it.
+struct NewPlaylistButton: View {
+  let library: Library
+  let made: (Playlist.ID) -> Void
+
+  @State private var naming = false
+  @State private var title = ""
+
+  var body: some View {
+    Button("New Playlist", systemImage: "plus") {
+      title = ""
+      naming = true
+    }
+    .accessibilityIdentifier("playlist.new")
+    .alert("New Playlist", isPresented: $naming) {
+      TextField("Title", text: $title)
+      Button("Create") {
+        let title = title.trimmingCharacters(in: .whitespaces)
+        guard !title.isEmpty else { return }
+        Task {
+          if let key = try? await library.createPlaylist(titled: title) { made(key) }
+        }
+      }
+      Button("Cancel", role: .cancel) {}
+    }
+  }
+}

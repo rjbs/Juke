@@ -228,6 +228,71 @@ public final class Library {
     }
   }
 
+  // MARK: - Editing playlists
+  //
+  // Each edit is made to the mirror and reaches the server on the next
+  // sync, so it works offline.  Edits that work on positions take them
+  // in the playlist's trackIds, and apply them to the mirror's current
+  // value, not the caller's copy, which may be a sync behind.
+
+  /// Makes a playlist, empty or with tracks, and returns its key.
+  @discardableResult
+  public func createPlaylist(titled title: String, tracks: [Track] = []) async throws -> LocalKey {
+    try await engine.create("Playlist", .object([
+      "title": .string(title),
+      "trackIds": .array(tracks.map { .string($0.id) }),
+    ]))
+  }
+
+  public func rename(_ playlist: Playlist, to title: String) async throws {
+    try await engine.update(playlist.key, patch: PatchObject(["title": .string(title)]))
+  }
+
+  public func delete(_ playlist: Playlist) async throws {
+    try await engine.destroy(playlist.key)
+  }
+
+  /// Adds tracks to the end of a playlist.
+  public func add(_ tracks: [Track], to playlist: Playlist) async throws {
+    let added = tracks.map(\.id)
+    try await editTrackIds(of: playlist) { $0 + added }
+  }
+
+  /// Removes the tracks at these positions.
+  public func removeTracks(at positions: [Int], from playlist: Playlist) async throws {
+    let doomed = Set(positions)
+    try await editTrackIds(of: playlist) { ids in
+      ids.indices.filter { !doomed.contains($0) }.map { ids[$0] }
+    }
+  }
+
+  /// Moves the tracks at these positions so they come before the track
+  /// now at `destination`, or to the end if it's past the last track:
+  /// the meaning SwiftUI's onMove gives its offsets.
+  public func moveTracks(at positions: [Int], to destination: Int, in playlist: Playlist) async throws {
+    try await editTrackIds(of: playlist) { ids in
+      Self.move(ids, from: positions, to: destination)
+    }
+  }
+
+  nonisolated static func move(_ ids: [String], from positions: [Int], to destination: Int) -> [String] {
+    let moving = Set(positions.filter(ids.indices.contains))
+    let rest = ids.indices.filter { !moving.contains($0) }.map { ids[$0] }
+    let at = min(destination, ids.count) - moving.count { $0 < destination }
+    var out = rest
+    out.insert(contentsOf: moving.sorted().map { ids[$0] }, at: at)
+    return out
+  }
+
+  private func editTrackIds(of playlist: Playlist, _ edit: @Sendable @escaping ([String]) -> [String]) async throws {
+    try await engine.update(playlist.key) { value in
+      guard case .object(var o) = value else { return value }
+      let ids = o["trackIds"]?.arrayValue?.compactMap(\.stringValue) ?? []
+      o["trackIds"] = .array(edit(ids).map { .string($0) })
+      return .object(o)
+    }
+  }
+
   // MARK: - Audio
 
   /// A track's audio as a local file that AVFoundation can play,
@@ -263,7 +328,7 @@ public final class Library {
       if let a = Album(object) { albums[a.id] = a; ids[a.key] = a.id }
     }
     for object in try await engine.objects(type: "Playlist") {
-      if let p = Playlist(object) { playlists.append(p); ids[p.key] = p.id }
+      if let p = Playlist(object) { playlists.append(p) }
     }
     self.tracks = tracks
     self.albums = albums
@@ -286,10 +351,10 @@ public final class Library {
         for k in changes.destroyed { if let id = ids.removeValue(forKey: k) { albums[id] = nil } }
         sortAlbums()
       case "Playlist":
-        var byId = Dictionary(uniqueKeysWithValues: playlists.map { ($0.id, $0) })
-        for o in objects { if let p = Playlist(o) { byId[p.id] = p; ids[p.key] = p.id } }
-        for k in changes.destroyed { if let id = ids.removeValue(forKey: k) { byId[id] = nil } }
-        playlists = Array(byId.values)
+        var byKey = Dictionary(uniqueKeysWithValues: playlists.map { ($0.key, $0) })
+        for o in objects { if let p = Playlist(o) { byKey[p.key] = p } }
+        for k in changes.destroyed { byKey[k] = nil }
+        playlists = Array(byKey.values)
         sortPlaylists()
       default:
         break

@@ -191,6 +191,53 @@ func keepOffline() async throws {
   library.stop()
 }
 
+// checkServerPlaylist opens a fresh mirror of the server and checks that
+// the playlist with this server id has the given title and tracks.
+@MainActor
+func checkServerPlaylist(_ id: String, title: String, tracks: [Track],
+                         sourceLocation: SourceLocation = #_sourceLocation) async throws {
+  let fresh = try await openLibrary()
+  defer { fresh.stop() }
+  let found = fresh.playlists.first { $0.serverId == id }
+  let playlist = try #require(found, "playlist \(id) on the server", sourceLocation: sourceLocation)
+  #expect(playlist.title == title, sourceLocation: sourceLocation)
+  #expect(playlist.trackIds == tracks.map(\.id), sourceLocation: sourceLocation)
+}
+
+// A playlist made, filled, reordered, trimmed, renamed and deleted here
+// reaches the server at each step.  A track appears twice, so removal
+// has to go by position.
+@Test(.enabled(if: testServer != nil))
+@MainActor
+func playlistEditing() async throws {
+  let library = try await openLibrary()
+  defer { library.stop() }
+  let album = try #require(library.albumList.first { library.tracks(of: $0).joined().count >= 3 })
+  let t = Array(library.tracks(of: album).joined().prefix(3))
+  let title = "JukeKit test \(UUID())"
+
+  let key = try await library.createPlaylist(titled: title, tracks: [t[0], t[1]])
+  var playlist: Playlist { library.playlists.first { $0.key == key }! }
+  try await eventually("the playlist in the index") { library.playlists.contains { $0.key == key } }
+  try await eventually("the playlist on the server") { playlist.serverId != nil }
+  let id = try #require(playlist.serverId)
+
+  try await library.add([t[2], t[0]], to: playlist)
+  try await library.moveTracks(at: [2], to: 0, in: playlist)
+  try await library.removeTracks(at: [3], from: playlist)
+  try await library.rename(playlist, to: title + " renamed")
+  #expect(playlist.trackIds == [t[2], t[0], t[1]].map(\.id))
+  try await eventually("edits sent") { try await library.engine.object(key: key)?.pending == nil }
+  try await checkServerPlaylist(id, title: title + " renamed", tracks: [t[2], t[0], t[1]])
+
+  try await library.delete(playlist)
+  try await eventually("gone from the index") { !library.playlists.contains { $0.key == key } }
+  try await eventually("destroy sent") { try await library.engine.object(key: key) == nil }
+  let fresh = try await openLibrary()
+  #expect(!fresh.playlists.contains { $0.serverId == id })
+  fresh.stop()
+}
+
 // A write from one device reaches another by push, well inside the
 // 60-second poll the library otherwise relies on.
 @Test(.enabled(if: testServer != nil))

@@ -85,35 +85,11 @@ struct AlbumView: View {
         .disabled(!all.contains(where: \.isPlayable))
       }
       ToolbarItem {
-        KeepButton(kept: library.offline.isKept(album)) { library.offline.keep(album, $0) }
+        AddToPlaylistMenu(library: library, tracks: all.filter(\.isPlayable))
+          .accessibilityIdentifier("album.addToPlaylist")
       }
-    }
-  }
-}
-
-struct PlaylistView: View {
-  let library: Library
-  let player: Player
-  let playlist: Playlist
-
-  var body: some View {
-    let tracks = library.tracks(of: playlist)
-    List {
-      if library.offline.isKept(playlist) {
-        OfflineStatus(offline: library.offline, kept: true, tracks: tracks)
-          .font(.caption)
-          .foregroundStyle(.secondary)
-      }
-      ForEach(Array(tracks.enumerated()), id: \.offset) { i, track in
-        TrackRow(library: library, player: player, track: track, number: i + 1, showArtist: true) {
-          player.play(tracks, at: i)
-        }
-      }
-    }
-    .navigationTitle(playlist.title)
-    .toolbar {
       ToolbarItem {
-        KeepButton(kept: library.offline.isKept(playlist)) { library.offline.keep(playlist, $0) }
+        KeepButton(kept: library.offline.isKept(album)) { library.offline.keep(album, $0) }
       }
     }
   }

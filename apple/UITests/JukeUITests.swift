@@ -35,6 +35,47 @@ final class JukeUITests: XCTestCase {
     try checkLastTrackClear(album: "Symphonic Star Trek", last: "Borg")
   }
 
+  func testEditPlaylist() throws {
+    let title = "UI Test \(Int(Date().timeIntervalSince1970))"
+    createPlaylist(title)
+
+    showSidebar()
+    sidebarRow("Albums").tap()
+    openAlbum("Anti EP [WAP54CD]")
+    app.buttons["album.addToPlaylist"].tap()
+    app.buttons[title].tap()
+    let lost = app.buttons.containing(.staticText, identifier: "Lost").firstMatch
+    lost.press(forDuration: 1)
+    app.buttons.matching(NSPredicate(format: "label == %@ AND identifier != %@", "Add to Playlist", "album.addToPlaylist")).firstMatch.tap()
+    app.buttons[title].tap()
+
+    openPlaylist(title)
+    checkPlaylistRows(["Lost", "Djarum", "Flutter", "Lost"])
+    snapshot("playlist filled")
+
+    // Swiping away the second "Lost" must leave the first.
+    let last = app.cells.containing(.staticText, identifier: "4").firstMatch
+    last.swipeLeft()
+    app.buttons["Delete"].tap()
+    checkPlaylistRows(["Lost", "Djarum", "Flutter"])
+
+    let renamed = title + " Renamed"
+    app.buttons["playlist.menu"].tap()
+    app.buttons["Rename…"].tap()
+    let field = app.alerts.textFields.firstMatch
+    field.clearAndType(renamed)
+    XCTAssertEqual(field.value as? String, renamed)
+    app.alerts.buttons["Rename"].tap()
+    XCTAssertTrue(app.navigationBars[renamed].waitForExistence(timeout: 5), "never renamed")
+
+    app.buttons["playlist.menu"].tap()
+    app.buttons["Delete Playlist…"].tap()
+    app.buttons["Delete Playlist"].firstMatch.tap()
+    XCTAssertTrue(app.staticTexts["No Such Playlist"].waitForExistence(timeout: 5), "never deleted")
+    showSidebar()
+    XCTAssertFalse(sidebarRow(renamed).exists, "still in the sidebar")
+  }
+
   // MARK: - Helpers
 
   /// Opens an album, starts it playing so the player bar shows, scrolls to
@@ -57,6 +98,54 @@ final class JukeUITests: XCTestCase {
       row.frame.maxY, bar.frame.minY,
       "\(last) ends at \(row.frame.maxY), below the bar's top at \(bar.frame.minY)", file: file, line: line
     )
+  }
+
+  /// Goes back to the sidebar, on an iPhone the root of the stack.
+  func showSidebar() {
+    // An active search hides the navigation bar, back button and all,
+    // and the first tap on its close button may only put the keyboard
+    // away.
+    let close = app.buttons["close"]
+    let back = app.navigationBars.buttons["BackButton"]
+    for _ in 0..<6 where !app.buttons["playlist.new"].waitForExistence(timeout: 1) {
+      if close.exists, close.isHittable {
+        close.tap()
+      } else if back.exists, back.isHittable {
+        back.tap()
+      }
+    }
+    XCTAssertTrue(app.buttons["playlist.new"].waitForExistence(timeout: 5), "no sidebar")
+  }
+
+  func sidebarRow(_ title: String) -> XCUIElement {
+    app.cells.containing(.staticText, identifier: title).firstMatch
+  }
+
+  func createPlaylist(_ title: String, file: StaticString = #filePath, line: UInt = #line) {
+    showSidebar()
+    app.buttons["playlist.new"].tap()
+    app.alerts.textFields.firstMatch.typeText(title)
+    app.alerts.buttons["Create"].tap()
+    XCTAssertTrue(app.navigationBars[title].waitForExistence(timeout: 5), "\(title) never opened", file: file, line: line)
+  }
+
+  func openPlaylist(_ title: String, file: StaticString = #filePath, line: UInt = #line) {
+    showSidebar()
+    sidebarRow(title).tap()
+    XCTAssertTrue(app.navigationBars[title].waitForExistence(timeout: 5), "\(title) never opened", file: file, line: line)
+  }
+
+  /// Checks the track titles down a short playlist, all on screen.
+  func checkPlaylistRows(_ want: [String], file: StaticString = #filePath, line: UInt = #line) {
+    let rows = {
+      self.app.cells.allElementsBoundByIndex.compactMap { cell in
+        // Each row reads: its number, then its title.
+        cell.staticTexts.allElementsBoundByIndex.dropFirst().first?.label
+      }
+    }
+    let matches = NSPredicate { _, _ in rows() == want }
+    let done = XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: matches, object: nil)], timeout: 5)
+    XCTAssertEqual(done, .completed, "rows are \(rows()), want \(want)", file: file, line: line)
   }
 
   /// Finds an album by searching, opens it, taps a track, and checks the
@@ -105,5 +194,18 @@ extension XCUIElement {
     let matches = NSPredicate(format: "label == %@", label)
     let expectation = XCTNSPredicateExpectation(predicate: matches, object: self)
     return XCTWaiter().wait(for: [expectation], timeout: timeout) == .completed
+  }
+
+  /// Replaces a text field's contents.
+  func clearAndType(_ text: String) {
+    // A tap on a field with text in it brings up the editing callout,
+    // which then eats the next tap, so a field that already has the
+    // keyboard, as an alert's does, isn't tapped.  The cursor is then at
+    // the end, after the text the deletes remove.
+    if !((value(forKey: "hasKeyboardFocus") as? Bool) ?? false) {
+      tap()
+    }
+    let existing = value as? String ?? ""
+    typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: existing.count) + text)
   }
 }

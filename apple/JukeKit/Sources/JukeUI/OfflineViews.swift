@@ -67,7 +67,7 @@ struct OfflineView: View {
         Section("Playlists") {
           ForEach(playlists) { playlist in
             NavigationLink {
-              PlaylistView(library: library, player: player, playlist: playlist)
+              PlaylistView(library: library, player: player, key: playlist.key)
             } label: {
               VStack(alignment: .leading) {
                 Text(playlist.title)
