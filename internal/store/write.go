@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"fmt"
 )
 
 // NewAlbum describes an album to insert.  Each entry in DiscTitles is
@@ -107,13 +108,51 @@ func InsertPlaylist(ctx context.Context, q Queryer, title string, trackIDs []str
 	); err != nil {
 		return "", err
 	}
+	if err := SetPlaylistTracks(ctx, q, id, trackIDs); err != nil {
+		return "", err
+	}
+	return id, nil
+}
+
+// SetPlaylistTracks replaces a playlist's tracks.  It doesn't touch the
+// playlist's modseq; the caller does that along with whatever else it
+// changes.
+func SetPlaylistTracks(ctx context.Context, q Queryer, playlistID string, trackIDs []string) error {
+	if _, err := q.ExecContext(ctx, `DELETE FROM playlist_track WHERE playlist_id = ?`, playlistID); err != nil {
+		return err
+	}
 	for i, trackID := range trackIDs {
 		if _, err := q.ExecContext(ctx,
 			`INSERT INTO playlist_track (playlist_id, position, track_id) VALUES (?, ?, ?)`,
-			id, i, trackID,
+			playlistID, i, trackID,
 		); err != nil {
-			return "", err
+			return err
 		}
 	}
-	return id, nil
+	return nil
+}
+
+// Destroy deletes an object's row and leaves a tombstone, so /changes
+// can report it destroyed.  Rows that refer to the object must be dealt
+// with first.
+func Destroy(ctx context.Context, q Queryer, typ, id string) error {
+	table, ok := tableFor[typ]
+	if !ok {
+		return fmt.Errorf("no such type %q", typ)
+	}
+	modseq, err := NextModseq(ctx, q)
+	if err != nil {
+		return err
+	}
+	var created int64
+	if err := q.QueryRowContext(ctx,
+		`DELETE FROM `+table+` WHERE id = ? RETURNING created_modseq`, id,
+	).Scan(&created); err != nil {
+		return err
+	}
+	_, err = q.ExecContext(ctx,
+		`INSERT INTO tombstone (type, id, created_modseq, modseq) VALUES (?, ?, ?, ?)`,
+		typ, id, created, modseq,
+	)
+	return err
 }

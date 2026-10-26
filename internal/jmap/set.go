@@ -7,6 +7,8 @@ import (
 	"errors"
 	"sort"
 	"strings"
+
+	"semiotic.systems/juke/internal/store"
 )
 
 // ---- /set -----------------------------------------------------------------
@@ -190,4 +192,148 @@ func mustExist(ctx context.Context, tx *sql.Tx, table, id string) error {
 func invalidProperties(description string, props []string) *methodError {
 	sort.Strings(props)
 	return &methodError{Type: "invalidProperties", Description: description, Properties: props}
+}
+
+// ---- property values --------------------------------------------------------
+
+// titleValue decodes a title: a string with something in it.
+func titleValue(raw json.RawMessage) (string, bool) {
+	var s string
+	if json.Unmarshal(raw, &s) != nil || strings.TrimSpace(s) == "" {
+		return "", false
+	}
+	return s, true
+}
+
+// nullableStringValue decodes a String|null.
+func nullableStringValue(raw json.RawMessage) (*string, bool) {
+	if string(raw) == "null" {
+		return nil, true
+	}
+	var s string
+	if json.Unmarshal(raw, &s) != nil {
+		return nil, false
+	}
+	return &s, true
+}
+
+// trackIDsValue decodes a list of track ids, every one of which must
+// name a track.
+func trackIDsValue(ctx context.Context, tx *sql.Tx, raw json.RawMessage) ([]string, bool, error) {
+	var ids []string
+	if json.Unmarshal(raw, &ids) != nil || ids == nil {
+		return nil, false, nil
+	}
+	ok, err := tracksExist(ctx, tx, ids)
+	return ids, ok, err
+}
+
+func tracksExist(ctx context.Context, tx *sql.Tx, ids []string) (bool, error) {
+	unique := dedupe(ids)
+	if len(unique) == 0 {
+		return true, nil
+	}
+	where, args := inClause("id", unique)
+	var n int
+	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM track`+where, args...).Scan(&n); err != nil {
+		return false, err
+	}
+	return n == len(unique), nil
+}
+
+// ---- Playlist/set -------------------------------------------------------------
+
+// playlistProps is a Playlist create or patch, decoded.  A nil field was
+// not given.
+type playlistProps struct {
+	title    *string
+	trackIDs *[]string
+}
+
+func decodePlaylistProps(ctx context.Context, tx *sql.Tx, props map[string]json.RawMessage) (playlistProps, error) {
+	var p playlistProps
+	var bad []string
+	for _, name := range sortedKeys(props) {
+		raw := props[name]
+		switch name {
+		case "title":
+			title, ok := titleValue(raw)
+			if !ok {
+				bad = append(bad, name)
+				continue
+			}
+			p.title = &title
+		case "trackIds":
+			ids, ok, err := trackIDsValue(ctx, tx, raw)
+			if err != nil {
+				return p, err
+			}
+			if !ok {
+				bad = append(bad, name)
+				continue
+			}
+			p.trackIDs = &ids
+		default:
+			bad = append(bad, name)
+		}
+	}
+	if len(bad) > 0 {
+		return p, invalidProperties("only title and trackIds may be set; trackIds must name tracks", bad)
+	}
+	return p, nil
+}
+
+var playlistSetter = &setter{
+	typ: store.TypePlaylist,
+	create: func(ctx context.Context, tx *sql.Tx, props map[string]json.RawMessage) (object, error) {
+		p, err := decodePlaylistProps(ctx, tx, props)
+		if err != nil {
+			return nil, err
+		}
+		if p.title == nil {
+			return nil, invalidProperties("a playlist needs a title", []string{"title"})
+		}
+		created := object{}
+		if p.trackIDs == nil {
+			p.trackIDs = &[]string{}
+			created["trackIds"] = []string{}
+		}
+		id, err := store.InsertPlaylist(ctx, tx, *p.title, *p.trackIDs)
+		if err != nil {
+			return nil, err
+		}
+		created["id"] = id
+		return created, nil
+	},
+	update: func(ctx context.Context, tx *sql.Tx, id string, patch map[string]json.RawMessage) error {
+		if err := mustExist(ctx, tx, "playlist", id); err != nil {
+			return err
+		}
+		p, err := decodePlaylistProps(ctx, tx, patch)
+		if err != nil {
+			return err
+		}
+		modseq, err := store.NextModseq(ctx, tx)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE playlist SET modseq = ?, title = coalesce(?, title) WHERE id = ?`, modseq, p.title, id,
+		); err != nil {
+			return err
+		}
+		if p.trackIDs != nil {
+			return store.SetPlaylistTracks(ctx, tx, id, *p.trackIDs)
+		}
+		return nil
+	},
+	destroy: func(ctx context.Context, tx *sql.Tx, id string) error {
+		if err := mustExist(ctx, tx, "playlist", id); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM playlist_track WHERE playlist_id = ?`, id); err != nil {
+			return err
+		}
+		return store.Destroy(ctx, tx, store.TypePlaylist, id)
+	},
 }

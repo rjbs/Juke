@@ -76,6 +76,10 @@ next `Track/changes` too.  Moving a track between albums is one
 | `title`    | `String` | |
 | `trackIds` | `Id[]`   | In play order.  A track may appear more than once. |
 
+`Playlist/set` creates, updates and destroys playlists.  Every id in
+`trackIds` must name a track.  As RFC 8620 requires, an update replaces
+`trackIds` whole; a patch can't point into it.
+
 This is the plain playlist only.  Smart playlists, stored `Track/query`
 calls (see [playlists](playlists.md)), come later and will need more
 properties.

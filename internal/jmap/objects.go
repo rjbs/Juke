@@ -61,6 +61,9 @@ func (s *Server) methodTable() map[string]method {
 		"Track/set": {CapJuke, func(ctx context.Context, s *Server, args json.RawMessage) (any, error) {
 			return s.set(ctx, trackSetter, args)
 		}},
+		"Playlist/set": {CapJuke, func(ctx context.Context, s *Server, args json.RawMessage) (any, error) {
+			return s.set(ctx, playlistSetter, args)
+		}},
 	}
 	for _, t := range s.objectTypes() {
 		m[t.name+"/get"] = method{CapJuke, func(ctx context.Context, s *Server, args json.RawMessage) (any, error) {
