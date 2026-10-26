@@ -1,22 +1,24 @@
 #!/usr/bin/env perl
 use v5.36;
 
-# Builds the app icon set from Art/icon.png: the artwork, shrunk so the
-# system's rounded corners don't clip the jukebox's feet, on an opaque
-# square of Basalt, as OmniGraffle's color picker names #333333.
-# Needs ImageMagick.  Run from apple/.
+# Builds the app icon set from Art/icon.png.  The artwork is drawn to the
+# icon's own rounded-square shape, so it's trimmed of its margin and
+# stretched to fill the whole icon, which the system then clips.  What it
+# leaves transparent -- its corners, which are a little rounder than the
+# system's, the gaps between tubes, and the disc's hole -- becomes black:
+# an icon can't be transparent, and black reads as shadow and as a hole.
+# Needs ImageMagick.  Run from apple/.  -- claude, 2026-10-26
 
 my $source = 'Art/icon.png';
 my $set    = 'App/Assets.xcassets/AppIcon.appiconset';
-my $color  = q{#333333};
-my $art    = 820;
+my $color  = q{black};
 
 my $full = "$set/icon-1024.png";
 
 system(
   'magick', '-size', '1024x1024', "xc:$color",
-  '(', $source, '-resize', "${art}x$art", ')',
-  '-gravity', 'center', '-composite',
+  '(', $source, '-trim', '+repage', '-resize', '1024x1024!', ')',
+  '-composite',
   '-alpha', 'off', '-strip',
   $full,
 ) == 0 or die "magick failed on $full\n";
