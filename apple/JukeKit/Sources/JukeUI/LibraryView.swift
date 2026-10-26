@@ -38,7 +38,7 @@ struct LibraryView: View {
     }
   }
 
-  private var split: some View {
+  private var columns: some View {
     NavigationSplitView {
       List(selection: $selection) {
         Label("Albums", systemImage: "square.stack").tag(SidebarItem.albums)
@@ -88,7 +88,15 @@ struct LibraryView: View {
       }
       .id(selection)
     }
-    .safeAreaInset(edge: .bottom, spacing: 0) {
+  }
+
+  // The bar sits below the split view, not in a safe-area inset on it:
+  // when the split view collapses into a stack, as on an iPhone, the inset
+  // doesn't reach the lists in it, which then scroll under the bar and
+  // hide their last rows.  -- claude, 2026-10-25
+  private var split: some View {
+    VStack(spacing: 0) {
+      columns
       PlayerBar(player: player)
     }
   }

@@ -31,7 +31,33 @@ final class JukeUITests: XCTestCase {
     try checkPlays(album: "Richard D. James Album", track: "Milkman")
   }
 
+  func testPlayerBarLeavesLastTrackVisible() throws {
+    try checkLastTrackClear(album: "Symphonic Star Trek", last: "Borg")
+  }
+
   // MARK: - Helpers
+
+  /// Opens an album, starts it playing so the player bar shows, scrolls to
+  /// the end, and checks the last track sits wholly above the bar.
+  func checkLastTrackClear(album: String, last: String, file: StaticString = #filePath, line: UInt = #line) throws {
+    openAlbum(album, file: file, line: line)
+    app.navigationBars[album].buttons["Play"].tap()
+    let bar = app.otherElements["player"]
+    XCTAssertTrue(bar.waitForExistence(timeout: 30), "the player bar never appeared", file: file, line: line)
+
+    let row = app.buttons.containing(.staticText, identifier: last).firstMatch
+    for _ in 0..<10 where !row.exists || row.frame.maxY > app.frame.maxY {
+      app.swipeUp()
+    }
+    // One more, to be sure the list is at its end.
+    app.swipeUp()
+    snapshot("end of \(album)")
+    XCTAssertTrue(row.exists, "never found \(last)", file: file, line: line)
+    XCTAssertLessThanOrEqual(
+      row.frame.maxY, bar.frame.minY,
+      "\(last) ends at \(row.frame.maxY), below the bar's top at \(bar.frame.minY)", file: file, line: line
+    )
+  }
 
   /// Finds an album by searching, opens it, taps a track, and checks the
   /// player bar shows that track playing.
