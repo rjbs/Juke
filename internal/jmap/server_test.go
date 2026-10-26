@@ -327,7 +327,7 @@ func TestResultReferences(t *testing.T) {
 
 func TestMethodsAndCapabilities(t *testing.T) {
 	f := newFixture(t, Config{})
-	checkMethodError(t, f, "Album/set", map[string]any{}, "unknownMethod")
+	checkMethodError(t, f, "Album/import", map[string]any{}, "unknownMethod")
 	checkMethodError(t, f, "Track/frobnicate", map[string]any{}, "unknownMethod")
 
 	echo := f.call("Core/echo", map[string]any{"hello": "world"})

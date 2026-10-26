@@ -2,6 +2,9 @@ package store
 
 import (
 	"context"
+	"fmt"
+	"sort"
+	"strings"
 )
 
 // NewAlbum describes an album to insert.  Each entry in DiscTitles is
@@ -107,13 +110,166 @@ func InsertPlaylist(ctx context.Context, q Queryer, title string, trackIDs []str
 	); err != nil {
 		return "", err
 	}
+	if err := SetPlaylistTracks(ctx, q, id, trackIDs); err != nil {
+		return "", err
+	}
+	return id, nil
+}
+
+// SetPlaylistTracks replaces a playlist's tracks.  It doesn't touch the
+// playlist's modseq; the caller does that along with whatever else it
+// changes.
+func SetPlaylistTracks(ctx context.Context, q Queryer, playlistID string, trackIDs []string) error {
+	if _, err := q.ExecContext(ctx, `DELETE FROM playlist_track WHERE playlist_id = ?`, playlistID); err != nil {
+		return err
+	}
 	for i, trackID := range trackIDs {
 		if _, err := q.ExecContext(ctx,
 			`INSERT INTO playlist_track (playlist_id, position, track_id) VALUES (?, ?, ?)`,
-			id, i, trackID,
+			playlistID, i, trackID,
 		); err != nil {
-			return "", err
+			return err
 		}
 	}
-	return id, nil
+	return nil
+}
+
+// Destroy deletes an object's row and leaves a tombstone, so /changes
+// can report it destroyed.  Rows that refer to the object must be dealt
+// with first.
+func Destroy(ctx context.Context, q Queryer, typ, id string) error {
+	table, ok := tableFor[typ]
+	if !ok {
+		return fmt.Errorf("no such type %q", typ)
+	}
+	modseq, err := NextModseq(ctx, q)
+	if err != nil {
+		return err
+	}
+	var created int64
+	if err := q.QueryRowContext(ctx,
+		`DELETE FROM `+table+` WHERE id = ? RETURNING created_modseq`, id,
+	).Scan(&created); err != nil {
+		return err
+	}
+	_, err = q.ExecContext(ctx,
+		`INSERT INTO tombstone (type, id, created_modseq, modseq) VALUES (?, ?, ?, ?)`,
+		typ, id, created, modseq,
+	)
+	return err
+}
+
+// Disc is one disc of an album, as SetDiscs writes it.
+type Disc struct {
+	Title    *string
+	TrackIDs []string
+}
+
+// SetDiscs replaces an album's discs and the tracks on them.  A track
+// that joins the album leaves the album it was on; a track that leaves
+// it is left on no album.  Each track whose album changes, and each
+// other album that loses a track, gets a new modseq, so /changes reports
+// them.  The album's own modseq is the caller's to change.
+//
+// The track ids must exist, and appear only once in discs.
+func SetDiscs(ctx context.Context, q Queryer, albumID string, discs []Disc) error {
+	var joining []string
+	for _, d := range discs {
+		joining = append(joining, d.TrackIDs...)
+	}
+	in := "0"
+	args := []any{albumID}
+	if len(joining) > 0 {
+		in = "id IN (?" + strings.Repeat(", ?", len(joining)-1) + ")"
+		for _, id := range joining {
+			args = append(args, id)
+		}
+	}
+	affected := `album_id = ? OR ` + in
+
+	// Where each affected track was, keyed by track id; "" is no album.
+	before := map[string]string{}
+	rows, err := q.QueryContext(ctx, `SELECT id, coalesce(album_id, '') FROM track WHERE `+affected, args...)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var id, was string
+		if err := rows.Scan(&id, &was); err != nil {
+			rows.Close()
+			return err
+		}
+		before[id] = was
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	// Every affected track is taken off its album before any is placed,
+	// so a new position can't collide with an old one under the unique
+	// constraint on (album_id, disc_index, position).  -- claude, 2026-10-25
+	if _, err := q.ExecContext(ctx,
+		`UPDATE track SET album_id = NULL, disc_index = NULL, position = NULL WHERE `+affected, args...,
+	); err != nil {
+		return err
+	}
+	if _, err := q.ExecContext(ctx, `DELETE FROM disc WHERE album_id = ?`, albumID); err != nil {
+		return err
+	}
+	after := map[string]string{}
+	for di, d := range discs {
+		if _, err := q.ExecContext(ctx,
+			`INSERT INTO disc (album_id, disc_index, title) VALUES (?, ?, ?)`, albumID, di, d.Title,
+		); err != nil {
+			return err
+		}
+		for pos, id := range d.TrackIDs {
+			if _, err := q.ExecContext(ctx,
+				`UPDATE track SET album_id = ?, disc_index = ?, position = ? WHERE id = ?`, albumID, di, pos, id,
+			); err != nil {
+				return err
+			}
+			after[id] = albumID
+		}
+	}
+
+	losers := map[string]bool{}
+	for _, id := range sortedKeys(before) {
+		was := before[id]
+		if was == after[id] {
+			continue
+		}
+		if err := touch(ctx, q, "track", id); err != nil {
+			return err
+		}
+		if was != "" && was != albumID {
+			losers[was] = true
+		}
+	}
+	for _, id := range sortedKeys(losers) {
+		if err := touch(ctx, q, "album", id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// touch gives a row a new modseq.
+func touch(ctx context.Context, q Queryer, table, id string) error {
+	modseq, err := NextModseq(ctx, q)
+	if err != nil {
+		return err
+	}
+	_, err = q.ExecContext(ctx, `UPDATE `+table+` SET modseq = ? WHERE id = ?`, modseq, id)
+	return err
+}
+
+func sortedKeys[V any](m map[string]V) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }

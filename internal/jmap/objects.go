@@ -59,7 +59,13 @@ func (s *Server) methodTable() map[string]method {
 			return args, nil
 		}},
 		"Track/set": {CapJuke, func(ctx context.Context, s *Server, args json.RawMessage) (any, error) {
-			return s.setTracks(ctx, args)
+			return s.set(ctx, trackSetter, args)
+		}},
+		"Playlist/set": {CapJuke, func(ctx context.Context, s *Server, args json.RawMessage) (any, error) {
+			return s.set(ctx, playlistSetter, args)
+		}},
+		"Album/set": {CapJuke, func(ctx context.Context, s *Server, args json.RawMessage) (any, error) {
+			return s.set(ctx, albumSetter, args)
 		}},
 	}
 	for _, t := range s.objectTypes() {
@@ -612,77 +618,26 @@ func queryIDs(ctx context.Context, q store.Queryer, query string, args ...any) (
 
 // ---- Track/set ------------------------------------------------------------
 
-type setArgs struct {
-	AccountID string                                `json:"accountId"`
-	IfInState *string                               `json:"ifInState"`
-	Create    map[string]json.RawMessage            `json:"create"`
-	Update    map[string]map[string]json.RawMessage `json:"update"`
-	Destroy   []string                              `json:"destroy"`
-}
-
 // The Track properties a client may set.  Everything else about a track
 // comes from its file or its album.
 var settableTrackProperties = map[string]bool{"rating": true, "playCount": true, "lastPlayed": true}
 
-func (s *Server) setTracks(ctx context.Context, raw json.RawMessage) (any, error) {
-	var args setArgs
-	if err := decodeArgs(raw, &args); err != nil {
-		return nil, err
-	}
-	if err := s.checkAccount(args.AccountID); err != nil {
-		return nil, err
-	}
-	if len(args.Create)+len(args.Update)+len(args.Destroy) > s.cfg.MaxObjectsInSet {
-		return nil, errorOf("requestTooLarge", "at most %d objects per /set", s.cfg.MaxObjectsInSet)
-	}
-
-	tx, err := s.store.DB.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, err
-	}
-	defer tx.Rollback()
-
-	oldState, _, err := s.state(ctx, tx, store.TypeTrack)
-	if err != nil {
-		return nil, err
-	}
-	if args.IfInState != nil && *args.IfInState != oldState {
-		return nil, errorOf("stateMismatch", "state is %s", oldState)
-	}
-
-	notCreated := map[string]any{}
-	for cid := range args.Create {
-		notCreated[cid] = &methodError{Type: "forbidden", Description: "tracks are created only by import"}
-	}
-	notDestroyed := map[string]any{}
-	for _, id := range args.Destroy {
-		notDestroyed[id] = &methodError{Type: "forbidden", Description: "tracks are destroyed only by import"}
-	}
-
-	updated := map[string]any{}
-	notUpdated := map[string]any{}
-	ids := make([]string, 0, len(args.Update))
-	for id := range args.Update {
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
-	for _, id := range ids {
-		cols, invalid := trackPatch(args.Update[id])
+var trackSetter = &setter{
+	typ: store.TypeTrack,
+	create: func(context.Context, *sql.Tx, map[string]json.RawMessage) (object, error) {
+		return nil, &methodError{Type: "forbidden", Description: "tracks are created only by import"}
+	},
+	update: func(ctx context.Context, tx *sql.Tx, id string, patch map[string]json.RawMessage) error {
+		cols, invalid := trackPatch(patch)
 		if invalid != nil {
-			notUpdated[id] = invalid
-			continue
+			return invalid
 		}
-		var exists bool
-		if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM track WHERE id = ?)`, id).Scan(&exists); err != nil {
-			return nil, err
-		}
-		if !exists {
-			notUpdated[id] = &methodError{Type: "notFound"}
-			continue
+		if err := mustExist(ctx, tx, "track", id); err != nil {
+			return err
 		}
 		modseq, err := store.NextModseq(ctx, tx)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		set := []string{"modseq = ?"}
 		vals := []any{modseq}
@@ -691,37 +646,12 @@ func (s *Server) setTracks(ctx context.Context, raw json.RawMessage) (any, error
 			vals = append(vals, c.value)
 		}
 		vals = append(vals, id)
-		if _, err := tx.ExecContext(ctx, `UPDATE track SET `+strings.Join(set, ", ")+` WHERE id = ?`, vals...); err != nil {
-			return nil, err
-		}
-		updated[id] = nil
-	}
-
-	newState, _, err := s.state(ctx, tx, store.TypeTrack)
-	if err != nil {
-		return nil, err
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, err
-	}
-
-	orNull := func(m map[string]any) any {
-		if len(m) == 0 {
-			return nil
-		}
-		return m
-	}
-	return map[string]any{
-		"accountId":    args.AccountID,
-		"oldState":     oldState,
-		"newState":     newState,
-		"created":      nil,
-		"updated":      orNull(updated),
-		"destroyed":    nil,
-		"notCreated":   orNull(notCreated),
-		"notUpdated":   orNull(notUpdated),
-		"notDestroyed": orNull(notDestroyed),
-	}, nil
+		_, err = tx.ExecContext(ctx, `UPDATE track SET `+strings.Join(set, ", ")+` WHERE id = ?`, vals...)
+		return err
+	},
+	destroy: func(context.Context, *sql.Tx, string) error {
+		return &methodError{Type: "forbidden", Description: "tracks are destroyed only by import"}
+	},
 }
 
 type columnValue struct {

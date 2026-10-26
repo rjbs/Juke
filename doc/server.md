@@ -68,7 +68,6 @@ resync after a fresh import.
 
 ## Not yet
 
-- `Album/set` and `Playlist/set` answer `unknownMethod`.
 - `/queryChanges` always answers `cannotCalculateChanges`.
 - Uploads are refused, and push (the event source) is not implemented.
 - Smart playlists, metadata flush and artwork.
