@@ -9,8 +9,11 @@ struct TrackRow: View {
   let library: Library
   let player: Player
   let track: Track
-  let number: Int
+  /// Its place in the list, or nil where that means nothing.
+  let number: Int?
   let showArtist: Bool
+  /// Whether to name the album, for a list drawn from many.
+  var showAlbum = false
   /// Removes the track from the list it's in, for a list that allows it.
   var remove: (() -> Void)? = nil
   let play: () -> Void
@@ -18,14 +21,18 @@ struct TrackRow: View {
   var body: some View {
     Button(action: play) {
       HStack(alignment: .firstTextBaseline) {
-        Text("\(number)")
-          .monospacedDigit()
-          .foregroundStyle(.secondary)
-          .frame(minWidth: 24, alignment: .trailing)
+        if let number {
+          Text("\(number)")
+            .monospacedDigit()
+            .foregroundStyle(.secondary)
+            .frame(minWidth: 24, alignment: .trailing)
+        }
         VStack(alignment: .leading) {
           Text(track.title)
-          if showArtist, let artist = track.artist {
-            Text(artist).font(.caption).foregroundStyle(.secondary)
+          let album = showAlbum ? track.albumId.flatMap { library.albums[$0]?.title } : nil
+          let byline = [showArtist ? track.artist : nil, album].compactMap(\.self).joined(separator: " — ")
+          if !byline.isEmpty {
+            Text(byline).font(.caption).foregroundStyle(.secondary)
           }
           if !track.isPlayable {
             Text("Missing").font(.caption).foregroundStyle(.secondary)
