@@ -153,3 +153,141 @@ func TestPlaylistSetRefusals(t *testing.T) {
 
 	checkPlaylist(t, f, mix, "Mix", "Brave Sir Robin", "Smells Like Nirvana", "Brave Sir Robin")
 }
+
+// checkAlbum gets an album and checks its title, artist, and the titles of
+// the tracks on each disc.
+func checkAlbum(t *testing.T, f *fixture, id, wantTitle string, wantArtist any, wantDiscs ...[]string) {
+	t.Helper()
+	list := f.call("Album/get", map[string]any{"ids": []string{id}})["list"].([]any)
+	if len(list) != 1 {
+		t.Errorf("album %s not found", id)
+		return
+	}
+	a := list[0].(map[string]any)
+	checkEqual(t, "album title", a["title"], wantTitle)
+	checkEqual(t, "album artist", a["artist"], wantArtist)
+	var discs [][]string
+	for _, d := range a["discs"].([]any) {
+		discs = append(discs, f.titlesOf(d.(map[string]any)["trackIds"].([]any)))
+	}
+	checkEqual(t, "album discs", discs, wantDiscs)
+}
+
+// checkAlbumOf checks a track's albumId: an id, or nil for no album.
+func checkAlbumOf(t *testing.T, f *fixture, title string, want any) {
+	t.Helper()
+	r := f.call("Track/get", map[string]any{"ids": []string{f.ids[title]}, "properties": []string{"albumId"}})
+	checkEqual(t, title+" albumId", r["list"].([]any)[0].(map[string]any)["albumId"], want)
+}
+
+// checkChangedIDs calls /changes and checks the ids it reports updated
+// and destroyed, in any order.
+func checkChangedIDs(t *testing.T, f *fixture, typ, since string, wantUpdated, wantDestroyed []string) {
+	t.Helper()
+	r := f.call(typ+"/changes", map[string]any{"sinceState": since})
+	checkEqual(t, typ+" created", idList(r["created"]), []string{})
+	checkEqual(t, typ+" updated", sorted(idList(r["updated"])), sorted(append([]string{}, wantUpdated...)))
+	checkEqual(t, typ+" destroyed", sorted(idList(r["destroyed"])), sorted(append([]string{}, wantDestroyed...)))
+}
+
+func disc(trackIDs []string) map[string]any {
+	return map[string]any{"trackIds": trackIDs}
+}
+
+// Two albums that should be one, as an import of per-disc folders makes:
+// one update takes the other's tracks as a second disc, and a destroy
+// removes the emptied album.
+func TestAlbumSetMergesAlbums(t *testing.T) {
+	f := newFixture(t, Config{})
+	weird := f.objectID("Album", "Off the Deep End")
+	devo := f.objectID("Album", "We Are Not Devo")
+	albums, tracks := f.state("Album"), f.state("Track")
+
+	f.set("Album", map[string]any{
+		"update": map[string]any{weird: map[string]any{"discs": []any{
+			disc(f.tracks("Smells Like Nirvana", "Lost Track", "Trigger Happy")),
+			map[string]any{"trackIds": f.tracks("Whip It", "Jocko Homo"), "title": "Bonus Disc"},
+		}}},
+		"destroy": []string{devo},
+	})
+	checkAlbum(t, f, weird, "Off the Deep End", "Weird Al Yankovic",
+		[]string{"Smells Like Nirvana", "Lost Track", "Trigger Happy"}, []string{"Whip It", "Jocko Homo"})
+	checkAlbumOf(t, f, "Whip It", weird)
+	checkChangedIDs(t, f, "Album", albums, []string{weird}, []string{devo})
+	checkChangedIDs(t, f, "Track", tracks, f.tracks("Whip It", "Jocko Homo"), nil)
+	checkQuery(t, f, map[string]any{"albumTitle": "Off the Deep End"}, by("albumOrder", true),
+		"Smells Like Nirvana", "Lost Track", "Trigger Happy", "Whip It", "Jocko Homo")
+}
+
+func TestAlbumSetReorders(t *testing.T) {
+	f := newFixture(t, Config{})
+	queen := f.objectID("Album", "Live Killers")
+	albums, tracks := f.state("Album"), f.state("Track")
+
+	f.set("Album", map[string]any{"update": map[string]any{queen: map[string]any{
+		"discs": []any{disc(f.tracks("Bohemian Rhapsody", "We Will Rock You"))},
+		"title": "Live Killers (Remastered)",
+	}}})
+	checkAlbum(t, f, queen, "Live Killers (Remastered)", "Queen", []string{"Bohemian Rhapsody", "We Will Rock You"})
+	checkChangedIDs(t, f, "Album", albums, []string{queen}, nil)
+	checkChangedIDs(t, f, "Track", tracks, nil, nil)
+}
+
+// A track added to an album leaves the one it was on, which changes too;
+// a track dropped from an album is left on none.
+func TestAlbumSetMovesTracks(t *testing.T) {
+	f := newFixture(t, Config{})
+	queen := f.objectID("Album", "Live Killers")
+	devo := f.objectID("Album", "We Are Not Devo")
+	albums, tracks := f.state("Album"), f.state("Track")
+
+	f.set("Album", map[string]any{"update": map[string]any{queen: map[string]any{
+		"discs": []any{disc(f.tracks("We Will Rock You", "Whip It", "Brave Sir Robin"))},
+	}}})
+	checkAlbum(t, f, queen, "Live Killers", "Queen", []string{"We Will Rock You", "Whip It", "Brave Sir Robin"})
+	checkAlbum(t, f, devo, "We Are Not Devo", nil, []string{"Jocko Homo"})
+	checkAlbumOf(t, f, "Whip It", queen)
+	checkAlbumOf(t, f, "Brave Sir Robin", queen)
+	checkAlbumOf(t, f, "Bohemian Rhapsody", nil)
+	checkChangedIDs(t, f, "Album", albums, []string{queen, devo}, nil)
+	checkChangedIDs(t, f, "Track", tracks, f.tracks("Whip It", "Brave Sir Robin", "Bohemian Rhapsody"), nil)
+}
+
+func TestAlbumSetCreates(t *testing.T) {
+	f := newFixture(t, Config{})
+	r := f.set("Album", map[string]any{"create": map[string]any{
+		"full":  map[string]any{"title": "Holy Grail", "artist": "Monty Python", "discs": []any{disc(f.tracks("Brave Sir Robin"))}},
+		"empty": map[string]any{"title": "Someday"},
+	}})
+	created := r["created"].(map[string]any)
+	grail := created["full"].(map[string]any)["id"].(string)
+	checkAlbum(t, f, grail, "Holy Grail", "Monty Python", []string{"Brave Sir Robin"})
+	checkAlbumOf(t, f, "Brave Sir Robin", grail)
+	checkEqual(t, "defaults are reported", created["empty"], map[string]any{
+		"id":     created["empty"].(map[string]any)["id"],
+		"artist": nil,
+		"discs":  []any{map[string]any{"trackIds": []any{}, "title": nil}},
+	})
+}
+
+func TestAlbumSetRefusals(t *testing.T) {
+	f := newFixture(t, Config{})
+	weird := f.objectID("Album", "Off the Deep End")
+	update := func(props map[string]any) map[string]any {
+		return map[string]any{"update": map[string]any{weird: props}}
+	}
+	discs := func(d ...any) map[string]any { return update(map[string]any{"discs": d}) }
+
+	checkSetError(t, f, "Album", map[string]any{"destroy": []string{weird}}, "albumNotEmpty")
+	checkSetError(t, f, "Album", discs(), "invalidProperties", "discs")
+	checkSetError(t, f, "Album", discs(disc(f.tracks("Whip It", "Whip It"))), "invalidProperties", "discs")
+	checkSetError(t, f, "Album", discs(disc(f.tracks("Whip It")), disc(f.tracks("Whip It"))), "invalidProperties", "discs")
+	checkSetError(t, f, "Album", discs(disc([]string{"Tnope"})), "invalidProperties", "discs")
+	checkSetError(t, f, "Album", discs(map[string]any{"title": "No Tracks"}), "invalidProperties", "discs")
+	checkSetError(t, f, "Album", discs(map[string]any{"trackIds": []string{}, "number": 1}), "invalidProperties", "discs")
+	checkSetError(t, f, "Album", update(map[string]any{"artist": 5, "title": ""}), "invalidProperties", "artist", "title")
+	checkSetError(t, f, "Album", update(map[string]any{"discs/0/trackIds": []string{}}), "invalidProperties", "discs/0/trackIds")
+	checkSetError(t, f, "Album", map[string]any{"create": map[string]any{"x": map[string]any{"artist": "Nobody"}}}, "invalidProperties", "title")
+
+	checkAlbum(t, f, weird, "Off the Deep End", "Weird Al Yankovic", []string{"Smells Like Nirvana", "Lost Track", "Trigger Happy"})
+}

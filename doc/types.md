@@ -64,9 +64,16 @@ The tags written into served files are computed from this.
 **Album owns membership.**  A track appears on at most one album, at most
 once.  Changing an album's discs updates `albumId` on every track that
 joined or left it, in the same transaction, so those tracks appear in the
-next `Track/changes` too.  Moving a track between albums is one
-`Album/set` that updates both albums.  Updating one disc is a patch to
-`discs/N/trackIds`.
+next `Track/changes` too.  A track that joins an album leaves the one it
+was on, which changes as well and appears in the next `Album/changes`; a
+track that leaves an album and joins no other is left on no album.
+
+`Album/set` sets `title`, `artist` and `discs`.  As RFC 8620 requires, an
+update replaces `discs` whole; a patch can't point into it.  Merging two
+albums is one `Album/set` that updates the album to keep, giving it the
+other's tracks, and destroys the other.  Only an album with no tracks can
+be destroyed; destroying one with tracks fails with the SetError
+`albumNotEmpty`, so a slip can't strand its tracks on no album.
 
 ## Playlist
 

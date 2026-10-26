@@ -337,3 +337,172 @@ var playlistSetter = &setter{
 		return store.Destroy(ctx, tx, store.TypePlaylist, id)
 	},
 }
+
+// ---- Album/set ----------------------------------------------------------------
+
+// albumProps is an Album create or patch, decoded.  A false has* or nil
+// field was not given.
+type albumProps struct {
+	title     *string
+	hasArtist bool
+	artist    *string
+	discs     []store.Disc
+}
+
+func decodeAlbumProps(ctx context.Context, tx *sql.Tx, props map[string]json.RawMessage) (albumProps, error) {
+	var p albumProps
+	var bad []string
+	for _, name := range sortedKeys(props) {
+		raw := props[name]
+		switch name {
+		case "title":
+			title, ok := titleValue(raw)
+			if !ok {
+				bad = append(bad, name)
+				continue
+			}
+			p.title = &title
+		case "artist":
+			artist, ok := nullableStringValue(raw)
+			if !ok {
+				bad = append(bad, name)
+				continue
+			}
+			p.hasArtist, p.artist = true, artist
+		case "discs":
+			discs, ok, err := discsValue(ctx, tx, raw)
+			if err != nil {
+				return p, err
+			}
+			if !ok {
+				bad = append(bad, name)
+				continue
+			}
+			p.discs = discs
+		default:
+			bad = append(bad, name)
+		}
+	}
+	if len(bad) > 0 {
+		return p, invalidProperties(
+			"only title, artist and discs may be set; discs must name tracks, each once", bad)
+	}
+	return p, nil
+}
+
+// discsValue decodes an album's discs: at least one, each with trackIds
+// and perhaps a title, between them naming tracks that exist, each no
+// more than once.
+func discsValue(ctx context.Context, tx *sql.Tx, raw json.RawMessage) ([]store.Disc, bool, error) {
+	var in []map[string]json.RawMessage
+	if json.Unmarshal(raw, &in) != nil || len(in) == 0 {
+		return nil, false, nil
+	}
+	var discs []store.Disc
+	seen := map[string]bool{}
+	var all []string
+	for _, d := range in {
+		var disc store.Disc
+		for name, v := range d {
+			switch name {
+			case "trackIds":
+				if json.Unmarshal(v, &disc.TrackIDs) != nil || disc.TrackIDs == nil {
+					return nil, false, nil
+				}
+			case "title":
+				title, ok := nullableStringValue(v)
+				if !ok {
+					return nil, false, nil
+				}
+				disc.Title = title
+			default:
+				return nil, false, nil
+			}
+		}
+		if disc.TrackIDs == nil {
+			return nil, false, nil
+		}
+		for _, id := range disc.TrackIDs {
+			if seen[id] {
+				return nil, false, nil
+			}
+			seen[id] = true
+		}
+		all = append(all, disc.TrackIDs...)
+		discs = append(discs, disc)
+	}
+	ok, err := tracksExist(ctx, tx, all)
+	return discs, ok, err
+}
+
+var albumSetter = &setter{
+	typ: store.TypeAlbum,
+	create: func(ctx context.Context, tx *sql.Tx, props map[string]json.RawMessage) (object, error) {
+		p, err := decodeAlbumProps(ctx, tx, props)
+		if err != nil {
+			return nil, err
+		}
+		if p.title == nil {
+			return nil, invalidProperties("an album needs a title", []string{"title"})
+		}
+		created := object{}
+		if !p.hasArtist {
+			created["artist"] = nil
+		}
+		if p.discs == nil {
+			p.discs = []store.Disc{{TrackIDs: []string{}}}
+			created["discs"] = []any{map[string]any{"trackIds": []string{}, "title": nil}}
+		}
+		id, err := store.InsertAlbum(ctx, tx, store.NewAlbum{Title: *p.title, Artist: p.artist})
+		if err != nil {
+			return nil, err
+		}
+		if err := store.SetDiscs(ctx, tx, id, p.discs); err != nil {
+			return nil, err
+		}
+		created["id"] = id
+		return created, nil
+	},
+	update: func(ctx context.Context, tx *sql.Tx, id string, patch map[string]json.RawMessage) error {
+		if err := mustExist(ctx, tx, "album", id); err != nil {
+			return err
+		}
+		p, err := decodeAlbumProps(ctx, tx, patch)
+		if err != nil {
+			return err
+		}
+		modseq, err := store.NextModseq(ctx, tx)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE album SET modseq = ?, title = coalesce(?, title),
+			  artist = CASE WHEN ? THEN ? ELSE artist END
+			WHERE id = ?`, modseq, p.title, p.hasArtist, p.artist, id,
+		); err != nil {
+			return err
+		}
+		if p.discs != nil {
+			return store.SetDiscs(ctx, tx, id, p.discs)
+		}
+		return nil
+	},
+	destroy: func(ctx context.Context, tx *sql.Tx, id string) error {
+		if err := mustExist(ctx, tx, "album", id); err != nil {
+			return err
+		}
+		// An album must be emptied before it's destroyed, so that a slip
+		// can't leave its tracks on no album.  -- claude, 2026-10-25
+		var tracks int
+		if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM track WHERE album_id = ?`, id).Scan(&tracks); err != nil {
+			return err
+		}
+		if tracks > 0 {
+			return &methodError{Type: "albumNotEmpty", Description: "move or remove the album's tracks first"}
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM disc WHERE album_id = ?`, id); err != nil {
+			return err
+		}
+		return store.Destroy(ctx, tx, store.TypeAlbum, id)
+	},
+}
