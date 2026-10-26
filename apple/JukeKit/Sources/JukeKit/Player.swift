@@ -13,16 +13,19 @@ import os
 /// screen, Control Center, a Mac's media keys) follow the player.
 @MainActor @Observable
 public final class Player {
-  public private(set) var queue: [Track] = []
-  public private(set) var index: Int?
+  /// What plays, in what order, and the shuffle and repeat settings.
+  public private(set) var playQueue = PlayQueue()
   public private(set) var isPlaying = false
   /// True while the current track's audio is being fetched.
   public private(set) var isLoading = false
   public private(set) var failure: String?
 
-  public var current: Track? { index.map { queue[$0] } }
-  public var hasNext: Bool { index.map { $0 + 1 < queue.count } ?? false }
-  public var hasPrevious: Bool { (index ?? 0) > 0 }
+  public var queue: [Track] { playQueue.entries.map(\.track) }
+  public var index: Int? { playQueue.index }
+  public var current: Track? { playQueue.current }
+  public var hasNext: Bool { playQueue.following(skipping: true) != nil }
+  public var isShuffled: Bool { playQueue.isShuffled }
+  public var repeatMode: PlayQueue.Repeat { playQueue.repeatMode }
 
   @ObservationIgnored let library: Library
   @ObservationIgnored let player = AVPlayer()
@@ -47,8 +50,56 @@ public final class Player {
   /// start, because a playlist may hold a track more than once.
   public func play(_ tracks: [Track], at position: Int) {
     guard tracks.indices.contains(position), tracks[position].isPlayable else { return }
-    queue = tracks.filter(\.isPlayable)
-    load(tracks[..<position].filter(\.isPlayable).count)
+    var rng = SystemRandomNumberGenerator()
+    playQueue.start(tracks, at: position, using: &rng)
+    if let i = playQueue.index { load(i) }
+  }
+
+  /// Plays tracks an album at a time: the albums in random order, each
+  /// whole and in order.  Shuffle is turned off, since it would undo
+  /// that.
+  public func playShuffledByAlbum(_ tracks: [Track]) {
+    var rng = SystemRandomNumberGenerator()
+    let ordered = PlayQueue.albumShuffled(
+      tracks.filter(\.isPlayable), discs: { [library] in library.albums[$0]?.discs.flatMap(\.trackIds) }, using: &rng)
+    guard !ordered.isEmpty else { return }
+    playQueue.setShuffle(false, using: &rng)
+    play(ordered, at: 0)
+  }
+
+  /// Plays tracks after the current one, or now if nothing is playing.
+  public func playNext(_ tracks: [Track]) {
+    if playQueue.playNext(tracks), let i = playQueue.index { load(i) }
+  }
+
+  /// Puts tracks at the end of the queue, or plays them now if nothing
+  /// is playing.
+  public func addToQueue(_ tracks: [Track]) {
+    if playQueue.add(tracks), let i = playQueue.index { load(i) }
+  }
+
+  public func setShuffle(_ on: Bool) {
+    var rng = SystemRandomNumberGenerator()
+    playQueue.setShuffle(on, using: &rng)
+    updateRemoteModes()
+  }
+
+  public func setRepeat(_ mode: PlayQueue.Repeat) {
+    playQueue.repeatMode = mode
+    updateRemoteModes()
+  }
+
+  /// Steps repeat from off, to all, to one, and back to off.
+  public func cycleRepeat() {
+    let all = PlayQueue.Repeat.allCases
+    setRepeat(all[(all.firstIndex(of: repeatMode)! + 1) % all.count])
+  }
+
+  /// Plays the queue's entry at `i`, as when it's picked from a list of
+  /// what's coming up.
+  public func jump(to i: Int) {
+    guard playQueue.entries.indices.contains(i) else { return }
+    load(i)
   }
 
   public func togglePause() {
@@ -59,37 +110,40 @@ public final class Player {
   }
 
   public func next() {
-    if let i = index, i + 1 < queue.count { load(i + 1) }
+    if let i = playQueue.following(skipping: true) { load(i) }
   }
 
   /// Goes back a track, or to the start of this one if it has played a
   /// few seconds, as players usually do.
   public func previous() {
-    guard let i = index else { return }
-    if player.currentTime().seconds > 3 || i == 0 {
+    guard index != nil else { return }
+    if player.currentTime().seconds > 3 {
       player.seek(to: .zero)
+    } else if let i = playQueue.preceding() {
+      load(i)
     } else {
-      load(i - 1)
+      player.seek(to: .zero)
     }
   }
 
   private func load(_ i: Int) {
     loadTask?.cancel()
-    index = i
+    playQueue.move(to: i)
     duration = nil
     failure = nil
     isLoading = true
     player.pause()
     updateNowPlaying()
-    let track = queue[i]
+    let track = playQueue.entries[i].track
+    let following = playQueue.following(skipping: true).map { playQueue.entries[$0].track }
     loadTask = Task { [weak self] in
       guard let self else { return }
       do {
         let url = try await library.audioFile(for: track)
         guard !Task.isCancelled else { return }
         start(url: url, track: track)
-        if i + 1 < queue.count {
-          _ = try? await library.audioFile(for: queue[i + 1])
+        if let following {
+          _ = try? await library.audioFile(for: following)
         }
       } catch {
         guard !Task.isCancelled else { return }
@@ -161,8 +215,13 @@ public final class Player {
 
   private func finished(_ track: Track) {
     Task { try? await library.recordPlay(of: track) }
-    if hasNext {
-      next()
+    if let i = playQueue.following(skipping: false) {
+      if i == index {
+        player.seek(to: .zero)
+        player.play()
+      } else {
+        load(i)
+      }
     } else {
       isPlaying = false
       updateNowPlaying()
@@ -192,6 +251,33 @@ public final class Player {
     center.previousTrackCommand.addTarget { [weak self] _ in
       MainActor.assumeIsolated { self?.previous() }
       return .success
+    }
+    center.changeShuffleModeCommand.addTarget { [weak self] event in
+      guard let event = event as? MPChangeShuffleModeCommandEvent else { return .commandFailed }
+      MainActor.assumeIsolated { self?.setShuffle(event.shuffleType != .off) }
+      return .success
+    }
+    center.changeRepeatModeCommand.addTarget { [weak self] event in
+      guard let event = event as? MPChangeRepeatModeCommandEvent else { return .commandFailed }
+      let mode: PlayQueue.Repeat = switch event.repeatType {
+      case .one: .one
+      case .all: .all
+      default: .off
+      }
+      MainActor.assumeIsolated { self?.setRepeat(mode) }
+      return .success
+    }
+    updateRemoteModes()
+  }
+
+  /// Tells the system's shuffle and repeat controls how they're set.
+  private func updateRemoteModes() {
+    let center = MPRemoteCommandCenter.shared()
+    center.changeShuffleModeCommand.currentShuffleType = isShuffled ? .items : .off
+    center.changeRepeatModeCommand.currentRepeatType = switch repeatMode {
+    case .off: .off
+    case .all: .all
+    case .one: .one
     }
   }
 
