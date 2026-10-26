@@ -78,14 +78,32 @@ sub export_screenshots ($bundle, $dir) {
   my $manifest = decode_json(do { local $/; <$fh> });
   for my $test (@$manifest) {
     my ($name) = $test->{testIdentifier} =~ m{/(\w+)\(\)\z} or next;
-    my @shots = sort { $a->{timestamp} <=> $b->{timestamp} } $test->{attachments}->@*;
+    # Only the test's own screenshots have names like "label_0_UUID.png".
+    # Xcode adds its own attachments when a test fails: a screen
+    # recording, which is worth a name, and dumps of the view hierarchy,
+    # which are set aside.  -- claude, 2026-10-25
+    my (@shots, @other);
+    for my $a ($test->{attachments}->@*) {
+      if ($a->{suggestedHumanReadableName} =~ /_\d+_[-0-9A-F]+\.\w+\z/) { push @shots, $a }
+      else                                                                { push @other, $a }
+    }
+    @shots = sort { $a->{timestamp} <=> $b->{timestamp} } @shots;
     for my $i (keys @shots) {
       my $shot = $shots[$i];
       (my $label = $shot->{suggestedHumanReadableName}) =~ s/_\d+_[-0-9A-F]+(\.\w+)\z//;
-      my $ext = $1 // '.png';
+      my $ext = $1;
       $label =~ tr{/}{-};
       rename "$dir/$shot->{exportedFileName}", sprintf('%s/%s %02d %s%s', $dir, $name, $i + 1, $label, $ext)
         or warn "can't rename $shot->{exportedFileName}: $!\n";
+    }
+    for my $a (@other) {
+      my $from = "$dir/$a->{exportedFileName}";
+      if ($a->{suggestedHumanReadableName} =~ /^Screen Recording .*(\.\w+)\z/) {
+        rename $from, "$dir/$name recording$1" or warn "can't rename $from: $!\n";
+      } else {
+        mkdir "$dir/xcode";
+        rename $from, "$dir/xcode/$a->{exportedFileName}" or warn "can't move $from: $!\n";
+      }
     }
   }
 }

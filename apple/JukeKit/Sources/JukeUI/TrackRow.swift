@@ -112,6 +112,8 @@ struct PlayerBar: View {
       .padding(.horizontal)
       .padding(.vertical, 10)
       .background(.bar)
+      .accessibilityElement(children: .contain)
+      .accessibilityIdentifier("player")
     }
   }
 }
