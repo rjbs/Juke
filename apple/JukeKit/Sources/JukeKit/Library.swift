@@ -39,8 +39,14 @@ public final class Library {
   public private(set) var phase: Phase = .syncing(fetched: 0, total: nil)
   public private(set) var tracks: [String: Track] = [:]
   public private(set) var albums: [String: Album] = [:]
-  /// Albums by artist, then title; compilations last.
+  /// Albums by artist (ignoring a leading article), then title;
+  /// compilations last.
   public private(set) var albumList: [Album] = []
+  /// Album artists by name, ignoring a leading article.
+  public private(set) var artistList: [Artist] = []
+  /// Goes up whenever any track changes, for views that sort or filter
+  /// all of them.
+  public private(set) var trackRevision = 0
   /// Playlists by title.
   public private(set) var playlists: [Playlist] = []
   /// The last sync failure, if the most recent sync failed.
@@ -331,6 +337,7 @@ public final class Library {
       if let p = Playlist(object) { playlists.append(p) }
     }
     self.tracks = tracks
+    trackRevision += 1
     self.albums = albums
     self.playlists = playlists
     sortAlbums()
@@ -346,6 +353,7 @@ public final class Library {
       case "Track":
         for o in objects { if let t = Track(o) { tracks[t.id] = t; ids[t.key] = t.id } }
         for k in changes.destroyed { if let id = ids.removeValue(forKey: k) { tracks[id] = nil } }
+        trackRevision += 1
       case "Album":
         for o in objects { if let a = Album(o) { albums[a.id] = a; ids[a.key] = a.id } }
         for k in changes.destroyed { if let id = ids.removeValue(forKey: k) { albums[id] = nil } }
@@ -366,10 +374,11 @@ public final class Library {
   private func sortAlbums() {
     albumList = albums.values.sorted { a, b in
       if (a.artist == nil) != (b.artist == nil) { return b.artist == nil }
-      let byArtist = (a.artist ?? "").localizedStandardCompare(b.artist ?? "")
-      if byArtist != .orderedSame { return byArtist == .orderedAscending }
+      let (x, y) = (sortKey(a.artist ?? "", droppingArticle: true), sortKey(b.artist ?? "", droppingArticle: true))
+      if x != y { return x < y }
       return a.title.localizedStandardCompare(b.title) == .orderedAscending
     }
+    artistList = Self.artists(of: albums.values)
   }
 
   private func sortPlaylists() {

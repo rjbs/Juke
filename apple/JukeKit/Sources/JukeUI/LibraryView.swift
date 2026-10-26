@@ -11,6 +11,8 @@ struct LibraryView: View {
 
   enum SidebarItem: Hashable {
     case albums
+    case artists
+    case songs
     case offline
     case playlist(Playlist.ID)
   }
@@ -42,6 +44,8 @@ struct LibraryView: View {
     NavigationSplitView {
       List(selection: $selection) {
         Label("Albums", systemImage: "square.stack").tag(SidebarItem.albums)
+        Label("Artists", systemImage: "music.mic").tag(SidebarItem.artists)
+        Label("Songs", systemImage: "music.note").tag(SidebarItem.songs)
         Label("Offline", systemImage: "arrow.down.circle").tag(SidebarItem.offline)
         if !library.playlists.isEmpty {
           Section("Playlists") {
@@ -81,6 +85,10 @@ struct LibraryView: View {
         switch selection {
         case .albums, nil:
           AlbumListView(library: library, player: player)
+        case .artists:
+          ArtistListView(library: library, player: player)
+        case .songs:
+          SongListView(library: library, player: player)
         case .offline:
           OfflineView(library: library, player: player)
         case .playlist(let key):

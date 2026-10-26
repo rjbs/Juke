@@ -102,6 +102,45 @@ final class JukeUITests: XCTestCase {
     snapshot("shuffled")
   }
 
+  func testArtistBrowser() throws {
+    showSidebar()
+    sidebarRow("Artists").tap()
+    XCTAssertTrue(app.navigationBars["Artists"].waitForExistence(timeout: 5), "no artist list")
+    search(for: "Autechre")
+    snapshot("artists")
+    app.buttons.containing(.staticText, identifier: "Autechre").firstMatch.tap()
+    XCTAssertTrue(app.navigationBars["Autechre"].waitForExistence(timeout: 5), "no artist page")
+    snapshot("Autechre")
+    let album = app.buttons.containing(.staticText, identifier: "Anti EP [WAP54CD]").firstMatch
+    XCTAssertTrue(album.waitForExistence(timeout: 5), "Anti EP isn't on the artist page")
+    album.tap()
+    XCTAssertTrue(app.navigationBars["Anti EP [WAP54CD]"].waitForExistence(timeout: 5), "the album never opened")
+  }
+
+  func testSongBrowser() throws {
+    showSidebar()
+    sidebarRow("Songs").tap()
+    XCTAssertTrue(app.navigationBars["Songs"].waitForExistence(timeout: 5), "no song list")
+    search(for: "djarum")
+    let row = app.buttons.containing(.staticText, identifier: "Djarum").firstMatch
+    XCTAssertTrue(row.waitForExistence(timeout: 10), "searching found no Djarum")
+    snapshot("found")
+    row.tap()
+    checkPlaying("Djarum")
+
+    // With the search cleared, sorting by rating puts five-star tracks
+    // first.
+    showSidebar()
+    sidebarRow("Songs").tap()
+    app.buttons["songs.sort"].tap()
+    app.buttons["Rating"].tap()
+    let first = app.cells.firstMatch
+    XCTAssertTrue(first.waitForExistence(timeout: 10), "no songs")
+    XCTAssertTrue(first.descendants(matching: .any)["5 stars"].waitForExistence(timeout: 5),
+                  "the first song by rating isn't five stars")
+    snapshot("by rating")
+  }
+
   // MARK: - Helpers
 
   /// Opens an album, starts it playing so the player bar shows, scrolls to
@@ -124,6 +163,14 @@ final class JukeUITests: XCTestCase {
       row.frame.maxY, bar.frame.minY,
       "\(last) ends at \(row.frame.maxY), below the bar's top at \(bar.frame.minY)", file: file, line: line
     )
+  }
+
+  func search(for text: String) {
+    let field = app.searchFields.firstMatch
+    if !field.exists { app.swipeDown() }
+    XCTAssertTrue(field.waitForExistence(timeout: 5), "no search field")
+    field.tap()
+    field.typeText(text)
   }
 
   /// Taps an alert's button until the alert goes.  A tap made while the
@@ -169,8 +216,14 @@ final class JukeUITests: XCTestCase {
     XCTAssertTrue(app.buttons["playlist.new"].waitForExistence(timeout: 5), "no sidebar")
   }
 
+  /// A row of the sidebar, scrolled to if it's below the fold, as a
+  /// playlist can be once there are many.
   func sidebarRow(_ title: String) -> XCUIElement {
-    app.cells.containing(.staticText, identifier: title).firstMatch
+    let row = app.cells.containing(.staticText, identifier: title).firstMatch
+    for _ in 0..<8 where !row.isHittable {
+      app.collectionViews.firstMatch.swipeUp()
+    }
+    return row
   }
 
   func createPlaylist(_ title: String, file: StaticString = #filePath, line: UInt = #line) {
