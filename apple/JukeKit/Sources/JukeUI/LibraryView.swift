@@ -56,6 +56,9 @@ struct LibraryView: View {
         ToolbarItem {
           Button("Settings", systemImage: "gear", action: showSettings)
         }
+        ToolbarItem {
+          NewPlaylistButton(library: library) { selection = .playlist($0) }
+        }
       }
       .safeAreaInset(edge: .bottom) {
         VStack(alignment: .leading, spacing: 4) {
@@ -80,10 +83,8 @@ struct LibraryView: View {
           AlbumListView(library: library, player: player)
         case .offline:
           OfflineView(library: library, player: player)
-        case .playlist(let id):
-          if let playlist = library.playlists.first(where: { $0.id == id }) {
-            PlaylistView(library: library, player: player, playlist: playlist)
-          }
+        case .playlist(let key):
+          PlaylistView(library: library, player: player, key: key)
         }
       }
       .id(selection)
