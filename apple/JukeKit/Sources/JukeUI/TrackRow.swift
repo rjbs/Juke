@@ -98,10 +98,14 @@ struct RatingView: View {
 /// has been played.
 struct PlayerBar: View {
   let player: Player
+  @State private var showingNowPlaying = false
 
   var body: some View {
     if player.current != nil || player.failure != nil {
       HStack(spacing: 16) {
+        // Tapping what's playing opens the whole player.  A gesture, not
+        // a Button, so the texts stay separate for accessibility, and for
+        // the UI tests that read them.  -- claude, 2026-10-25
         VStack(alignment: .leading) {
           if let failure = player.failure {
             Text(failure).foregroundStyle(.red).lineLimit(2).accessibilityIdentifier("player.failure")
@@ -112,7 +116,10 @@ struct PlayerBar: View {
             }
           }
         }
-        Spacer()
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
+        .onTapGesture { showingNowPlaying = true }
+        .accessibilityAction(named: "Show Now Playing") { showingNowPlaying = true }
         if player.isLoading { ProgressView().controlSize(.small) }
         Button("Previous", systemImage: "backward.fill") { player.previous() }
           .disabled(player.current == nil)
@@ -134,6 +141,7 @@ struct PlayerBar: View {
       .background(.bar)
       .accessibilityElement(children: .contain)
       .accessibilityIdentifier("player")
+      .sheet(isPresented: $showingNowPlaying) { NowPlayingView(player: player) }
     }
   }
 }

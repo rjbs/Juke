@@ -23,6 +23,7 @@ public final class Player {
   public var queue: [Track] { playQueue.entries.map(\.track) }
   public var index: Int? { playQueue.index }
   public var current: Track? { playQueue.current }
+  public var currentAlbum: Album? { current?.albumId.flatMap { library.albums[$0] } }
   public var hasNext: Bool { playQueue.following(skipping: true) != nil }
   public var isShuffled: Bool { playQueue.isShuffled }
   public var repeatMode: PlayQueue.Repeat { playQueue.repeatMode }

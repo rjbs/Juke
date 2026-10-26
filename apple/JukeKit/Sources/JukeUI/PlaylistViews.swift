@@ -46,7 +46,7 @@ struct PlaylistView: View {
       ForEach(Array(entries.enumerated()), id: \.element.id) { i, entry in
         TrackRow(library: library, player: player, track: entry.track, number: i + 1, showArtist: true,
                  remove: { edit { try await library.removeTracks(at: [entry.position], from: playlist) } }) {
-          player.play(tracks, at: i)
+          player.play(tracks, at: i, from: playlist.title)
         }
       }
       .onDelete { offsets in
@@ -75,7 +75,7 @@ struct PlaylistView: View {
             renaming = true
           }
           Button("Shuffle by Album", systemImage: "square.stack") {
-            player.playShuffledByAlbum(library.tracks(of: playlist))
+            player.playShuffledByAlbum(library.tracks(of: playlist), from: playlist.title)
           }
           Button("Delete Playlist…", systemImage: "trash", role: .destructive) { confirmingDelete = true }
         }
