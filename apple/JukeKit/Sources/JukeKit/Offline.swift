@@ -55,7 +55,7 @@ public final class Offline {
   // MARK: - Choosing
 
   public func isKept(_ album: Album) -> Bool { albumIds.contains(album.id) }
-  public func isKept(_ playlist: Playlist) -> Bool { playlistIds.contains(playlist.id) }
+  public func isKept(_ playlist: Playlist) -> Bool { playlist.serverId.map(playlistIds.contains) ?? false }
 
   public func keep(_ album: Album, _ keep: Bool) {
     if keep { albumIds.insert(album.id) } else { albumIds.remove(album.id) }
@@ -64,7 +64,10 @@ public final class Offline {
   }
 
   public func keep(_ playlist: Playlist, _ keep: Bool) {
-    if keep { playlistIds.insert(playlist.id) } else { playlistIds.remove(playlist.id) }
+    // One not yet synced has no id to remember it by; KeepButton is
+    // disabled for it.  -- claude, 2026-10-25
+    guard let id = playlist.serverId else { return }
+    if keep { playlistIds.insert(id) } else { playlistIds.remove(id) }
     save()
     reconcile()
   }
@@ -87,7 +90,7 @@ public final class Offline {
     var types: [String: String] = [:]
     let albums = albumIds.compactMap { library.albums[$0] }
       .sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
-    let playlists = library.playlists.filter { playlistIds.contains($0.id) }
+    let playlists = library.playlists.filter(isKept)
     for tracks in albums.map({ library.tracks(of: $0).flatMap(\.self) }) + playlists.map({ library.tracks(of: $0) }) {
       for track in tracks {
         guard let blob = track.blobId else { continue }

@@ -12,7 +12,7 @@ struct LibraryView: View {
   enum SidebarItem: Hashable {
     case albums
     case offline
-    case playlist(String)
+    case playlist(Playlist.ID)
   }
 
   @State private var selection: SidebarItem? = .albums

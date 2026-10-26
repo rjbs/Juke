@@ -83,20 +83,26 @@ public struct Album: Identifiable, Hashable, Sendable {
 }
 
 /// A plain playlist.  A track may appear on it more than once.
+///
+/// A playlist made on this device has no server id until it syncs, so
+/// it's identified by its local key.
 public struct Playlist: Identifiable, Hashable, Sendable {
   public var key: LocalKey
-  public var id: String
+  /// The server's id, or nil for a playlist not yet synced.
+  public var serverId: String?
   public var title: String
   public var trackIds: [String]
+
+  public var id: LocalKey { key }
 
   public init?(_ object: SyncedObject) {
     self.init(key: object.key, id: object.id, value: object.value)
   }
 
   public init?(key: LocalKey, id: String?, value v: JSONValue) {
-    guard let id, let title = v["title"]?.stringValue else { return nil }
+    guard let title = v["title"]?.stringValue else { return nil }
     self.key = key
-    self.id = id
+    self.serverId = id
     self.title = title
     self.trackIds = v["trackIds"]?.arrayValue?.compactMap(\.stringValue) ?? []
   }

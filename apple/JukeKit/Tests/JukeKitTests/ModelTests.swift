@@ -66,3 +66,22 @@ func checkAudioType(_ bytes: [UInt8], _ expected: String?, sourceLocation: Sourc
   checkAudioType(Array("RIFF....WAVE".utf8), nil)
   checkAudioType([], nil)
 }
+
+// checkMove moves the entries at some positions of a list of letters, as
+// SwiftUI's onMove would ask, and checks the result.
+func checkMove(_ from: [Int], to destination: Int, _ expected: String,
+               sourceLocation: SourceLocation = #_sourceLocation) {
+  let ids = "abcde".map(String.init)
+  let moved = Library.move(ids, from: from, to: destination).joined()
+  #expect(moved == expected, "move \(from) to \(destination)", sourceLocation: sourceLocation)
+}
+
+@Test func moving() {
+  checkMove([0], to: 2, "bacde")
+  checkMove([4], to: 0, "eabcd")
+  checkMove([1], to: 5, "acdeb")
+  checkMove([0, 2], to: 4, "bdace")
+  checkMove([3, 1], to: 0, "bdace")
+  checkMove([2], to: 2, "abcde")
+  checkMove([2], to: 3, "abcde")
+}
