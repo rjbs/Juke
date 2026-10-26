@@ -182,3 +182,17 @@ func checkAlbumShuffle(_ s: String, albums: String, orders: [String: String], se
     checkAlbumShuffle("cazbd", albums: "abc:A d:B", orders: ["A": "abc", "B": "d"], seed: seed)
   }
 }
+
+// Upcoming entries are grouped in runs by where they came from, and keep
+// their places in the queue for jumping to.
+@Test func sources() {
+  var q = PlayQueue()
+  var rng = SeededGenerator(state: 1)
+  q.start(letterTracks("abc"), at: 0, from: "Album", using: &rng)
+  _ = q.add(letterTracks("x"), from: "Queued")
+  _ = q.playNext(letterTracks("y"), from: "Queued")
+  let runs = q.upcomingBySource.map { run in
+    "\(run.source ?? "-"): " + run.entries.map { "\($0.index)\($0.entry.track.title)" }.joined(separator: " ")
+  }
+  #expect(runs == ["Queued: 1y", "Album: 2b 3c", "Queued: 4x"])
+}

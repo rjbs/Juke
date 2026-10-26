@@ -36,7 +36,7 @@ struct AlbumListView: View {
     .toolbar {
       ToolbarItem {
         Button("Shuffle by Album", systemImage: "shuffle") {
-          player.playShuffledByAlbum(library.albumList.flatMap { library.tracks(of: $0).joined() })
+          player.playShuffledByAlbum(library.albumList.flatMap { library.tracks(of: $0).joined() }, from: "All Albums")
         }
       }
     }
@@ -77,7 +77,7 @@ struct AlbumView: View {
             let position = discs[..<d].reduce(0) { $0 + $1.count } + i
             TrackRow(library: library, player: player, track: track, number: i + 1,
                      showArtist: track.artist != album.artist) {
-              player.play(all, at: position)
+              player.play(all, at: position, from: album.title)
             }
           }
         }
@@ -87,7 +87,7 @@ struct AlbumView: View {
     .toolbar {
       ToolbarItem {
         Button("Play", systemImage: "play.fill") {
-          if let first = all.firstIndex(where: \.isPlayable) { player.play(all, at: first) }
+          if let first = all.firstIndex(where: \.isPlayable) { player.play(all, at: first, from: album.title) }
         }
         .disabled(!all.contains(where: \.isPlayable))
       }

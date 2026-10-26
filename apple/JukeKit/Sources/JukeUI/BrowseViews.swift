@@ -65,7 +65,7 @@ struct ArtistView: View {
     .toolbar {
       ToolbarItem {
         Button("Shuffle by Album", systemImage: "shuffle") {
-          player.playShuffledByAlbum(albums.flatMap { library.tracks(of: $0).joined() })
+          player.playShuffledByAlbum(albums.flatMap { library.tracks(of: $0).joined() }, from: artist.name)
         }
       }
     }
@@ -86,7 +86,7 @@ struct SongListView: View {
     let query = SongListModel.Query(order: order, search: search, revision: library.trackRevision)
     List(model.shown) { track in
       TrackRow(library: library, player: player, track: track, number: nil, showArtist: true, showAlbum: true) {
-        if let i = model.shown.firstIndex(of: track) { player.play(model.shown, at: i) }
+        if let i = model.shown.firstIndex(of: track) { player.play(model.shown, at: i, from: "Songs") }
       }
     }
     .overlay {

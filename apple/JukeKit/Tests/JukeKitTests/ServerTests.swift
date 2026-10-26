@@ -100,6 +100,13 @@ func player() async throws {
   #expect(player.isPlaying)
   #expect(player.failure == nil)
   try await eventually("duration known") { (player.duration ?? 0) > 1 }
+  try await eventually("elapsed reported") { player.elapsed > 0.5 }
+
+  // Seeking to the middle carries on from there, and elapsed follows.
+  let middle = player.duration! / 2
+  player.seek(to: middle)
+  try await eventually("playing from the middle") { player.player.currentTime().seconds > middle + 0.25 }
+  try await eventually("elapsed follows the seek") { player.elapsed > middle }
 
   player.next()
   #expect(player.index == 2)

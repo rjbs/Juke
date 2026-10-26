@@ -141,6 +141,36 @@ final class JukeUITests: XCTestCase {
     snapshot("by rating")
   }
 
+  func testNowPlaying() throws {
+    try checkPlays(album: "Richard D. James Album", track: "Milkman")
+    contextMenu(on: "Fingerbib", choose: "Play Next")
+
+    app.staticTexts["player.title"].tap()
+    let title = app.staticTexts["nowPlaying.title"]
+    XCTAssertTrue(title.waitForExistence(timeout: 5), "the now-playing screen never opened")
+    XCTAssertEqual(title.label, "Milkman")
+    XCTAssertEqual(app.staticTexts["nowPlaying.album"].label, "Richard D. James Album")
+    let elapsed = app.staticTexts["nowPlaying.elapsed"]
+    XCTAssertTrue(elapsed.waitFor(label: "0:01", timeout: 10) || elapsed.label != "0:00", "time isn't passing")
+
+    // Seeking halfway puts elapsed and remaining about level.
+    app.sliders["nowPlaying.seek"].adjust(toNormalizedSliderPosition: 0.5)
+    let (played, left) = (Self.seconds(elapsed.label), Self.seconds(app.staticTexts["nowPlaying.remaining"].label))
+    XCTAssertLessThan(abs(played - left), 0.2 * Double(played + left), "after seeking halfway: \(played)s played, \(left)s left")
+
+    // Up next: the queued track first, under its own heading, then the
+    // rest of the album.
+    XCTAssertTrue(app.staticTexts["Queued"].exists, "no Queued heading")
+    XCTAssertTrue(app.staticTexts["Inkey$"].exists, "the rest of the album isn't listed")
+    snapshot("now playing")
+    let upNext = app.buttons.matching(identifier: "nowPlaying.upNext").containing(.staticText, identifier: "Fingerbib").firstMatch
+    upNext.tap()
+    XCTAssertTrue(title.waitFor(label: "Fingerbib", timeout: 30), "jumping to Fingerbib didn't play it")
+
+    app.buttons["Done"].tap()
+    XCTAssertFalse(title.waitForExistence(timeout: 2), "the now-playing screen stayed open")
+  }
+
   // MARK: - Helpers
 
   /// Opens an album, starts it playing so the player bar shows, scrolls to
@@ -163,6 +193,12 @@ final class JukeUITests: XCTestCase {
       row.frame.maxY, bar.frame.minY,
       "\(last) ends at \(row.frame.maxY), below the bar's top at \(bar.frame.minY)", file: file, line: line
     )
+  }
+
+  /// "m:ss" or "-m:ss" as seconds.
+  static func seconds(_ time: String) -> Double {
+    let parts = time.trimmingCharacters(in: CharacterSet(charactersIn: "-")).split(separator: ":").compactMap { Double($0) }
+    return parts.reduce(0) { $0 * 60 + $1 }
   }
 
   func search(for text: String) {

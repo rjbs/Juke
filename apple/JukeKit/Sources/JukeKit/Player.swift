@@ -23,6 +23,7 @@ public final class Player {
   public var queue: [Track] { playQueue.entries.map(\.track) }
   public var index: Int? { playQueue.index }
   public var current: Track? { playQueue.current }
+  public var currentAlbum: Album? { current?.albumId.flatMap { library.albums[$0] } }
   public var hasNext: Bool { playQueue.following(skipping: true) != nil }
   public var isShuffled: Bool { playQueue.isShuffled }
   public var repeatMode: PlayQueue.Repeat { playQueue.repeatMode }
@@ -33,8 +34,15 @@ public final class Player {
   @ObservationIgnored private var endObserver: (any NSObjectProtocol)?
   /// The current track's length in seconds, once its audio is open.
   public private(set) var duration: Double?
+  /// How far into the current track playback is, in seconds, updated a
+  /// few times a second.
+  public private(set) var elapsed: Double = 0
+
+  /// The source given to tracks queued with play next or add to queue.
+  public static let queuedByHand = "Queued"
 
   @ObservationIgnored private var statusObserver: NSKeyValueObservation?
+  @ObservationIgnored private var timeObserver: Any?
   @ObservationIgnored private let log = Logger(subsystem: "systems.semiotic.juke", category: "player")
 
   public init(library: Library) {
@@ -43,39 +51,53 @@ public final class Player {
     try? AVAudioSession.sharedInstance().setCategory(.playback)
     #endif
     setUpRemoteCommands()
+    timeObserver = player.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.25, preferredTimescale: 600), queue: .main) {
+      [weak self] time in
+      MainActor.assumeIsolated { self?.elapsed = time.seconds.isFinite ? time.seconds : 0 }
+    }
+  }
+
+  /// Moves playback in the current track to `seconds` from its start.
+  public func seek(to seconds: Double) {
+    guard current != nil else { return }
+    let target = max(0, min(seconds, duration ?? seconds))
+    elapsed = target
+    player.seek(to: CMTime(seconds: target, preferredTimescale: 600)) { [weak self] _ in
+      Task { @MainActor in self?.updateNowPlaying() }
+    }
   }
 
   /// Plays `tracks` from the one at `position`.  Tracks with no audio are
   /// dropped from the queue.  A position, not a track, says where to
   /// start, because a playlist may hold a track more than once.
-  public func play(_ tracks: [Track], at position: Int) {
+  public func play(_ tracks: [Track], at position: Int, from source: String? = nil) {
     guard tracks.indices.contains(position), tracks[position].isPlayable else { return }
     var rng = SystemRandomNumberGenerator()
-    playQueue.start(tracks, at: position, using: &rng)
+    playQueue.start(tracks, at: position, from: source, using: &rng)
     if let i = playQueue.index { load(i) }
   }
 
   /// Plays tracks an album at a time: the albums in random order, each
   /// whole and in order.  Shuffle is turned off, since it would undo
   /// that.
-  public func playShuffledByAlbum(_ tracks: [Track]) {
+  public func playShuffledByAlbum(_ tracks: [Track], from source: String? = nil) {
     var rng = SystemRandomNumberGenerator()
     let ordered = PlayQueue.albumShuffled(
       tracks.filter(\.isPlayable), discs: { [library] in library.albums[$0]?.discs.flatMap(\.trackIds) }, using: &rng)
     guard !ordered.isEmpty else { return }
     playQueue.setShuffle(false, using: &rng)
-    play(ordered, at: 0)
+    play(ordered, at: 0, from: source)
   }
 
   /// Plays tracks after the current one, or now if nothing is playing.
   public func playNext(_ tracks: [Track]) {
-    if playQueue.playNext(tracks), let i = playQueue.index { load(i) }
+    if playQueue.playNext(tracks, from: Self.queuedByHand), let i = playQueue.index { load(i) }
   }
 
   /// Puts tracks at the end of the queue, or plays them now if nothing
   /// is playing.
   public func addToQueue(_ tracks: [Track]) {
-    if playQueue.add(tracks), let i = playQueue.index { load(i) }
+    if playQueue.add(tracks, from: Self.queuedByHand), let i = playQueue.index { load(i) }
   }
 
   public func setShuffle(_ on: Bool) {
@@ -130,6 +152,7 @@ public final class Player {
     loadTask?.cancel()
     playQueue.move(to: i)
     duration = nil
+    elapsed = 0
     failure = nil
     isLoading = true
     player.pause()
@@ -250,6 +273,12 @@ public final class Player {
     }
     center.previousTrackCommand.addTarget { [weak self] _ in
       MainActor.assumeIsolated { self?.previous() }
+      return .success
+    }
+    center.changePlaybackPositionCommand.addTarget { [weak self] event in
+      guard let event = event as? MPChangePlaybackPositionCommandEvent else { return .commandFailed }
+      let seconds = event.positionTime
+      MainActor.assumeIsolated { self?.seek(to: seconds) }
       return .success
     }
     center.changeShuffleModeCommand.addTarget { [weak self] event in
