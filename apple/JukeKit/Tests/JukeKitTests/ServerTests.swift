@@ -190,3 +190,19 @@ func keepOffline() async throws {
   }
   library.stop()
 }
+
+// A write from one device reaches another by push, well inside the
+// 60-second poll the library otherwise relies on.
+@Test(.enabled(if: testServer != nil))
+@MainActor
+func pushedChanges() async throws {
+  let writer = try await openLibrary()
+  let reader = try await openLibrary()
+  defer { writer.stop(); reader.stop() }
+  let candidate = writer.tracks.values.first { $0.isPlayable }
+  let track = try #require(candidate)
+  let rating: Double = track.rating == 1.5 ? 4.5 : 1.5
+
+  try await writer.setRating(rating, on: track)
+  try await eventually("the rating on the other device") { reader.tracks[track.id]?.rating == rating }
+}

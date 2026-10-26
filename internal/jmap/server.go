@@ -34,6 +34,10 @@ type Config struct {
 	MaxObjectsInSet   int
 	MaxQueryLimit     int
 
+	// PushPollInterval is how often an event-source connection checks for
+	// changes made outside this server, such as by an import.
+	PushPollInterval time.Duration
+
 	Now func() time.Time
 	Log *log.Logger
 }
@@ -43,6 +47,7 @@ type Server struct {
 	cfg     Config
 	store   *store.Store
 	methods map[string]method
+	changed wakeup // woken when a /set commits
 }
 
 // New returns a Server.
@@ -68,6 +73,9 @@ func New(cfg Config) *Server {
 	if cfg.MaxQueryLimit == 0 {
 		cfg.MaxQueryLimit = 5000
 	}
+	if cfg.PushPollInterval == 0 {
+		cfg.PushPollInterval = 5 * time.Second
+	}
 	if cfg.Now == nil {
 		cfg.Now = time.Now
 	}
@@ -89,9 +97,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /jmap/upload/{accountId}/", func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "uploads are not supported", http.StatusForbidden)
 	})
-	mux.HandleFunc("GET /jmap/eventsource", func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, "push is not supported yet", http.StatusNotImplemented)
-	})
+	mux.HandleFunc("GET /jmap/eventsource", s.handleEventSource)
 	return mux
 }
 
