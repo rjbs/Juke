@@ -65,7 +65,7 @@ final class JukeUITests: XCTestCase {
     let field = app.alerts.textFields.firstMatch
     field.clearAndType(renamed)
     XCTAssertEqual(field.value as? String, renamed)
-    app.alerts.buttons["Rename"].tap()
+    confirmAlert("Rename")
     XCTAssertTrue(app.navigationBars[renamed].waitForExistence(timeout: 5), "never renamed")
 
     app.buttons["playlist.menu"].tap()
@@ -100,6 +100,17 @@ final class JukeUITests: XCTestCase {
     )
   }
 
+  /// Taps an alert's button until the alert goes.  A tap made while the
+  /// keyboard is still settling can be swallowed.
+  func confirmAlert(_ button: String, file: StaticString = #filePath, line: UInt = #line) {
+    let alert = app.alerts.firstMatch
+    for _ in 0..<3 where alert.exists {
+      alert.buttons[button].tap()
+      _ = alert.waitForNonExistence(timeout: 2)
+    }
+    XCTAssertFalse(alert.exists, "the alert stayed up", file: file, line: line)
+  }
+
   /// Goes back to the sidebar, on an iPhone the root of the stack.
   func showSidebar() {
     // An active search hides the navigation bar, back button and all,
@@ -125,7 +136,7 @@ final class JukeUITests: XCTestCase {
     showSidebar()
     app.buttons["playlist.new"].tap()
     app.alerts.textFields.firstMatch.typeText(title)
-    app.alerts.buttons["Create"].tap()
+    confirmAlert("Create")
     XCTAssertTrue(app.navigationBars[title].waitForExistence(timeout: 5), "\(title) never opened", file: file, line: line)
   }
 
