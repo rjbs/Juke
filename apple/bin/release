@@ -27,6 +27,12 @@ print($usage->text), exit if $opt->help;
 
 -e 'project.yml' or die "run this from apple/\n";
 
+# Exporting copies files with rsync, partly as "rsync" from PATH and partly
+# as /usr/bin/rsync.  When those differ, as with Homebrew's rsync 3 first
+# on PATH, the two ends don't speak the same protocol and the export fails
+# with "Copy failed".  -- claude, 2026-10-26
+$ENV{PATH} = "/usr/bin:/bin:/usr/sbin:/sbin:$ENV{PATH}";
+
 my $dirty = `git status --porcelain -- .`;
 die "the working tree has uncommitted changes:\n$dirty" if length $dirty;
 
