@@ -141,6 +141,7 @@ func (s *Server) set(ctx context.Context, h *setter, raw json.RawMessage) (any, 
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
+	s.changed.wake()
 
 	orNull := func(m map[string]any) any {
 		if len(m) == 0 {

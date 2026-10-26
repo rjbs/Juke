@@ -66,8 +66,16 @@ the `/query` paging path, an incremental sync after another client's
 change, a rating written from Jinx, a pinned download, and a full
 resync after a fresh import.
 
+## Push
+
+The event source (RFC 8620 §7.3) sends a `state` event whenever a
+type's state changes, with `closeafter` and `ping` as the RFC describes.
+A connection learns of a change at once when this server commits a
+`/set`, and within `PushPollInterval` (five seconds) of a write from
+outside it, such as an import.
+
 ## Not yet
 
 - `/queryChanges` always answers `cannotCalculateChanges`.
-- Uploads are refused, and push (the event source) is not implemented.
+- Uploads are refused.
 - Smart playlists, metadata flush and artwork.
