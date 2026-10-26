@@ -17,6 +17,9 @@ public struct PlayQueue: Sendable {
   public struct Entry: Identifiable, Hashable, Sendable {
     public let id: Int
     public let track: Track
+    /// Where it was queued from, such as an album's or playlist's
+    /// title, for showing what came from where.
+    public let source: String?
   }
 
   /// The entries in play order.
@@ -36,12 +39,29 @@ public struct PlayQueue: Sendable {
   /// The entries after the current one, in the order they'll play.
   public var upcoming: ArraySlice<Entry> { entries[((index ?? -1) + 1)...] }
 
+  /// The upcoming entries in runs that share a source, each with the
+  /// entries' places in `entries`, for a list headed by where each run
+  /// came from.
+  public var upcomingBySource: [(source: String?, entries: [(index: Int, entry: Entry)])] {
+    var runs: [(source: String?, entries: [(index: Int, entry: Entry)])] = []
+    for (i, entry) in zip(upcoming.indices, upcoming) {
+      if let last = runs.last, last.source == entry.source {
+        runs[runs.count - 1].entries.append((i, entry))
+      } else {
+        runs.append((entry.source, [(i, entry)]))
+      }
+    }
+    return runs
+  }
+
   /// Replaces the queue with `tracks`, starting at the one at `position`.
   /// Tracks with no audio are dropped.  If shuffle is on, the rest are
   /// shuffled; the chosen track still plays first.
-  public mutating func start<G: RandomNumberGenerator>(_ tracks: [Track], at position: Int, using rng: inout G) {
+  public mutating func start<G: RandomNumberGenerator>(
+    _ tracks: [Track], at position: Int, from source: String? = nil, using rng: inout G
+  ) {
     guard tracks.indices.contains(position), tracks[position].isPlayable else { return }
-    entries = makeEntries(tracks.filter(\.isPlayable))
+    entries = makeEntries(tracks.filter(\.isPlayable), from: source)
     let first = tracks[..<position].filter(\.isPlayable).count
     if isShuffled {
       unshuffled = entries
@@ -72,8 +92,8 @@ public struct PlayQueue: Sendable {
 
   /// Puts tracks right after the current one, or starts with them if
   /// nothing is playing.  Returns true if they're to be played now.
-  public mutating func playNext(_ tracks: [Track]) -> Bool {
-    let new = makeEntries(tracks.filter(\.isPlayable))
+  public mutating func playNext(_ tracks: [Track], from source: String? = nil) -> Bool {
+    let new = makeEntries(tracks.filter(\.isPlayable), from: source)
     guard !new.isEmpty else { return false }
     guard let i = index else {
       entries = new
@@ -91,10 +111,10 @@ public struct PlayQueue: Sendable {
 
   /// Puts tracks at the end, or starts with them if nothing is playing.
   /// Returns true if they're to be played now.
-  public mutating func add(_ tracks: [Track]) -> Bool {
-    let new = makeEntries(tracks.filter(\.isPlayable))
+  public mutating func add(_ tracks: [Track], from source: String? = nil) -> Bool {
+    let new = makeEntries(tracks.filter(\.isPlayable), from: source)
     guard !new.isEmpty else { return false }
-    guard index != nil else { return playNext(tracks) }
+    guard index != nil else { return playNext(tracks, from: source) }
     entries += new
     unshuffled? += new
     return false
@@ -153,10 +173,10 @@ public struct PlayQueue: Sendable {
     return ordered.shuffled(using: &rng).flatMap(\.self)
   }
 
-  private mutating func makeEntries(_ tracks: [Track]) -> [Entry] {
+  private mutating func makeEntries(_ tracks: [Track], from source: String?) -> [Entry] {
     tracks.map { track in
       defer { nextID += 1 }
-      return Entry(id: nextID, track: track)
+      return Entry(id: nextID, track: track, source: source)
     }
   }
 }
