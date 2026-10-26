@@ -33,6 +33,13 @@ struct AlbumListView: View {
     }
     .searchable(text: $search, prompt: "Artist or title")
     .navigationTitle("Albums")
+    .toolbar {
+      ToolbarItem {
+        Button("Shuffle by Album", systemImage: "shuffle") {
+          player.playShuffledByAlbum(library.albumList.flatMap { library.tracks(of: $0).joined() })
+        }
+      }
+    }
     .navigationDestination(for: String.self) { id in
       if let album = library.albums[id] {
         AlbumView(library: library, player: player, album: album)
