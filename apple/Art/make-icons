@@ -15,9 +15,16 @@ my $color  = q{black};
 
 my $full = "$set/icon-1024.png";
 
+# The artwork's edges, found from its alpha alone.  -trim compares colors,
+# and transparent pixels needn't share one, so it left uneven margins and
+# the art off center.  The threshold passes over faint wisps of
+# antialiasing.  -- claude, 2026-10-28
+chomp(my $bounds = `magick $source -alpha extract -threshold 25% -format %@ info:`);
+$bounds =~ /\A[0-9]+x[0-9]+\+[0-9]+\+[0-9]+\z/ or die "couldn't find the artwork's edges\n";
+
 system(
   'magick', '-size', '1024x1024', "xc:$color",
-  '(', $source, '-trim', '+repage', '-resize', '1024x1024!', ')',
+  '(', $source, '-crop', $bounds, '+repage', '-resize', '1024x1024!', ')',
   '-composite',
   '-alpha', 'off', '-strip',
   $full,
