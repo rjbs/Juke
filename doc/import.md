@@ -59,6 +59,13 @@ its results.
   tracks with a null `albumId`, not an album called "Unknown Album".
 - **Order** within an album comes from the disc and track number tags,
   falling back to the filename.  Disc numbers become entries in `discs`.
+- **A track number is kept as its position,** so a number no file or gap
+  has is a missing track.  A track with no number, or whose number an
+  earlier track took, goes after the disc's highest number.  A disc also
+  keeps the total its tracks declare (TRCK's `n/total`, or the catalog's
+  track count), so missing tracks at its end can be told too.  Both are
+  for album completeness (#40); until the protocol carries them,
+  `trackIds` lists only the tracks there are.
 - **An album filed as one directory per disc,** like *Mellon Collie* or
   *Tango N' Vectif*, imports as separate albums for now.  Merging them is a
   later edit.

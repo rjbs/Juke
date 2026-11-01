@@ -48,6 +48,8 @@ CREATE TABLE itunes_playlist (
   distinguished_kind INTEGER, smart_criteria BLOB);
 CREATE TABLE itunes_playlist_item (playlist_id INTEGER, position INTEGER, track_id INTEGER);
 
+-- Added after the rows below were written positionally. -- claude, 2026-11-01
+
 -- Album 1, "Album" by Band: track 1 survives, track 2 is lost, and
 -- track 3's own file lost its slot to a better copy, file 30.
 INSERT INTO itunes_track VALUES
@@ -63,6 +65,8 @@ INSERT INTO move_plan VALUES (31, 30);
 
 INSERT INTO itunes_playlist (playlist_id, name) VALUES (1, 'Complete'), (2, 'Partial');
 INSERT INTO itunes_playlist_item VALUES (1, 0, 2), (1, 1, 1), (2, 0, 1), (2, 1, 99);
+
+ALTER TABLE itunes_track ADD COLUMN track_count INTEGER;
 `
 
 // syntheticImport builds a small library and catalog, imports them, and
@@ -96,6 +100,10 @@ func syntheticImport(t *testing.T) (*sql.DB, *Report) {
 	write("Undamaged/Various Artists/Sampler/01 Taster.mp3", id3(map[string]string{"TIT2": "Taster", "TPE1": "Solo Act", "TALB": "Sampler", "TRCK": "1"}))
 	write("Undamaged/Some DJ/Mixtape/01 Cut.mp3", id3(map[string]string{"TIT2": "Cut", "TPE1": "DJ Real", "TPE2": "Various Artists", "TALB": "Mixtape", "TRCK": "1"}))
 	write("Undamaged/Some DJ/Mixtape/02 Filler.mp3", id3(map[string]string{"TIT2": "Filler", "TPE1": "Various", "TPE2": "Various Artists", "TALB": "Mixtape", "TRCK": "2"}))
+	write("Undamaged/Holes/Holey/01 First.mp3", id3(map[string]string{"TIT2": "First", "TPE1": "Holes", "TALB": "Holey", "TRCK": "1/5"}))
+	write("Undamaged/Holes/Holey/04 Fourth.mp3", id3(map[string]string{"TIT2": "Fourth", "TPE1": "Holes", "TALB": "Holey", "TRCK": "4/5"}))
+	write("Undamaged/Holes/Twice/01 Early.mp3", id3(map[string]string{"TIT2": "Early", "TPE1": "Holes", "TALB": "Twice", "TRCK": "1"}))
+	write("Undamaged/Holes/Twice/01 Late.mp3", id3(map[string]string{"TIT2": "Late", "TPE1": "Holes", "TALB": "Twice", "TRCK": "1"}))
 	write("Undamaged/Loner/Unknown Album/Stray.mp3", id3(map[string]string{"TIT2": "Stray"}))
 	write("Damaged/Ignored/Album/01 X.mp3", id3(map[string]string{"TIT2": "X"}))
 
@@ -167,24 +175,35 @@ func TestSyntheticImport(t *testing.T) {
 	if len(r.TitledFromName) != 4 {
 		t.Errorf("titled from filename %q, want the four untagged files", r.TitledFromName)
 	}
-	if r.Tracks != 15 || r.GapTracks != 1 || r.Albums != 7 || r.AlbumlessTrack != 2 || r.SkippedFiles != 1 || r.Playlists != 1 {
+	if r.Tracks != 19 || r.GapTracks != 1 || r.Albums != 9 || r.AlbumlessTrack != 2 || r.SkippedFiles != 1 || r.Playlists != 1 {
 		t.Errorf("report = %+v", r)
 	}
 
-	checkTrack(t, db, "One", "Album", 0, 4, 5, "2005-01-01T00:00:00Z", true)
-	checkTrack(t, db, "Two", "Album", 1, 3.5, 3, "2005-01-01T00:00:00Z", false)
-	checkTrack(t, db, "Three", "Album", 2, 3, 9, "2005-01-02T00:00:00Z", true)
+	checkTrack(t, db, "One", "Album", 1, 4, 5, "2005-01-01T00:00:00Z", true)
+	checkTrack(t, db, "Two", "Album", 2, 3.5, 3, "2005-01-01T00:00:00Z", false)
+	checkTrack(t, db, "Three", "Album", 3, 3, 9, "2005-01-02T00:00:00Z", true)
 	checkTrack(t, db, "Loose", "", 0, 0, 0, "2019-03-04T05:06:07Z", true)
-	checkTrack(t, db, "A", "Mix", 0, 0, 0, mtimeOf(t, db, "A"), true)
+	checkTrack(t, db, "A", "Mix", 1, 0, 0, mtimeOf(t, db, "A"), true)
 
 	// Untagged files the catalog doesn't know take their titles and
 	// numbers from their filenames: "9 Hiss" before "10 Static", whatever
 	// the alphabet says, and "2-01 Hum" first on a second disc.
-	checkTrack(t, db, "Hiss", "Thing", 0, 0, 0, mtimeOf(t, db, "Hiss"), true)
-	checkTrack(t, db, "Static", "Thing", 1, 0, 0, mtimeOf(t, db, "Static"), true)
-	checkTrack(t, db, "1999 Prince", "Thing", 2, 0, 0, mtimeOf(t, db, "1999 Prince"), true)
-	checkTrack(t, db, "Hum", "Thing", 0, 0, 0, mtimeOf(t, db, "Hum"), true)
+	checkTrack(t, db, "Hiss", "Thing", 9, 0, 0, mtimeOf(t, db, "Hiss"), true)
+	checkTrack(t, db, "Static", "Thing", 10, 0, 0, mtimeOf(t, db, "Static"), true)
+	checkTrack(t, db, "1999 Prince", "Thing", 11, 0, 0, mtimeOf(t, db, "1999 Prince"), true)
+	checkTrack(t, db, "Hum", "Thing", 1, 0, 0, mtimeOf(t, db, "Hum"), true)
 	checkTrackArtist(t, db, "Hiss", "Other")
+
+	// A position is a track number, so a number no track has is a missing
+	// track, and a disc keeps the total its tracks declare.  A number taken
+	// twice goes to the first, and the second goes after the last.
+	checkTrack(t, db, "First", "Holey", 1, 0, 0, mtimeOf(t, db, "First"), true)
+	checkTrack(t, db, "Fourth", "Holey", 4, 0, 0, mtimeOf(t, db, "Fourth"), true)
+	checkTrack(t, db, "Early", "Twice", 1, 0, 0, mtimeOf(t, db, "Early"), true)
+	checkTrack(t, db, "Late", "Twice", 2, 0, 0, mtimeOf(t, db, "Late"), true)
+	checkDiscTrackCount(t, db, "Holey", 0, 5)
+	checkDiscTrackCount(t, db, "Album", 0, 3)
+	checkDiscTrackCount(t, db, "Twice", 0, 0)
 
 	// A track with no artist tag takes its artist directory's name, but
 	// "Unknown Artist" is no artist, in a tag or a directory.
@@ -264,5 +283,23 @@ func checkAlbumArtist(t *testing.T, db *sql.DB, title, artist string) {
 	}
 	if got.String != artist {
 		t.Errorf("album %q: artist %q, want %q", title, got.String, artist)
+	}
+}
+
+// checkDiscTrackCount checks the declared number of tracks on one disc
+// of an album, found by title; 0 means none was declared.
+func checkDiscTrackCount(t *testing.T, db *sql.DB, album string, disc, want int) {
+	t.Helper()
+	var got sql.NullInt64
+	err := db.QueryRow(`
+		SELECT d.track_count FROM disc d JOIN album a ON a.id = d.album_id
+		WHERE a.title = ? AND d.disc_index = ?`, album, disc,
+	).Scan(&got)
+	if err != nil {
+		t.Errorf("album %q disc %d: %v", album, disc, err)
+		return
+	}
+	if int(got.Int64) != want {
+		t.Errorf("album %q disc %d: %d tracks declared, want %d", album, disc, got.Int64, want)
 	}
 }

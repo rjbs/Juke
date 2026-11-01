@@ -9,11 +9,14 @@ import (
 
 // NewAlbum describes an album to insert.  Each entry in DiscTitles is
 // one disc, so its length is the number of discs; a nil entry is a disc
-// with no title.
+// with no title.  DiscTrackCounts gives the same discs' declared numbers
+// of tracks; it may be shorter, and a nil entry or a missing one is a
+// disc with no declared total.
 type NewAlbum struct {
-	Title      string
-	Artist     *string
-	DiscTitles []*string
+	Title           string
+	Artist          *string
+	DiscTitles      []*string
+	DiscTrackCounts []*int
 }
 
 // InsertAlbum inserts an album and its discs, and returns its new id.
@@ -33,8 +36,12 @@ func InsertAlbum(ctx context.Context, q Queryer, a NewAlbum) (string, error) {
 		return "", err
 	}
 	for i, title := range a.DiscTitles {
+		var count *int
+		if i < len(a.DiscTrackCounts) {
+			count = a.DiscTrackCounts[i]
+		}
 		if _, err := q.ExecContext(ctx,
-			`INSERT INTO disc (album_id, disc_index, title) VALUES (?, ?, ?)`, id, i, title,
+			`INSERT INTO disc (album_id, disc_index, title, track_count) VALUES (?, ?, ?, ?)`, id, i, title, count,
 		); err != nil {
 			return "", err
 		}
@@ -172,6 +179,12 @@ type Disc struct {
 // them.  The album's own modseq is the caller's to change.
 //
 // The track ids must exist, and appear only once in discs.
+//
+// Positions are track numbers, and discs carries no gaps, so each disc's
+// tracks are numbered from 1 in the order given, closing any gap the
+// album had; each disc keeps the declared track count of the disc that
+// had its index.  Until Album/set can express gaps (#40), that's the most
+// it can say.  -- claude, 2026-11-01
 func SetDiscs(ctx context.Context, q Queryer, albumID string, discs []Disc) error {
 	var joining []string
 	for _, d := range discs {
@@ -214,19 +227,37 @@ func SetDiscs(ctx context.Context, q Queryer, albumID string, discs []Disc) erro
 	); err != nil {
 		return err
 	}
+	counts := map[int]*int{}
+	crows, err := q.QueryContext(ctx, `SELECT disc_index, track_count FROM disc WHERE album_id = ?`, albumID)
+	if err != nil {
+		return err
+	}
+	for crows.Next() {
+		var di int
+		var count *int
+		if err := crows.Scan(&di, &count); err != nil {
+			crows.Close()
+			return err
+		}
+		counts[di] = count
+	}
+	crows.Close()
+	if err := crows.Err(); err != nil {
+		return err
+	}
 	if _, err := q.ExecContext(ctx, `DELETE FROM disc WHERE album_id = ?`, albumID); err != nil {
 		return err
 	}
 	after := map[string]string{}
 	for di, d := range discs {
 		if _, err := q.ExecContext(ctx,
-			`INSERT INTO disc (album_id, disc_index, title) VALUES (?, ?, ?)`, albumID, di, d.Title,
+			`INSERT INTO disc (album_id, disc_index, title, track_count) VALUES (?, ?, ?, ?)`, albumID, di, d.Title, counts[di],
 		); err != nil {
 			return err
 		}
 		for pos, id := range d.TrackIDs {
 			if _, err := q.ExecContext(ctx,
-				`UPDATE track SET album_id = ?, disc_index = ?, position = ? WHERE id = ?`, albumID, di, pos, id,
+				`UPDATE track SET album_id = ?, disc_index = ?, position = ? WHERE id = ?`, albumID, di, pos+1, id,
 			); err != nil {
 				return err
 			}

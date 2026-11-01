@@ -111,6 +111,14 @@ CREATE INDEX playlist_modseq ON playlist (modseq);
 CREATE INDEX playlist_track_track ON playlist_track (track_id);
 CREATE INDEX tombstone_modseq ON tombstone (type, modseq);
 `,
+
+	// A track's position is its track number on its disc, so a number
+	// nothing has is a missing track, and a disc records how many tracks
+	// its tags or the catalog say it has, so missing tracks at its end can
+	// be seen too.  NULL is a disc with no declared total.  (#40)
+	`
+ALTER TABLE disc ADD COLUMN track_count INTEGER;
+`,
 }
 
 func dsn(path string, readOnly bool) string {
