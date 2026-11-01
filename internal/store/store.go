@@ -33,7 +33,13 @@ const (
 	TypePlaylist = "Playlist"
 )
 
-const schema = `
+// migrations is applied in order, and PRAGMA user_version records how many
+// have run.  Never edit an entry once it has been applied to a database worth
+// keeping; append a new one.  The first is the schema as it stood before
+// versioning began, so a database made then counts as version 1.
+// -- claude, 2026-11-01
+var migrations = []string{
+	`
 CREATE TABLE meta (
   name  TEXT NOT NULL PRIMARY KEY,
   value TEXT NOT NULL
@@ -104,7 +110,8 @@ CREATE INDEX track_album     ON track (album_id, disc_index, position);
 CREATE INDEX playlist_modseq ON playlist (modseq);
 CREATE INDEX playlist_track_track ON playlist_track (track_id);
 CREATE INDEX tombstone_modseq ON tombstone (type, modseq);
-`
+`,
+}
 
 func dsn(path string, readOnly bool) string {
 	q := "_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)&_txlock=immediate"
@@ -132,7 +139,7 @@ func Create(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("%s already holds a database", path)
 	}
-	if _, err := db.Exec(schema); err != nil {
+	if err := migrate(db); err != nil {
 		db.Close()
 		return nil, err
 	}
@@ -161,7 +168,63 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("%s is not a Juke database: %w", path, err)
 	}
+	if err := migrate(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
 	return s, nil
+}
+
+// SchemaVersion is how many of the migrations have been applied.
+func SchemaVersion(ctx context.Context, q Queryer) (int, error) {
+	var v int
+	err := q.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&v)
+	return v, err
+}
+
+// migrate applies the migrations the database hasn't had yet, each in its
+// own transaction with the version that records it.  A database with a meta
+// table and no version predates versioning, and has the first migration's
+// schema already.
+func migrate(db *sql.DB) error {
+	ctx := context.Background()
+	version, err := SchemaVersion(ctx, db)
+	if err != nil {
+		return fmt.Errorf("reading schema version: %w", err)
+	}
+	if version == 0 {
+		var n int
+		if err := db.QueryRow(`SELECT count(*) FROM sqlite_master WHERE name = 'meta'`).Scan(&n); err != nil {
+			return err
+		}
+		if n > 0 {
+			if _, err := db.Exec(`PRAGMA user_version = 1`); err != nil {
+				return err
+			}
+			version = 1
+		}
+	}
+	if version > len(migrations) {
+		return fmt.Errorf("schema version %d is newer than this build knows (%d)", version, len(migrations))
+	}
+	for i := version; i < len(migrations); i++ {
+		tx, err := db.Begin()
+		if err != nil {
+			return err
+		}
+		if _, err := tx.Exec(migrations[i]); err != nil {
+			tx.Rollback()
+			return fmt.Errorf("applying schema migration %d: %w", i+1, err)
+		}
+		if _, err := tx.Exec(fmt.Sprintf(`PRAGMA user_version = %d`, i+1)); err != nil {
+			tx.Rollback()
+			return err
+		}
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Close closes the database.
