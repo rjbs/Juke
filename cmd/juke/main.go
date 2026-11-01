@@ -2,6 +2,7 @@
 //
 //	juke import --library DIR --catalog FILE --out FILE [--include NAME ...]
 //	juke serve  --db FILE --library DIR [--listen ADDR]
+//	            [--tailnet NAME --tailnet-state DIR --allow LOGIN ...]
 package main
 
 import (
