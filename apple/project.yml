@@ -50,9 +50,11 @@ targets:
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
         LSApplicationCategoryType: public.app-category.music
-        # The server speaks plain HTTP on the tailnet for now.
+        # The server speaks HTTPS on the tailnet.  Plain HTTP is allowed only
+        # to the local network: the scratch server and the tests use
+        # localhost.  -- claude, 2026-11-01
         NSAppTransportSecurity:
-          NSAllowsArbitraryLoads: true
+          NSAllowsLocalNetworking: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: systems.semiotic.juke
