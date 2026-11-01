@@ -289,12 +289,21 @@ function trackTable(list, cols = {}) {
           ? h("a", { href: `#album/${album.id}` }, album.title)
           : h("span", { class: "none" }, "no album")),
         h("td", {}, stars(t)),
-        h("td", { class: "num" }, t.playCount || ""),
-        h("td", { class: "date hide-narrow" }, day(t.lastPlayed)),
+        h("td", { class: "num plays" }, t.playCount || ""),
+        h("td", { class: "date last-played hide-narrow" }, day(t.lastPlayed)),
         cols.added && h("td", { class: "date hide-narrow" }, day(t.dateAdded)),
       );
     })),
   );
+}
+
+// showPlays updates the play count and last-played date in every row
+// showing the given track, after a play has been recorded.
+function showPlays(t) {
+  document.querySelectorAll(`tr[data-track="${t.id}"]`).forEach(tr => {
+    tr.querySelector("td.plays").textContent = t.playCount || "";
+    tr.querySelector("td.last-played").textContent = day(t.lastPlayed);
+  });
 }
 
 // ---- Views ----
@@ -473,7 +482,7 @@ async function renderPlaylist(id) {
 
 // The player plays a queue of track ids.  A track that plays to its end
 // counts as played: its play count goes up and its last-played date is
-// set, on the server.
+// set, on the server and then in any rows showing it.
 const player = (() => {
   const audio = document.getElementById("audio");
   let queue = [], index = -1;
@@ -517,6 +526,7 @@ const player = (() => {
     if (t) {
       try {
         await updateTrack(t.id, { playCount: (t.playCount || 0) + 1, lastPlayed: new Date().toISOString().replace(/\.\d+Z$/, "Z") });
+        showPlays(t);
       } catch (e) {
         status(`couldn't record the play: ${e.message}`);
       }
