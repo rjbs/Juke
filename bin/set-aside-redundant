@@ -1,0 +1,236 @@
+#!/usr/bin/env perl
+use v5.36;
+
+use DBI;
+use Digest::SHA;
+use Encode qw(decode encode);
+use File::Path qw(make_path);
+use Getopt::Long::Descriptive;
+
+=head1 NAME
+
+set-aside-redundant - move Damaged's superseded copies into Redundant
+
+=head1 SYNOPSIS
+
+  set-aside-redundant --db catalog.sqlite --library /Volumes/Video/library --dry-run
+
+=head1 DESCRIPTION
+
+Some of Damaged is superseded: partial copies of albums that jcap's library
+had whole, and a few files replaced by jcap's copy.  The plan recorded them
+with these reasons:
+
+  partial copy; whole album from jcap
+  replaced by jcap's copy, which is filed under its own name
+
+They must not be imported into Juke, where each would be an incomplete
+duplicate of an album it already has.  This program renames each of them
+from C<Damaged/> to the same path under C<Redundant/>.
+
+C<move_log> keeps saying where every file is: each moved file's C<dest> is
+updated to its new place.  The step itself is recorded in a new table,
+C<relocation_log>, with the old and new paths and the file's SHA-256, so it
+can be reversed.  (C<move_log> holds one row per file, so a second move
+can't simply be another row there.)
+
+Before moving anything, every source is checked: it must exist and be the
+size the inventory recorded, and its destination must not already exist.
+Each file is hashed before its rename and again after, and the run stops
+if the two differ.  Directories left empty under C<Damaged/> are removed.
+
+With C<--dry-run> the checks run and the moves are printed, but nothing
+changes.  With C<--undo>, every move in C<relocation_log> is reversed and
+its row removed.  No file is ever deleted.
+
+=cut
+
+binmode STDOUT, q{:encoding(UTF-8)};
+
+my ($opt, $usage) = describe_options(
+  '%c %o',
+  [ 'db=s',      'the SQLite catalog, with its move_plan and move_log', { required => 1 } ],
+  [ 'library=s', 'the library root, holding Damaged',                   { required => 1 } ],
+  [],
+  [ 'dry-run',   'check and print, but move nothing' ],
+  [ 'undo',      'reverse every logged relocation instead' ],
+  [ 'help',      'print usage and exit', { shortcircuit => 1 } ],
+);
+
+print($usage->text), exit if $opt->help;
+
+my $root = $opt->library =~ s{/+\z}{}r;
+-d "$root/Damaged" or die "no Damaged under $root\n";
+
+my $dbh = DBI->connect(
+  "dbi:SQLite:dbname=" . $opt->db, undef, undef,
+  { RaiseError => 1, sqlite_unicode => 1 },
+);
+
+$dbh->do(<<~'SQL');
+  CREATE TABLE IF NOT EXISTS relocation_log (
+    file_id  INTEGER NOT NULL PRIMARY KEY REFERENCES file (file_id),
+    src      TEXT    NOT NULL,
+    dest     TEXT    NOT NULL,
+    sha256   TEXT    NOT NULL,
+    reason   TEXT    NOT NULL,
+    moved_at INTEGER NOT NULL
+  )
+  SQL
+
+undo(), exit if $opt->undo;
+
+my $moves = $dbh->selectall_arrayref(<<~'SQL', { Slice => {} }, "$root/Damaged/%");
+  SELECT f.file_id, f.size, l.dest AS src, p.reason
+  FROM move_plan p
+  JOIN file f     ON f.file_id = p.file_id
+  JOIN move_log l ON l.file_id = p.file_id
+  LEFT JOIN relocation_log r ON r.file_id = p.file_id
+  WHERE p.action = 'move'
+    AND p.reason IN (
+      'partial copy; whole album from jcap',
+      'replaced by jcap''s copy, which is filed under its own name'
+    )
+    AND l.dest LIKE ?
+    AND r.file_id IS NULL
+  ORDER BY l.dest
+  SQL
+
+for my $move (@$moves) {
+  $move->{dest} = $move->{src} =~ s{\A\Q$root\E/Damaged/}{$root/Redundant/}r;
+}
+
+#---- check everything first ----------------------------------------------
+
+my @problems;
+for my $move (@$moves) {
+  my ($src, $dest) = map {; encode('UTF-8', $_) } @$move{qw(src dest)};
+  if (! -e $src) {
+    push @problems, "$move->{src}: source missing";
+  } elsif (-s $src != $move->{size}) {
+    push @problems, "$move->{src}: size changed since inventory";
+  }
+  push @problems, "$move->{dest}: destination exists" if -e $dest;
+}
+
+if (@problems) {
+  say STDERR $_ for @problems;
+  die sprintf "%d problems; nothing moved\n", scalar @problems;
+}
+
+printf STDERR "%d moves to make%s\n", scalar @$moves, ($opt->dry_run ? ' (dry run)' : '');
+
+#---- then move ----------------------------------------------------------
+
+my $log = $dbh->prepare(<<~'SQL');
+  INSERT INTO relocation_log (file_id, src, dest, sha256, reason, moved_at)
+  VALUES (?, ?, ?, ?, ?, ?)
+  SQL
+my $relog = $dbh->prepare('UPDATE move_log SET dest = ? WHERE file_id = ?');
+
+my $done = 0;
+for my $move (@$moves) {
+  if ($opt->dry_run) {
+    say "$move->{src}\n  -> $move->{dest}";
+    $done++;
+    next;
+  }
+
+  my ($src, $dest) = map {; encode('UTF-8', $_) } @$move{qw(src dest)};
+  my $before = sha256_of($src);
+
+  my ($dest_dir) = $dest =~ m{\A(.*)/};
+  make_path($dest_dir) unless -d $dest_dir;
+  rename $src, $dest or die "rename failed for $move->{src}: $!\n";
+
+  my $after = sha256_of($dest);
+  die "$move->{dest}: hash changed in the move ($before, now $after); stopping\n"
+    unless $after eq $before;
+
+  $dbh->begin_work;
+  $log->execute($move->{file_id}, $move->{src}, $move->{dest}, $before, $move->{reason}, time);
+  $relog->execute($move->{dest}, $move->{file_id});
+  $dbh->commit;
+  $done++;
+}
+
+printf STDERR "%d %s\n", $done, ($opt->dry_run ? 'would move' : 'moved');
+remove_empty_dirs("$root/Damaged") unless $opt->dry_run;
+
+=head1 ROUTINES
+
+=head2 undo
+
+Reverses the moves in C<relocation_log>, checking each file's hash.
+
+=cut
+
+sub undo {
+  my $moves = $dbh->selectall_arrayref(
+    'SELECT file_id, src, dest, sha256 FROM relocation_log ORDER BY file_id',
+    { Slice => {} },
+  );
+
+  my @problems;
+  for my $move (@$moves) {
+    push @problems, "$move->{dest}: not there to move back"   if ! -e encode('UTF-8', $move->{dest});
+    push @problems, "$move->{src}: original path is occupied" if   -e encode('UTF-8', $move->{src});
+  }
+  if (@problems) {
+    say STDERR $_ for @problems;
+    die sprintf "%d problems; nothing moved\n", scalar @problems;
+  }
+
+  printf STDERR "%d moves to undo%s\n", scalar @$moves, ($opt->dry_run ? ' (dry run)' : '');
+
+  my $unlog = $dbh->prepare('DELETE FROM relocation_log WHERE file_id = ?');
+  my $relog = $dbh->prepare('UPDATE move_log SET dest = ? WHERE file_id = ?');
+
+  for my $move (@$moves) {
+    if ($opt->dry_run) {
+      say "$move->{dest}\n  <- $move->{src}";
+      next;
+    }
+
+    my ($src, $dest) = map {; encode('UTF-8', $_) } @$move{qw(src dest)};
+    my ($src_dir) = $src =~ m{\A(.*)/};
+    make_path($src_dir) unless -d $src_dir;
+    rename $dest, $src or die "rename back failed for $move->{dest}: $!\n";
+
+    my $hash = sha256_of($src);
+    die "$move->{src}: hash changed in the move back; stopping\n" unless $hash eq $move->{sha256};
+
+    $dbh->begin_work;
+    $unlog->execute($move->{file_id});
+    $relog->execute($move->{src}, $move->{file_id});
+    $dbh->commit;
+  }
+
+  remove_empty_dirs("$root/Redundant") unless $opt->dry_run;
+  return;
+}
+
+sub sha256_of ($path) {
+  return Digest::SHA->new(256)->addfile($path, 'b')->hexdigest;
+}
+
+# Removes directories under $dir that hold nothing, deepest first, and
+# $dir itself if it ends up empty.  Files are never touched; a directory
+# with even a .DS_Store in it stays. -- claude, 2026-11-01
+sub remove_empty_dirs ($dir) {
+  opendir my $dh, $dir or return;
+  my @entries = grep {; $_ ne '.' && $_ ne '..' } readdir $dh;
+  closedir $dh;
+
+  for my $entry (@entries) {
+    my $path = "$dir/$entry";
+    remove_empty_dirs($path) if -d $path && ! -l $path;
+  }
+
+  opendir $dh, $dir or return;
+  my $remaining = grep {; $_ ne '.' && $_ ne '..' } readdir $dh;
+  closedir $dh;
+
+  rmdir $dir if $remaining == 0;
+  return;
+}
