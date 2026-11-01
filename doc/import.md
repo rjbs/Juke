@@ -72,10 +72,18 @@ its results.
 
 ## Damaged albums
 
-The first real import takes `Undamaged` only.  The sample includes two
-damaged albums so the prototype can import them too.  Each lost track
+The import takes `Undamaged` and `Damaged` by default.  Each lost track
 becomes a gap: a Track with no `blobId`, built from the 2014 catalog's
-entry, holding its place on the album.
+entry, holding its place on the album.  An album with a gap, or with a
+missing track, is incomplete (#40), and incomplete albums are for smart
+playlists to leave out, not for the import to.
+
+Damaged was kept out at first, so the library would hold only albums
+that could be played through.  Once albums could say whether they were
+complete, that stopped being a reason (#41).  What does stay out is
+`Redundant`: Damaged's partial copies of albums jcap had whole, moved
+there by `bin/set-aside-redundant` so they don't sit beside the whole
+album as incomplete duplicates.
 
 ## Original tags
 

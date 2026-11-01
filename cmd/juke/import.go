@@ -14,7 +14,7 @@ func runImport(ctx context.Context, args []string) error {
 	var opts importer.Options
 	var include listFlag
 	fs.StringVar(&opts.Library, "library", "", "the library tree, holding Undamaged and so on")
-	fs.Var(&include, "include", "a top-level directory of the library to import; repeatable (default Undamaged)")
+	fs.Var(&include, "include", "a top-level directory of the library to import; repeatable (default Undamaged and Damaged)")
 	fs.StringVar(&opts.Catalog, "catalog", "", "the recovery's catalog database")
 	fs.StringVar(&opts.CatalogRoot, "catalog-root", "/Volumes/Video/library", "the library root as the catalog's move_log recorded it")
 	fs.StringVar(&opts.Playlists, "playlists", "", "a JSON file of extra playlists")
@@ -23,7 +23,7 @@ func runImport(ctx context.Context, args []string) error {
 
 	opts.Include = include
 	if len(opts.Include) == 0 {
-		opts.Include = []string{"Undamaged"}
+		opts.Include = []string{"Undamaged", "Damaged"}
 	}
 	opts.Log = os.Stderr
 
