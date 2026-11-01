@@ -154,3 +154,13 @@ to the catalog's spelling, or left as found where the catalog had none,
 and `move_log`, `move_plan` and the inventory rows rewritten to match, so
 every logged move again names the exact path on disk.  The planner should
 still fold case when naming directories (loose thread 2026-10-14-k4zwgt).  Next is reviewing Damaged.
+
+On 2026-11-01 the superseded part of Damaged was set aside: the 186
+files planned as `partial copy; whole album from jcap` and the 3
+`replaced by jcap's copy`, all of them partial copies of albums the
+library has whole.  `bin/set-aside-redundant` renamed them to the same
+paths under a fifth root, `Redundant`, hashing each before and after;
+`move_log.dest` was updated to say where each now is, and the new
+`relocation_log` table records the step, so `--undo` reverses it.  The
+rest of Damaged is imported into Juke beside Undamaged, its lost tracks
+as gaps (#41).
