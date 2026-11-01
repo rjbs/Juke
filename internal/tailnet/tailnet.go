@@ -168,6 +168,9 @@ func reportWhileStarting(ctx context.Context, lc *local.Client, logger *log.Logg
 				}
 				continue
 			}
+			if st.BackendState == "Running" {
+				continue
+			}
 			logger.Printf("tailscale node not yet running: state %s, health %v, login URL %q",
 				st.BackendState, st.Health, st.AuthURL)
 		}
