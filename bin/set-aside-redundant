@@ -37,7 +37,11 @@ can't simply be another row there.)
 Before moving anything, every source is checked: it must exist and be the
 size the inventory recorded, and its destination must not already exist.
 Each file is hashed before its rename and again after, and the run stops
-if the two differ.  Directories left empty under C<Damaged/> are removed.
+if the two differ.  Directories left empty under C<Damaged/> or
+C<Undamaged/> are removed.
+
+With C<--file-id>, the named files are set aside instead, from Undamaged or
+Damaged, for the C<--reason> given.
 
 With C<--dry-run> the checks run and the moves are printed, but nothing
 changes.  With C<--undo>, every move in C<relocation_log> is reversed and
@@ -51,6 +55,9 @@ my ($opt, $usage) = describe_options(
   '%c %o',
   [ 'db=s',      'the SQLite catalog, with its move_plan and move_log', { required => 1 } ],
   [ 'library=s', 'the library root, holding Damaged',                   { required => 1 } ],
+  [],
+  [ 'file-id=i@', 'set aside these files, by catalog file id, instead of the planned ones' ],
+  [ 'reason=s',   'with --file-id, why they are redundant' ],
   [],
   [ 'dry-run',   'check and print, but move nothing' ],
   [ 'undo',      'reverse every logged relocation instead' ],
@@ -80,7 +87,9 @@ $dbh->do(<<~'SQL');
 
 undo(), exit if $opt->undo;
 
-my $moves = $dbh->selectall_arrayref(<<~'SQL', { Slice => {} }, "$root/Damaged/%");
+die "--file-id needs a --reason\n" if $opt->file_id && ! $opt->reason;
+
+my $moves = $opt->file_id ? named_moves() : $dbh->selectall_arrayref(<<~'SQL', { Slice => {} }, "$root/Damaged/%");
   SELECT f.file_id, f.size, l.dest AS src, p.reason
   FROM move_plan p
   JOIN file f     ON f.file_id = p.file_id
@@ -97,7 +106,7 @@ my $moves = $dbh->selectall_arrayref(<<~'SQL', { Slice => {} }, "$root/Damaged/%
   SQL
 
 for my $move (@$moves) {
-  $move->{dest} = $move->{src} =~ s{\A\Q$root\E/Damaged/}{$root/Redundant/}r;
+  $move->{dest} = $move->{src} =~ s{\A\Q$root\E/(?:Undamaged|Damaged)/}{$root/Redundant/}r;
 }
 
 #---- check everything first ----------------------------------------------
@@ -155,9 +164,34 @@ for my $move (@$moves) {
 }
 
 printf STDERR "%d %s\n", $done, ($opt->dry_run ? 'would move' : 'moved');
-remove_empty_dirs("$root/Damaged") unless $opt->dry_run;
+remove_empty_dirs("$root/$_") for grep {; ! $opt->dry_run } qw(Damaged Undamaged);
 
 =head1 ROUTINES
+
+=head2 named_moves
+
+The moves for C<--file-id>: each file's current place, from C<move_log>.
+
+=cut
+
+sub named_moves {
+  my @ids = @{ $opt->file_id };
+  my $moves = $dbh->selectall_arrayref(
+    sprintf(<<~'SQL', join q{, }, (q{?}) x @ids),
+      SELECT f.file_id, f.size, l.dest AS src
+      FROM move_log l
+      JOIN file f ON f.file_id = l.file_id
+      LEFT JOIN relocation_log r ON r.file_id = l.file_id
+      WHERE l.file_id IN (%s) AND r.file_id IS NULL
+      ORDER BY l.dest
+      SQL
+    { Slice => {} },
+    @ids,
+  );
+  $_->{reason} = $opt->reason for @$moves;
+  return $moves;
+}
+
 
 =head2 undo
 
