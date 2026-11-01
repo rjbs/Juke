@@ -1,0 +1,39 @@
+# The Juke server, as it runs on the Linux host.  Install as
+# /etc/systemd/system/juke.service, then:
+#
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now juke
+#   journalctl -u juke -f
+#
+# The first start logs a login URL; visit it to authorize the node, then
+# turn off key expiry for it in the tailnet's admin console.  The node's
+# state is in /srv/juke/tailnet and must never be copied to another
+# machine.  The plain listener on localhost has no authentication; it's
+# for things on this host, like backups.  -- claude, 2026-11-01
+
+[Unit]
+Description=Juke music server
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+User=juke
+Group=juke
+ExecStart=/home/juke/bin/juke serve \
+  --db /srv/juke/juke.sqlite \
+  --library /srv/juke \
+  --listen localhost:8737 \
+  --tailnet juke \
+  --tailnet-state /srv/juke/tailnet \
+  --allow rjbs@github
+Restart=on-failure
+RestartSec=5
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/srv/juke
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target
