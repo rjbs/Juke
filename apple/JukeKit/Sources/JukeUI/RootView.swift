@@ -4,7 +4,7 @@ import SwiftUI
 /// The whole app: connects to the server named in settings, then shows the
 /// library.  Both the iOS and macOS apps are this view in a window.
 public struct JukeRootView: View {
-  @AppStorage("serverURL") private var serverURL = "http://localhost:8737"
+  @AppStorage("serverURL") private var serverURL = "https://juke.tail0324d.ts.net"
   @State private var library: Library?
   @State private var player: Player?
   @State private var openFailure: String?
@@ -63,7 +63,7 @@ struct SettingsView: View {
   var body: some View {
     NavigationStack {
       Form {
-        TextField("Server", text: $draft, prompt: Text("http://localhost:8737"))
+        TextField("Server", text: $draft, prompt: Text("https://juke.tail0324d.ts.net"))
           .autocorrectionDisabled()
           #if os(iOS)
           .textInputAutocapitalization(.never)
