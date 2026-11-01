@@ -88,6 +88,7 @@ type catalogTrack struct {
 	AlbumArtist sql.NullString
 	Album       sql.NullString
 	TrackNumber sql.NullInt64
+	TrackCount  sql.NullInt64
 	DiscNumber  sql.NullInt64
 	Rating      sql.NullInt64
 	PlayCount   sql.NullInt64
@@ -98,14 +99,14 @@ type catalogTrack struct {
 
 const catalogTrackColumns = `
 	t.track_id, t.name, t.artist, t.album_artist, t.album,
-	t.track_number, t.disc_number, t.rating, t.play_count,
+	t.track_number, t.track_count, t.disc_number, t.rating, t.play_count,
 	t.play_date, t.date_added, ta.album_id`
 
 func scanCatalogTrack(rows interface{ Scan(...any) error }) (catalogTrack, error) {
 	var c catalogTrack
 	err := rows.Scan(
 		&c.ID, &c.Name, &c.Artist, &c.AlbumArtist, &c.Album,
-		&c.TrackNumber, &c.DiscNumber, &c.Rating, &c.PlayCount,
+		&c.TrackNumber, &c.TrackCount, &c.DiscNumber, &c.Rating, &c.PlayCount,
 		&c.PlayDate, &c.DateAdded, &c.AlbumID,
 	)
 	c.Artist.String = artistName(c.Artist.String)
@@ -161,6 +162,7 @@ type audioFile struct {
 	albumArtist  string
 	album        string
 	trackNumber  int
+	trackCount   int
 	discNumber   int
 
 	// fromName is set when neither the tags nor the catalog give a title,
@@ -415,7 +417,7 @@ func (im *run) readFile(ctx context.Context, p, rel, contentType string) (*audio
 		f.artist = artistName(m.Artist())
 		f.albumArtist = albumArtistName(m.AlbumArtist())
 		f.album = strings.TrimSpace(m.Album())
-		f.trackNumber, _ = m.Track()
+		f.trackNumber, f.trackCount = m.Track()
 		f.discNumber, _ = m.Disc()
 	}
 
@@ -574,6 +576,7 @@ func (im *run) importDir(ctx context.Context, dir string, files []*audioFile) er
 		gap   *catalogTrack
 		disc  int
 		track int
+		count int
 		name  string
 	}
 	var entries []entry
@@ -586,7 +589,11 @@ func (im *run) importDir(ctx context.Context, dir string, files []*audioFile) er
 		if track <= 0 && f.catalog != nil && f.catalog.TrackNumber.Valid {
 			track = int(f.catalog.TrackNumber.Int64)
 		}
-		entries = append(entries, entry{file: f, disc: max(disc, 1), track: max(track, 0), name: f.name})
+		count := f.trackCount
+		if count <= 0 && f.catalog != nil {
+			count = int(f.catalog.TrackCount.Int64)
+		}
+		entries = append(entries, entry{file: f, disc: max(disc, 1), track: max(track, 0), count: count, name: f.name})
 	}
 	for i := range gaps {
 		g := &gaps[i]
@@ -594,6 +601,7 @@ func (im *run) importDir(ctx context.Context, dir string, files []*audioFile) er
 			gap:   g,
 			disc:  max(int(g.DiscNumber.Int64), 1),
 			track: max(int(g.TrackNumber.Int64), 0),
+			count: int(g.TrackCount.Int64),
 			name:  g.Name.String,
 		})
 	}
@@ -620,11 +628,23 @@ func (im *run) importDir(ctx context.Context, dir string, files []*audioFile) er
 
 	discIndex := map[int]int{}
 	var discs []int
+	var numbers, counts [][]int
 	for _, e := range entries {
 		if _, ok := discIndex[e.disc]; !ok {
 			discIndex[e.disc] = len(discs)
 			discs = append(discs, e.disc)
+			numbers = append(numbers, nil)
+			counts = append(counts, nil)
 		}
+		di := discIndex[e.disc]
+		numbers[di] = append(numbers[di], e.track)
+		counts[di] = append(counts[di], e.count)
+	}
+	positions := make([][]int, len(discs))
+	trackCounts := make([]*int, len(discs))
+	for di := range discs {
+		positions[di] = trackPositions(numbers[di])
+		trackCounts[di] = declaredCount(counts[di])
 	}
 	// discs were met in sorted order, so their indexes follow disc order.
 
@@ -634,20 +654,21 @@ func (im *run) importDir(ctx context.Context, dir string, files []*audioFile) er
 		albumArtist = *artist
 	}
 	albumID, err := store.InsertAlbum(ctx, im.tx, store.NewAlbum{
-		Title:      title,
-		Artist:     artist,
-		DiscTitles: make([]*string, len(discs)),
+		Title:           title,
+		Artist:          artist,
+		DiscTitles:      make([]*string, len(discs)),
+		DiscTrackCounts: trackCounts,
 	})
 	if err != nil {
 		return err
 	}
 	im.report.Albums++
 
-	positions := map[int]int{}
+	placed := map[int]int{}
 	for _, e := range entries {
 		di := discIndex[e.disc]
-		pos := positions[di]
-		positions[di]++
+		pos := positions[di][placed[di]]
+		placed[di]++
 		if e.file != nil {
 			if _, err := im.insertFile(ctx, dir, e.file, albumArtist, &albumID, &di, &pos); err != nil {
 				return err
@@ -983,4 +1004,51 @@ func (im *run) resolveEntry(e playlistEntry) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("no track %q in %s", e.Title, e.Album)
+}
+
+// trackPositions gives the tracks of one disc their positions, which are
+// track numbers.  numbers holds each track's number, 0 for none, in the
+// order the tracks sort in.  A track keeps its number unless an earlier
+// track has it; the tracks with no number, or whose number was taken, go
+// after the highest number, in order.  A number nothing has is a missing
+// track, and is left empty. -- claude, 2026-11-01
+func trackPositions(numbers []int) []int {
+	positions := make([]int, len(numbers))
+	taken := map[int]bool{}
+	highest := 0
+	for i, n := range numbers {
+		if n > 0 && !taken[n] {
+			taken[n] = true
+			positions[i] = n
+			highest = max(highest, n)
+		}
+	}
+	for i := range numbers {
+		if positions[i] == 0 {
+			highest++
+			positions[i] = highest
+		}
+	}
+	return positions
+}
+
+// declaredCount is a disc's declared number of tracks: the total its
+// tracks most often give, ignoring those that give none, or nil if none
+// do.  Ties go to the larger total.
+func declaredCount(counts []int) *int {
+	votes := map[int]int{}
+	best := 0
+	for _, c := range counts {
+		if c <= 0 {
+			continue
+		}
+		votes[c]++
+		if votes[c] > votes[best] || (votes[c] == votes[best] && c > best) {
+			best = c
+		}
+	}
+	if best == 0 {
+		return nil
+	}
+	return &best
 }
