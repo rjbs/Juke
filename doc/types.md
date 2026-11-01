@@ -61,6 +61,11 @@ A data type, not an object type: no id, no `/get` of its own.
 Track has no number properties, so nothing can disagree with the album.
 The tags written into served files are computed from this.
 
+(The server now stores each track's real number, and a missing track is a
+number nothing has, but `trackIds` still lists only the tracks there are,
+so a place in it is the true track number only on an album with no
+missing tracks.  Null slots for missing tracks are the rest of #40.)
+
 **Album owns membership.**  A track appears on at most one album, at most
 once.  Changing an album's discs updates `albumId` on every track that
 joined or left it, in the same transaction, so those tracks appear in the

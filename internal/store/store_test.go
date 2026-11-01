@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -87,27 +88,36 @@ func TestCreateRefusesExisting(t *testing.T) {
 	}
 }
 
-// checkOpenMigrates makes a database, sets its schema version to from (0
-// for a database made before versioning), and opens it with the extra
-// migrations appended to the real ones.  It checks the version Open leaves
-// it at, or that Open fails.
+// checkOpenMigrates makes a database as it stood after the first from
+// migrations (0: made before versioning, with the first migration's
+// schema and no version), and opens it with the extra migrations
+// appended to the real ones.  It checks the version Open leaves it at, or
+// that Open fails.
 func checkOpenMigrates(t *testing.T, from int, extra []string, want int, wantErr bool) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "juke.sqlite")
-	s, err := Create(path)
+	db, err := sql.Open("sqlite", dsn(path, false))
 	if err != nil {
-		t.Fatalf("Create: %v", err)
-	}
-	if _, err := s.DB.Exec(fmt.Sprintf(`PRAGMA user_version = %d`, from)); err != nil {
 		t.Fatal(err)
 	}
-	s.Close()
+	for _, m := range migrations[:min(max(from, 1), len(migrations))] {
+		if _, err := db.Exec(m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := db.Exec(`INSERT INTO meta (name, value) VALUES ('epoch', 'e'), ('modseq', '0')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(fmt.Sprintf(`PRAGMA user_version = %d`, from)); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
 
 	saved := migrations
 	migrations = append(append([]string{}, saved...), extra...)
 	defer func() { migrations = saved }()
 
-	s, err = Open(path)
+	s, err := Open(path)
 	if wantErr {
 		if err == nil {
 			s.Close()
@@ -129,15 +139,17 @@ func checkOpenMigrates(t *testing.T, from int, extra []string, want int, wantErr
 }
 
 func TestMigrations(t *testing.T) {
+	now := len(migrations)
 	newTable := []string{`CREATE TABLE later (x INTEGER)`}
 	broken := []string{`CREATE TABLE later (x INTEGER)`, `NOT SQL`}
 
-	checkOpenMigrates(t, 1, nil, 1, false)
-	checkOpenMigrates(t, 0, nil, 1, false)
-	checkOpenMigrates(t, 1, newTable, 2, false)
-	checkOpenMigrates(t, 0, newTable, 2, false)
-	checkOpenMigrates(t, 1, broken, 0, true)
-	checkOpenMigrates(t, 2, nil, 0, true)
+	checkOpenMigrates(t, now, nil, now, false)
+	checkOpenMigrates(t, 0, nil, now, false)
+	checkOpenMigrates(t, 1, nil, now, false)
+	checkOpenMigrates(t, now, newTable, now+1, false)
+	checkOpenMigrates(t, 0, newTable, now+1, false)
+	checkOpenMigrates(t, now, broken, 0, true)
+	checkOpenMigrates(t, now+1, nil, 0, true)
 }
 
 func TestCreateIsCurrent(t *testing.T) {
@@ -149,4 +161,51 @@ func TestCreateIsCurrent(t *testing.T) {
 	if got != len(migrations) {
 		t.Errorf("a new database is at version %d, want %d", got, len(migrations))
 	}
+}
+
+// checkSetDiscs makes an album of one disc declared to have count tracks,
+// sets its disc to the given number of new tracks, and checks the tracks'
+// positions and the count the disc keeps.
+func checkSetDiscs(t *testing.T, count, tracks int, wantPositions []int) {
+	t.Helper()
+	ctx := context.Background()
+	s := newStore(t)
+	albumID, err := InsertAlbum(ctx, s.DB, NewAlbum{Title: "A", DiscTitles: []*string{nil}, DiscTrackCounts: []*int{&count}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ids []string
+	for range tracks {
+		id, err := InsertTrack(ctx, s.DB, NewTrack{Title: "T", DateAdded: "2014-01-01T00:00:00Z"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, id)
+	}
+	if err := SetDiscs(ctx, s.DB, albumID, []Disc{{TrackIDs: ids}}); err != nil {
+		t.Fatal(err)
+	}
+	var got []int
+	for _, id := range ids {
+		var pos int
+		if err := s.DB.QueryRow(`SELECT position FROM track WHERE id = ?`, id).Scan(&pos); err != nil {
+			t.Fatal(err)
+		}
+		got = append(got, pos)
+	}
+	if fmt.Sprint(got) != fmt.Sprint(wantPositions) {
+		t.Errorf("positions %v, want %v", got, wantPositions)
+	}
+	var kept int
+	if err := s.DB.QueryRow(`SELECT track_count FROM disc WHERE album_id = ?`, albumID).Scan(&kept); err != nil {
+		t.Fatal(err)
+	}
+	if kept != count {
+		t.Errorf("disc keeps %d tracks declared, want %d", kept, count)
+	}
+}
+
+func TestSetDiscsNumbersFromOne(t *testing.T) {
+	checkSetDiscs(t, 12, 3, []int{1, 2, 3})
+	checkSetDiscs(t, 2, 2, []int{1, 2})
 }
