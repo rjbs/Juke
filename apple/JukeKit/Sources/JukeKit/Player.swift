@@ -43,6 +43,10 @@ public final class Player {
 
   @ObservationIgnored private var statusObserver: NSKeyValueObservation?
   @ObservationIgnored private var timeObserver: Any?
+  /// Seeks asked for but not yet done.  Until they are, the player still
+  /// reports the old time, which shouldn't drag `elapsed` back after a
+  /// seek has set it.  -- claude, 2026-11-02
+  @ObservationIgnored private var seeksInFlight = 0
   @ObservationIgnored private let log = Logger(subsystem: "systems.semiotic.juke", category: "player")
 
   public init(library: Library) {
@@ -53,7 +57,10 @@ public final class Player {
     setUpRemoteCommands()
     timeObserver = player.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.25, preferredTimescale: 600), queue: .main) {
       [weak self] time in
-      MainActor.assumeIsolated { self?.elapsed = time.seconds.isFinite ? time.seconds : 0 }
+      MainActor.assumeIsolated {
+        guard let self, self.seeksInFlight == 0 else { return }
+        self.elapsed = time.seconds.isFinite ? time.seconds : 0
+      }
     }
   }
 
@@ -62,8 +69,13 @@ public final class Player {
     guard current != nil else { return }
     let target = max(0, min(seconds, duration ?? seconds))
     elapsed = target
+    seeksInFlight += 1
     player.seek(to: CMTime(seconds: target, preferredTimescale: 600)) { [weak self] _ in
-      Task { @MainActor in self?.updateNowPlaying() }
+      Task { @MainActor in
+        guard let self else { return }
+        self.seeksInFlight -= 1
+        self.updateNowPlaying()
+      }
     }
   }
 
