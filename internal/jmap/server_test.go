@@ -52,6 +52,8 @@ func TestTrackQueryFilters(t *testing.T) {
 	checkQuery(t, f, map[string]any{"hasGenre": false}, nil, "Trigger Happy", "Brave Sir Robin")
 	checkQuery(t, f, map[string]any{"hasAlbum": false}, nil, "Brave Sir Robin")
 	checkQuery(t, f, map[string]any{"hasArtist": false}, nil)
+	checkQuery(t, f, map[string]any{"durationAtMost": 170}, nil, "Trigger Happy", "We Will Rock You", "Whip It")
+	checkQuery(t, f, map[string]any{"durationAtLeast": 300}, nil, "Bohemian Rhapsody", "Brave Sir Robin")
 	checkQuery(t, f, map[string]any{"inPlaylist": f.ids["Brave Sir Robin"]}, nil)
 
 	checkQuery(t, f, map[string]any{"operator": "AND", "conditions": []any{
@@ -96,6 +98,13 @@ func TestTrackQuerySorts(t *testing.T) {
 	unratedLast := map[string]any{"operator": "OR", "conditions": []any{queen, map[string]any{"artist": "Devo"}}}
 	checkQuery(t, f, unratedLast, by("rating", true), "Bohemian Rhapsody", "We Will Rock You", "Whip It")
 	checkQuery(t, f, unratedLast, by("rating", false), "We Will Rock You", "Bohemian Rhapsody", "Whip It")
+
+	// Never played sorts as oldest, so ascending starts with it; a track
+	// of unknown length sorts last either way.
+	checkQuery(t, f, albumless, by("lastPlayed", true), "Trigger Happy", "Lost Track", "Smells Like Nirvana")
+	checkQuery(t, f, albumless, by("lastPlayed", false), "Smells Like Nirvana", "Lost Track", "Trigger Happy")
+	checkQuery(t, f, albumless, by("duration", true), "Trigger Happy", "Smells Like Nirvana", "Lost Track")
+	checkQuery(t, f, albumless, by("duration", false), "Smells Like Nirvana", "Trigger Happy", "Lost Track")
 
 	// A genre sort folds case and puts the genre-less last; title breaks
 	// the ties within a genre.

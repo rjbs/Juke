@@ -137,13 +137,17 @@ func (s *Server) compileCondition(name string, raw json.RawMessage) (string, []a
 		}
 		op := map[string]string{"ratingAtLeast": ">=", "ratingAtMost": "<="}[name]
 		return "t.rating " + op + " ?", []any{v}, nil
-	case "playCountAtLeast", "playCountAtMost":
+	case "playCountAtLeast", "playCountAtMost", "durationAtLeast", "durationAtMost":
 		v, ok := num()
 		if !ok || v < 0 || v != float64(int64(v)) {
 			return bad("a non-negative integer")
 		}
-		op := map[string]string{"playCountAtLeast": ">=", "playCountAtMost": "<="}[name]
-		return "t.play_count " + op + " ?", []any{int64(v)}, nil
+		col := map[string]string{"playCountAtLeast": "t.play_count", "playCountAtMost": "t.play_count", "durationAtLeast": "t.duration", "durationAtMost": "t.duration"}[name]
+		op := ">="
+		if strings.HasSuffix(name, "AtMost") {
+			op = "<="
+		}
+		return col + " " + op + " ?", []any{int64(v)}, nil
 	case "hasRating":
 		v, ok := boolean()
 		if !ok {
@@ -199,7 +203,11 @@ var trackSortColumns = map[string][]string{
 	"genre":      {"juke_fold(t.genre)"},
 	"rating":     {"t.rating"},
 	"playCount":  {"t.play_count"},
-	"lastPlayed": {"t.last_played"},
+	"duration":   {"t.duration"},
+	// Never played counts as played before anything, so ascending is
+	// "least recently played" and starts with the never-played; see
+	// doc/types.md. -- claude, 2026-11-01
+	"lastPlayed": {"coalesce(t.last_played, '')"},
 	"albumOrder": {"juke_fold(a.title)", "t.album_id", "t.disc_index", "t.position"},
 }
 

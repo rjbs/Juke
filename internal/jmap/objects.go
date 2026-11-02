@@ -31,7 +31,7 @@ func (s *Server) objectTypes() []*objectType {
 			table: "track",
 			properties: []string{
 				"id", "title", "artist", "genre", "albumId", "rating", "blobId", "blobType",
-				"playCount", "lastPlayed", "dateAdded",
+				"size", "duration", "playCount", "lastPlayed", "dateAdded",
 			},
 			load:  loadTracks,
 			query: queryTracks,
@@ -231,7 +231,7 @@ func nullString(v sql.NullString) any {
 func loadTracks(ctx context.Context, q store.Queryer, ids []string) (map[string]object, []string, error) {
 	where, args := inClause("id", ids)
 	rows, err := q.QueryContext(ctx, `
-		SELECT id, title, artist, genre, album_id, rating, blob_id, content_type, play_count, last_played, date_added
+		SELECT id, title, artist, genre, album_id, rating, blob_id, content_type, size, duration, play_count, last_played, date_added
 		FROM track`+where+` ORDER BY id`, args...)
 	if err != nil {
 		return nil, nil, err
@@ -243,8 +243,9 @@ func loadTracks(ctx context.Context, q store.Queryer, ids []string) (map[string]
 		var id, title, dateAdded string
 		var artist, genre, albumID, blobID, blobType, lastPlayed sql.NullString
 		var rating sql.NullFloat64
+		var size, duration sql.NullInt64
 		var playCount int64
-		if err := rows.Scan(&id, &title, &artist, &genre, &albumID, &rating, &blobID, &blobType, &playCount, &lastPlayed, &dateAdded); err != nil {
+		if err := rows.Scan(&id, &title, &artist, &genre, &albumID, &rating, &blobID, &blobType, &size, &duration, &playCount, &lastPlayed, &dateAdded); err != nil {
 			return nil, nil, err
 		}
 		obj := object{
@@ -256,12 +257,20 @@ func loadTracks(ctx context.Context, q store.Queryer, ids []string) (map[string]
 			"rating":     nil,
 			"blobId":     nullString(blobID),
 			"blobType":   nullString(blobType),
+			"size":       nil,
+			"duration":   nil,
 			"playCount":  playCount,
 			"lastPlayed": nullString(lastPlayed),
 			"dateAdded":  dateAdded,
 		}
 		if rating.Valid {
 			obj["rating"] = rating.Float64
+		}
+		if size.Valid {
+			obj["size"] = size.Int64
+		}
+		if duration.Valid {
+			obj["duration"] = duration.Int64
 		}
 		out[id] = obj
 		order = append(order, id)

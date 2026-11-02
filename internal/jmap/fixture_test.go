@@ -37,6 +37,7 @@ type fixtureTrack struct {
 	title      string
 	artist     string
 	genre      string  // "" for none
+	duration   int64   // seconds; 0 for unknown
 	rating     float64 // 0 for none
 	playCount  int64
 	lastPlayed string // "" for never
@@ -73,20 +74,20 @@ func newFixture(t *testing.T, cfg Config) *fixture {
 	}
 
 	addAlbum("Off the Deep End", "Weird Al Yankovic", []fixtureTrack{
-		{title: "Smells Like Nirvana", artist: "Weird Al Yankovic", genre: "Comedy", rating: 4, playCount: 10, lastPlayed: "2014-06-10T08:00:00Z", file: "smells.mp3", content: "SMELLS-LIKE-NIRVANA-AUDIO"},
+		{title: "Smells Like Nirvana", artist: "Weird Al Yankovic", genre: "Comedy", duration: 218, rating: 4, playCount: 10, lastPlayed: "2014-06-10T08:00:00Z", file: "smells.mp3", content: "SMELLS-LIKE-NIRVANA-AUDIO"},
 		{title: "Lost Track", artist: "Weird Al Yankovic", genre: "Comedy", rating: 3, playCount: 2, lastPlayed: "2010-01-01T00:00:00Z"},
-		{title: "Trigger Happy", artist: "Weird Al Yankovic", rating: 2.5, file: "trigger.mp3", content: "TRIGGER-HAPPY"},
+		{title: "Trigger Happy", artist: "Weird Al Yankovic", duration: 170, rating: 2.5, file: "trigger.mp3", content: "TRIGGER-HAPPY"},
 	})
 	addAlbum("Live Killers", "Queen",
-		[]fixtureTrack{{title: "We Will Rock You", artist: "Queen", genre: "Rock", rating: 5, playCount: 4, file: "rock.m4a", content: "ROCK"}},
-		[]fixtureTrack{{title: "Bohemian Rhapsody", artist: "Queen", genre: "Rock", rating: 4.5, playCount: 4, file: "rhapsody.m4a", content: "RHAPSODY"}},
+		[]fixtureTrack{{title: "We Will Rock You", artist: "Queen", genre: "Rock", duration: 122, rating: 5, playCount: 4, file: "rock.m4a", content: "ROCK"}},
+		[]fixtureTrack{{title: "Bohemian Rhapsody", artist: "Queen", genre: "Rock", duration: 355, rating: 4.5, playCount: 4, file: "rhapsody.m4a", content: "RHAPSODY"}},
 	)
 	addAlbum("We Are Not Devo", "", []fixtureTrack{
-		{title: "Whip It", artist: "Devo", genre: "New Wave", playCount: 1, file: "whip.mp3", content: "WHIP"},
+		{title: "Whip It", artist: "Devo", genre: "New Wave", duration: 160, playCount: 1, file: "whip.mp3", content: "WHIP"},
 		{title: "Jocko Homo", artist: "Björk", genre: "New Wave", file: "jocko.mp3", content: "JOCKO"},
 	})
 	f.addTrack(nil, nil, nil, fixtureTrack{
-		title: "Brave Sir Robin", artist: "Monty Python", playCount: 7, lastPlayed: "2014-06-14T20:00:00Z",
+		title: "Brave Sir Robin", artist: "Monty Python", duration: 300, playCount: 7, lastPlayed: "2014-06-14T20:00:00Z",
 		file: "robin.mp3", content: "BRAVE-SIR-ROBIN",
 	})
 	if _, err := store.InsertPlaylist(ctx, s.DB, "Mix", []string{
@@ -112,6 +113,9 @@ func (f *fixture) addTrack(albumID *string, disc, pos *int, tr fixtureTrack) {
 	}
 	if tr.genre != "" {
 		nt.Genre = &tr.genre
+	}
+	if tr.duration != 0 {
+		nt.Duration = &tr.duration
 	}
 	if tr.rating != 0 {
 		nt.Rating = &tr.rating
