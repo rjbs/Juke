@@ -7,11 +7,15 @@ struct NowPlayingView: View {
   let player: Player
   @Environment(\.dismiss) private var dismiss
 
-  /// While the seek bar is dragged, where it's been dragged to.  The
-  /// times follow the drag, but playback moves only on release, so
-  /// scrubbing doesn't stutter through the audio.
-  @State private var scrubbing: Double?
-  @State private var dragging = false
+  /// The seek bar's drag.  The times follow the drag; playback moves when
+  /// it's released, or has rested a moment, so scrubbing doesn't stutter
+  /// through the audio.
+  @State private var scrubber: Scrubber
+
+  init(player: Player) {
+    self.player = player
+    _scrubber = State(initialValue: Scrubber { player.seek(to: $0) })
+  }
 
   var body: some View {
     NavigationStack {
@@ -92,28 +96,13 @@ struct NowPlayingView: View {
 
   private var seekBar: some View {
     let duration = player.duration ?? 0
-    let shown = scrubbing ?? min(player.elapsed, duration)
+    let shown = scrubber.target ?? min(player.elapsed, duration)
     return VStack(spacing: 2) {
       Slider(
-        value: Binding(
-          get: { shown },
-          set: { value in
-            // A drag seeks on release; any other change, such as from
-            // VoiceOver or a test, seeks at once.
-            if dragging {
-              scrubbing = value
-            } else {
-              player.seek(to: value)
-            }
-          }
-        ),
+        value: Binding(get: { shown }, set: { scrubber.moved(to: $0) }),
         in: 0...max(duration, 1)
       ) { editing in
-        dragging = editing
-        if !editing, let target = scrubbing {
-          player.seek(to: target)
-          scrubbing = nil
-        }
+        if !editing { scrubber.released() }
       }
       .disabled(player.duration == nil)
       .accessibilityIdentifier("nowPlaying.seek")
