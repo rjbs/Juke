@@ -108,6 +108,71 @@ public struct Playlist: Identifiable, Hashable, Sendable {
   }
 }
 
+/// A smart playlist: a saved search, as doc/playlists.md describes.  It
+/// has no track list of its own; the library runs its rule as a Jinx
+/// query subscription and keeps what the server answers.  Rules are
+/// read here, never written.
+public struct SmartPlaylist: Identifiable, Hashable, Sendable {
+  public var key: LocalKey
+  public var id: String
+  public var title: String
+  /// The rule, as `Track/query` takes it; nil matches every track.
+  public var filter: JSONValue?
+  public var sort: [JSONValue]
+  public var limit: Int?
+  public var limitBytes: Int?
+  public var limitSeconds: Int?
+
+  public init?(_ object: SyncedObject) {
+    self.init(key: object.key, id: object.id, value: object.value)
+  }
+
+  public init?(key: LocalKey, id: String?, value v: JSONValue) {
+    guard let id, let title = v["title"]?.stringValue else { return nil }
+    self.key = key
+    self.id = id
+    self.title = title
+    self.filter = v["filter"].flatMap { $0 == .null ? nil : $0 }
+    self.sort = v["sort"]?.arrayValue ?? []
+    self.limit = v["limit"]?.intValue
+    self.limitBytes = v["limitBytes"]?.intValue
+    self.limitSeconds = v["limitSeconds"]?.intValue
+  }
+
+  static let subscriptionPrefix = "smart:"
+
+  /// The id of the subscription that runs this playlist's rule.
+  public var subscriptionId: String { Self.subscriptionPrefix + id }
+
+  /// The playlist id a subscription id names, if it is one of these.
+  static func playlistId(ofSubscription id: String) -> String? {
+    id.hasPrefix(subscriptionPrefix) ? String(id.dropFirst(subscriptionPrefix.count)) : nil
+  }
+
+  /// The rule as a query subscription: the filter, sort and caps as the
+  /// server stores them.  The rule is copied rather than named through
+  /// `inSmartPlaylist`, so that any change to it redefines the
+  /// subscription and the engine runs it afresh.  -- claude, 2026-11-02
+  func subscription(accountId: String) -> QuerySubscription {
+    var arguments: [String: JSONValue] = [:]
+    if let limitBytes { arguments["limitBytes"] = .number(Double(limitBytes)) }
+    if let limitSeconds { arguments["limitSeconds"] = .number(Double(limitSeconds)) }
+    return QuerySubscription(
+      id: subscriptionId, accountId: accountId, type: "Track",
+      filter: filter, sort: sort, limit: limit, arguments: arguments
+    )
+  }
+}
+
+/// What the server last answered for a smart playlist's rule.
+public struct SmartPlaylistResult: Hashable, Sendable {
+  /// The matching tracks, in the rule's order.
+  public var trackIds: [String]
+  /// How many tracks the rule matched in all.  More than `trackIds`
+  /// holds when the server capped its answer at one page.
+  public var total: Int?
+}
+
 func parseUTCDate(_ s: String) -> Date? {
   try? Date(s, strategy: .iso8601)
 }

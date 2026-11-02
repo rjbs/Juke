@@ -260,3 +260,81 @@ func pushedChanges() async throws {
   try await writer.setRating(rating, on: track)
   try await eventually("the rating on the other device") { reader.tracks[track.id]?.rating == rating }
 }
+
+// jmap sends one method call straight to the test server, outside the
+// library: how a test makes and destroys smart playlists, which the app
+// only reads.  Returns the response's arguments.
+@MainActor
+func jmap(_ method: String, _ arguments: [String: Any]) async throws -> [String: Any] {
+  let server = try #require(testServer)
+  let (sessionData, _) = try await URLSession.shared.data(from: server.appending(path: ".well-known/jmap"))
+  let session = try #require(try JSONSerialization.jsonObject(with: sessionData) as? [String: Any])
+  let accountId = try #require((session["primaryAccounts"] as? [String: Any])?[jukeCapability] as? String)
+  let apiUrl = try #require((session["apiUrl"] as? String).flatMap(URL.init(string:)))
+  var request = URLRequest(url: apiUrl)
+  request.httpMethod = "POST"
+  request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+  var args = arguments
+  args["accountId"] = accountId
+  request.httpBody = try JSONSerialization.data(withJSONObject: [
+    "using": ["urn:ietf:params:jmap:core", jukeCapability],
+    "methodCalls": [[method, args, "0"]],
+  ])
+  let (data, _) = try await URLSession.shared.data(for: request)
+  let body = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+  let first = try #require((body["methodResponses"] as? [[Any]])?.first)
+  #expect(first[0] as? String == method, "\(first)")
+  return try #require(first[1] as? [String: Any])
+}
+
+// A smart playlist on the server appears in the library with the tracks
+// its rule matches, in the rule's order; a change to the rule changes
+// the list with no track having moved; it can be kept offline; and it
+// goes when destroyed.
+@Test(.enabled(if: testServer != nil))
+@MainActor
+func smartPlaylists() async throws {
+  let library = try await openLibrary()
+  defer { library.stop() }
+  let found = library.albumList.first { (2...8).contains(library.tracks(of: $0).joined().filter(\.isPlayable).count) }
+  let album = try #require(found)
+  let title = "JukeKit smart \(UUID())"
+  let created = try await jmap("SmartPlaylist/set", ["create": ["s": [
+    "title": title,
+    "filter": ["operator": "AND", "conditions": [["hasAudio": true], ["albumTitle": album.title]]],
+    "sort": [["property": "title"]],
+  ]]])
+  let id = try #require(((created["created"] as? [String: Any])?["s"] as? [String: Any])?["id"] as? String)
+
+  try await eventually("the smart playlist in the index") { library.smartPlaylists.contains { $0.id == id } }
+  let playlist = try #require(library.smartPlaylists.first { $0.id == id })
+  #expect(playlist.title == title)
+  // The rule matches by title, and a title can belong to more than one
+  // album, as "Greatest Hits" does.
+  let sameTitle = library.albumList.filter { $0.title.lowercased() == album.title.lowercased() }
+  let expected = Set(sameTitle.flatMap { library.tracks(of: $0).joined() }.filter(\.isPlayable).map(\.id))
+  try await eventually("its tracks") { Set(library.tracks(of: playlist).map(\.id)) == expected }
+  let titles = library.tracks(of: playlist).map { $0.title.lowercased() }
+  #expect(titles == titles.sorted(), "not in title order: \(titles)")
+
+  _ = try await jmap("SmartPlaylist/set", ["update": [id: ["limit": 2]]])
+  try await eventually("the cap applied") { library.tracks(of: playlist).count == 2 }
+
+  library.offline.keep(playlist, true)
+  #expect(library.offline.isKept(playlist))
+  let kept = library.tracks(of: playlist)
+  try await eventually("its audio downloaded") {
+    let p = library.offline.progress(of: kept)
+    return p.present == p.wanted
+  }
+  try await checkPinned(library, kept, true)
+  library.offline.keep(playlist, false)
+  try await eventually("its audio released") {
+    for blob in kept.compactMap(\.blobId) where try await library.blobs.status(blob)?.isPinned == true { return false }
+    return true
+  }
+
+  _ = try await jmap("SmartPlaylist/set", ["destroy": [id]])
+  try await eventually("gone from the index") { !library.smartPlaylists.contains { $0.id == id } }
+  #expect(try await library.engine.subscriptions().allSatisfy { $0.id != playlist.subscriptionId })
+}

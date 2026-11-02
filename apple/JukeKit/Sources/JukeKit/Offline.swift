@@ -1,19 +1,22 @@
 import Foundation
 import Observation
 
-/// What this device keeps available offline: albums and playlists, whose
-/// tracks' audio is downloaded and pinned out of the cache's reach.
+/// What this device keeps available offline: albums and playlists of
+/// both kinds, whose tracks' audio is downloaded and pinned out of the
+/// cache's reach.
 ///
 /// The choice is the device's own and never reaches the server.  It is
 /// kept as album and playlist ids; the audio wanted follows from them
 /// through the library, so a playlist that gains a track gains a
-/// download, and a track whose audio is replaced has its new audio
-/// fetched and its old audio released.  Released audio is unpinned, not
+/// download, a smart playlist whose rule now matches other tracks
+/// fetches those and releases the rest, and a track whose audio is
+/// replaced has its new audio fetched and its old audio released.  Released audio is unpinned, not
 /// deleted: it stays in the cache until the cache needs the room.
 @MainActor @Observable
 public final class Offline {
   public private(set) var albumIds: Set<String> = []
   public private(set) var playlistIds: Set<String> = []
+  public private(set) var smartPlaylistIds: Set<String> = []
 
   /// Audio wanted on the device, and how much of it is here.
   public private(set) var wanted = 0
@@ -39,6 +42,8 @@ public final class Offline {
   struct Saved: Codable {
     var albums: [String] = []
     var playlists: [String] = []
+    /// Optional, since a file from before smart playlists has no such key.
+    var smartPlaylists: [String]?
     var pinned: [String] = []
   }
 
@@ -48,6 +53,7 @@ public final class Offline {
     if let data = try? Data(contentsOf: file), let saved = try? JSONDecoder().decode(Saved.self, from: data) {
       albumIds = Set(saved.albums)
       playlistIds = Set(saved.playlists)
+      smartPlaylistIds = Set(saved.smartPlaylists ?? [])
       pinned = Set(saved.pinned)
     }
   }
@@ -56,6 +62,7 @@ public final class Offline {
 
   public func isKept(_ album: Album) -> Bool { albumIds.contains(album.id) }
   public func isKept(_ playlist: Playlist) -> Bool { playlist.serverId.map(playlistIds.contains) ?? false }
+  public func isKept(_ playlist: SmartPlaylist) -> Bool { smartPlaylistIds.contains(playlist.id) }
 
   public func keep(_ album: Album, _ keep: Bool) {
     if keep { albumIds.insert(album.id) } else { albumIds.remove(album.id) }
@@ -68,6 +75,12 @@ public final class Offline {
     // disabled for it.  -- claude, 2026-10-25
     guard let id = playlist.serverId else { return }
     if keep { playlistIds.insert(id) } else { playlistIds.remove(id) }
+    save()
+    reconcile()
+  }
+
+  public func keep(_ playlist: SmartPlaylist, _ keep: Bool) {
+    if keep { smartPlaylistIds.insert(playlist.id) } else { smartPlaylistIds.remove(playlist.id) }
     save()
     reconcile()
   }
@@ -91,7 +104,9 @@ public final class Offline {
     let albums = albumIds.compactMap { library.albums[$0] }
       .sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
     let playlists = library.playlists.filter(isKept)
-    for tracks in albums.map({ library.tracks(of: $0).flatMap(\.self) }) + playlists.map({ library.tracks(of: $0) }) {
+    let smartPlaylists = library.smartPlaylists.filter(isKept)
+    for tracks in albums.map({ library.tracks(of: $0).flatMap(\.self) }) + playlists.map({ library.tracks(of: $0) })
+      + smartPlaylists.map({ library.tracks(of: $0) }) {
       for track in tracks {
         guard let blob = track.blobId else { continue }
         if let type = track.blobType { types[blob] = type }
@@ -161,7 +176,7 @@ public final class Offline {
   }
 
   private func save() {
-    let saved = Saved(albums: albumIds.sorted(), playlists: playlistIds.sorted(), pinned: pinned.sorted())
+    let saved = Saved(albums: albumIds.sorted(), playlists: playlistIds.sorted(), smartPlaylists: smartPlaylistIds.sorted(), pinned: pinned.sorted())
     try? JSONEncoder().encode(saved).write(to: file, options: .atomic)
   }
 }

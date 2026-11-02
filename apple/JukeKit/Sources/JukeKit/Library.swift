@@ -21,8 +21,10 @@ public enum LibraryError: Error, LocalizedError {
 }
 
 /// The music library: a Jinx mirror of the server's Tracks, Albums and
-/// Playlists, kept in sync in the background, with an in-memory index of
-/// all of them for the views.
+/// Playlists of both kinds, kept in sync in the background, with an
+/// in-memory index of all of them for the views.  Each smart playlist's
+/// rule runs as a query subscription, so its tracks are the server's
+/// latest answer while online and the last one while not.
 ///
 /// The index is built once from the store after the first sync, then
 /// kept current from Jinx's change stream, so a sync that changes three
@@ -49,19 +51,26 @@ public final class Library {
   public private(set) var trackRevision = 0
   /// Playlists by title.
   public private(set) var playlists: [Playlist] = []
+  /// Smart playlists by title.
+  public private(set) var smartPlaylists: [SmartPlaylist] = []
+  /// Each smart playlist's last result, by playlist id.  A playlist
+  /// whose rule has never run has none.
+  public private(set) var smartResults: [String: SmartPlaylistResult] = [:]
   /// The last sync failure, if the most recent sync failed.
   public private(set) var syncFailure: String?
 
   @ObservationIgnored let engine: SyncEngine<GRDBSyncStore>
   @ObservationIgnored let blobs: BlobStore<GRDBSyncStore>
+  @ObservationIgnored let accountId: String
   /// What this device keeps available offline.
   @ObservationIgnored public private(set) var offline: Offline!
   @ObservationIgnored private var ids: [LocalKey: String] = [:]
   @ObservationIgnored private var tasks: [Task<Void, Never>] = []
 
-  init(engine: SyncEngine<GRDBSyncStore>, blobs: BlobStore<GRDBSyncStore>, directory: URL) {
+  init(engine: SyncEngine<GRDBSyncStore>, blobs: BlobStore<GRDBSyncStore>, accountId: String, directory: URL) {
     self.engine = engine
     self.blobs = blobs
+    self.accountId = accountId
     self.offline = Offline(library: self, file: directory.appending(path: "offline.json"))
   }
 
@@ -89,6 +98,7 @@ public final class Library {
           TypeDescriptor(name: "Track", capability: jukeCapability, blobProperties: ["blobId"]),
           TypeDescriptor(name: "Album", capability: jukeCapability, syncAfter: ["Track"]),
           TypeDescriptor(name: "Playlist", capability: jukeCapability, syncAfter: ["Track"]),
+          TypeDescriptor(name: "SmartPlaylist", capability: jukeCapability, syncAfter: ["Track", "Playlist"]),
         ]
       ),
       transport: transport,
@@ -101,7 +111,7 @@ public final class Library {
     // Earlier versions linked audio here under names with extensions;
     // Jinx now names its files that way itself.  -- claude, 2026-10-25
     try? FileManager.default.removeItem(at: directory.appending(path: "playable"))
-    return Library(engine: engine, blobs: blobs, directory: directory)
+    return Library(engine: engine, blobs: blobs, accountId: accountId, directory: directory)
   }
 
   private static func account(from transport: JMAPClient, rememberedIn file: URL) async throws -> String {
@@ -214,6 +224,12 @@ public final class Library {
 
   public func tracks(of playlist: Playlist) -> [Track] {
     playlist.trackIds.compactMap { tracks[$0] }
+  }
+
+  /// A smart playlist's tracks as the server last answered, in the
+  /// rule's order; none until its rule has run once.
+  public func tracks(of playlist: SmartPlaylist) -> [Track] {
+    (smartResults[playlist.id]?.trackIds ?? []).compactMap { tracks[$0] }
   }
 
   // MARK: - Writing
@@ -336,13 +352,43 @@ public final class Library {
     for object in try await engine.objects(type: "Playlist") {
       if let p = Playlist(object) { playlists.append(p) }
     }
+    var smartPlaylists: [SmartPlaylist] = []
+    for object in try await engine.objects(type: "SmartPlaylist") {
+      if let s = SmartPlaylist(object) { smartPlaylists.append(s) }
+    }
     self.tracks = tracks
     trackRevision += 1
     self.albums = albums
     self.playlists = playlists
+    self.smartPlaylists = smartPlaylists
     sortAlbums()
     sortPlaylists()
+    try await declareSubscriptions()
+    for playlist in smartPlaylists { try await loadResult(of: playlist.subscriptionId) }
     offline.reconcile()
+  }
+
+  /// Keeps one query subscription per smart playlist: declares each
+  /// one's rule, which costs nothing for a rule already declared, and
+  /// drops the subscriptions of playlists that are gone.
+  private func declareSubscriptions() async throws {
+    let wanted = Set(smartPlaylists.map(\.subscriptionId))
+    for playlist in smartPlaylists {
+      try await engine.subscribe(playlist.subscription(accountId: accountId))
+    }
+    for subscription in try await engine.subscriptions() where !wanted.contains(subscription.id) {
+      guard let id = SmartPlaylist.playlistId(ofSubscription: subscription.id) else { continue }
+      try await engine.unsubscribe(subscription.id)
+      smartResults[id] = nil
+    }
+  }
+
+  /// Reads a smart playlist's result from its subscription, if it has
+  /// run.
+  private func loadResult(of subscriptionId: String) async throws {
+    guard let id = SmartPlaylist.playlistId(ofSubscription: subscriptionId),
+          let result = try await engine.result(of: subscriptionId) else { return }
+    smartResults[id] = SmartPlaylistResult(trackIds: result.ids, total: result.total)
   }
 
   private func apply(_ changeSet: ChangeSet) async throws {
@@ -364,9 +410,23 @@ public final class Library {
         for k in changes.destroyed { byKey[k] = nil }
         playlists = Array(byKey.values)
         sortPlaylists()
+      case "SmartPlaylist":
+        var byKey = Dictionary(uniqueKeysWithValues: smartPlaylists.map { ($0.key, $0) })
+        for o in objects { if let s = SmartPlaylist(o) { byKey[s.key] = s } }
+        for k in changes.destroyed { byKey[k] = nil }
+        smartPlaylists = Array(byKey.values)
+        sortPlaylists()
+        try await declareSubscriptions()
+        // A rule that names another smart playlist is unchanged when
+        // that one's rule changes, and no track has moved either, so
+        // the engine wouldn't run it again on its own.  -- claude, 2026-11-02
+        try await engine.refreshSubscriptions(of: "Track")
       default:
         break
       }
+    }
+    for id in changeSet.subscriptions {
+      try await loadResult(of: id)
     }
     offline.reconcile()
   }
@@ -383,5 +443,6 @@ public final class Library {
 
   private func sortPlaylists() {
     playlists.sort { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
+    smartPlaylists.sort { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
   }
 }
