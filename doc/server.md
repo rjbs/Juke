@@ -99,5 +99,4 @@ outside it, such as an import.
 - `/queryChanges` always answers `cannotCalculateChanges`.
 - Uploads are refused.
 - Metadata flush and artwork.
-- Authoring smart playlists anywhere but over raw JMAP, and showing
-  them in the Apple client.
+- Authoring smart playlists anywhere but `bin/recreate-smart-playlists`.

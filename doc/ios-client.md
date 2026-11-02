@@ -28,3 +28,10 @@ plus a streaming cache, built in two phases with downloads first.
 - **Sync loop:** Track `/changes` first, then playlists, then the smart
   playlists' queries; apply blobId changes by refetching.  See
   [playlists](playlists.md) for why that order matters.
+- **Smart playlists are read-only in the app.**  Each one's rule is a
+  Jinx query subscription, so its tracks are the server's latest answer
+  while online and the last answer while not.  Keeping one offline
+  pins whatever its result holds, following the result as it changes.
+  The app shows one page of a result, the server's query limit, and
+  says so when the rule matched more; the lists one plays are capped
+  well under that.
