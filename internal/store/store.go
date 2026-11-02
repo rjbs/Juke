@@ -13,6 +13,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/base32"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strconv"
@@ -158,6 +159,23 @@ CREATE TABLE smart_playlist_ref (
   PRIMARY KEY (smart_playlist_id, ref_type, ref_id)
 );
 CREATE INDEX smart_playlist_ref_target ON smart_playlist_ref (ref_type, ref_id);
+`,
+
+	// An image of album art, stored once under the library by content
+	// hash and served as a blob.  An album names its image, and a track
+	// names one only when its own picture differs from its album's;
+	// see doc/artwork.md.  (#3)
+	`
+CREATE TABLE artwork (
+  id      TEXT    NOT NULL PRIMARY KEY,
+  sha256  TEXT    NOT NULL UNIQUE,
+  mime    TEXT    NOT NULL,
+  size    INTEGER NOT NULL,
+  width   INTEGER,
+  height  INTEGER
+);
+ALTER TABLE album ADD COLUMN artwork_id TEXT REFERENCES artwork (id);
+ALTER TABLE track ADD COLUMN artwork_id TEXT REFERENCES artwork (id);
 `,
 }
 
@@ -383,4 +401,14 @@ func NewID(prefix string) (string, error) {
 func BlobID(trackID string, metadataVersion int, recipe string) string {
 	sum := sha256.Sum256([]byte(fmt.Sprintf("%s\x00%d\x00%s", trackID, metadataVersion, recipe)))
 	return "G" + idEncoding.EncodeToString(sum[:15])
+}
+
+// ArtworkID is the blob id of an image with this SHA-256, so the same
+// picture stored from any file lands on the same id.
+func ArtworkID(sha256Hex string) string {
+	sum, err := hex.DecodeString(sha256Hex)
+	if err != nil || len(sum) != 32 {
+		panic("ArtworkID: not a SHA-256 hex digest: " + sha256Hex)
+	}
+	return "A" + idEncoding.EncodeToString(sum[:15])
 }
