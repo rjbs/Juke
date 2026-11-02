@@ -1,33 +1,87 @@
 # Playlists
 
-A smart playlist is a reified `Track/query`: a stored filter and sort,
-evaluated on the server whenever it's needed.  Its rule language is exactly
-whatever `Track/query` can filter on, so there's no separate rule engine to
-build.
+A smart playlist is a saved search: a stored `Track/query`, filter and
+sort and limits, with a title.  Its rule language is exactly whatever
+`Track/query` can filter on, so there's no separate rule engine to build.
+Nothing on the server computes its tracks ahead of time.  A client runs
+the query when it wants the list, and the server answers from the live
+library.
 
-- **Plain playlists** are the degenerate case: an explicit list of track ids
-  instead of a filter.
-- **Server-side evaluation** keeps every client in agreement without
-  reimplementing date-relative rules and sort-and-limit per platform.
-  Client-side evaluation would only help offline, which isn't worth the cost.
-- **Lazy evaluation with a cache.**  A smart playlist's track list is
-  computed when needed and cached.  Its inputs are Track and Album state,
-  so the cache holds until either changes.  Every play changes Track state,
-  so recomputation must be quick, which a SQL query over the library is.
-- **Report real changes only.**  When an input changes, the server
-  recomputes and compares with the cached list, and bumps the playlist's
-  modseq only if the list differs.  Otherwise every play would make every
-  client refetch every smart playlist.
-- **Deterministic results.**  Sorts break ties by track id.  Random
-  selection orders tracks by a hash of the track id and a seed stored on
-  the playlist, so the selection is stable and changes only where inputs
-  change; reshuffling is an edit that sets a new seed.
+- **Two types.**  A plain playlist is a `Playlist`: an explicit list of
+  track ids the client edits.  A smart playlist is a `SmartPlaylist`,
+  which has no track list at all.  Keeping them apart means each type's
+  properties are client-set or server-set as a type, which is how JMAP
+  and the sync engine expect it; an edit to a plain playlist that changes
+  what a smart one matches is a cross-type side effect, the kind the
+  protocol already handles; and only smart playlists can reference other
+  playlists, so plain ones are leaves of that graph.
+- **A saved search, not a materialized list.**  An earlier design cached
+  each smart playlist's tracks on the server and reported a change only
+  when the list really changed.  Nothing needed that.  The client's sync
+  engine already keeps a named query subscription current while online
+  and stores its last result, which is exactly a smart playlist; and the
+  play queue is a snapshot of tracks, so a refreshed list can never move
+  the current track.  Dropping the cache drops the recompute on every
+  play, the change-reporting problem, and the same-type side effects a
+  computed list would have had.
+- **Server-side evaluation, still.**  Every client gets its list from
+  `Track/query`, so all of them agree, and nobody reimplements
+  date-relative rules or sort-and-limit per platform.  Evaluating the
+  definition against the client's local mirror would help only offline,
+  and is deliberately not done; see below for what offline gets instead.
+- **Deterministic results.**  Sorts break ties by track id.  Random order
+  is a `Track/query` sort by a hash of the track id and a seed held in
+  the comparator, so the selection is stable and changes only where its
+  inputs change.  Reshuffling is an edit that sets a new seed.
 - **Time-relative rules** like "played in the last 30 days" are a plain
   comparison against the moment of evaluation, measured in seconds.  There
   is no day boundary, so there is no question of whose midnight.
-- **No cycles.**  A rule may draw on another playlist, so playlists form a
-  graph.  `Playlist/set` rejects a change that would close a loop, so
-  evaluation can always run in dependency order.
-- **Two-phase client sync:** the client syncs all Track changes first, then
-  fetches playlists.  It never sees playlist membership computed against
-  tracks it hasn't received yet.
+- **Caps.**  A smart playlist can be limited by count, by total size, or
+  by total duration, which are what "the most played 25", "500 MB of the
+  good stuff" and "a two-hour drive" need.  A cap is applied after the
+  sort, cutting the list where the running total would pass it.
+- **Gap tracks are not excluded by magic.**  A rule that should leave out
+  tracks with no audio says `hasAudio: true`.  A client that edits rules
+  can default that on, but the server adds nothing to a rule.
+- **References.**  A rule may draw on a playlist of either kind, with
+  `inPlaylist` and `inSmartPlaylist`; a referenced smart playlist's rule
+  is compiled inline as a subquery.  `SmartPlaylist/set` compiles a rule
+  before storing it, and refuses one that won't run, that names a
+  playlist that doesn't exist, or that would close a loop.  Destroying a
+  playlist of either kind that a rule names fails with the SetError
+  `playlistInUse`.  So a stored rule always runs, and the query compiler
+  never meets a dangling reference.
+- **Big results** are paged through `Track/query` like any other, so
+  playing a smart playlist larger than one page means fetching every page
+  before enqueueing.
+
+## What a client does
+
+- **Subscribes to every smart playlist's query**, as a named subscription
+  with that playlist's filter, sort and limits.  The engine re-runs each
+  one when the Track state moves, which is after every play, so the
+  lists are always current while online.  The server's cost is one
+  id-only query per smart playlist per sync.
+- **Offline, the last result stands.**  Every smart playlist can be
+  viewed offline at its last-known contents, because the subscription
+  stores them.
+- **Keeping a smart playlist available offline** means its subscription's
+  current ids feed the set of audio to pin.  When the list changes, the
+  tracks that entered are fetched and the tracks that left are released,
+  which is already how a plain playlist behaves; released audio stays in
+  the cache until space is needed.
+- **Refreshing a visible list** is the client's choice.  A sorted list
+  can update in place.  A random, capped list is better held until the
+  view is reopened, since it is the one that visibly shuffles.
+- **Sync order** is Track, then Playlist, then SmartPlaylist: a type syncs
+  after everything it is computed from, so a client never shows a smart
+  playlist evaluated against tracks it hasn't received.
+
+## The 2014 smart playlists
+
+The 2014 library's smart playlists survive as binary blobs in the
+catalog, and `bin/decode-smart-playlists` prints them as the rules they
+were.  They are not imported; the ones worth having are recreated by
+hand.  Almost all of them hang off one list, "Regular Music", which is
+eighteen "genre is not" rules, so genre on Track came first.  Their
+"checked only" flag has no counterpart here and is dropped.

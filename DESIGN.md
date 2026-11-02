@@ -27,9 +27,9 @@ JMAP carries everything: object sync through state strings and `/changes`,
 and file transfer through the standard blob upload and download endpoints.
 Writing a JMAP server for new data types is treated as a solved problem.
 
-- **Object types:** Track, Album and Playlist, each its own JMAP type with
-  its own state.  See [object types](doc/types.md).  They live under
-  the capability `https://semiotic.systems/jmap/juke`.
+- **Object types:** Track, Album, Playlist and SmartPlaylist, each its own
+  JMAP type with its own state.  See [object types](doc/types.md).  They
+  live under the capability `https://semiotic.systems/jmap/juke`.
 - **Updates are last-write-wins** via plain `/set` updates.  Play counts,
   last played and ratings are almost always written by one device.  When two
   devices do collide, the cost is a count off by one, which isn't worth an
@@ -40,15 +40,16 @@ Writing a JMAP server for new data types is treated as a solved problem.
 
 ## The rest of the design
 
-- [Object types](doc/types.md): Track, Album and Playlist, kept small;
+- [Object types](doc/types.md): Track, Album, Playlist and SmartPlaylist,
+  kept small;
   albums have discs, and own their tracks.
 - [Server storage](doc/storage.md): immutable originals, audio-only track
   ids, and blobs synthesized on request from original audio plus current
   tags.
 - [Metadata database](doc/database.md): SQLite as the precious part, modseq
   for JMAP state, snapshot backups, and export as an escape hatch.
-- [Playlists](doc/playlists.md): smart playlists as stored `Track/query`
-  calls, evaluated on the server.
+- [Playlists](doc/playlists.md): smart playlists as saved searches, run
+  through `Track/query` whenever a client wants the list.
 - [iOS client](doc/ios-client.md): a Spotify-shaped model, pinned downloads
   first and a streaming cache later.
 - [Running the server](doc/server.md): building, importing the sample, and

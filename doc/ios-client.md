@@ -25,5 +25,6 @@ plus a streaming cache, built in two phases with downloads first.
 - **Backups:** set do-not-back-up on all audio files.
 - **Playback integration:** lock-screen and remote controls come from the
   audio session and `MPNowPlayingInfoCenter`.
-- **Sync loop:** Track `/changes` first, then playlists; apply blobId changes
-  by refetching.  See [playlists](playlists.md) for why that order matters.
+- **Sync loop:** Track `/changes` first, then playlists, then the smart
+  playlists' queries; apply blobId changes by refetching.  See
+  [playlists](playlists.md) for why that order matters.

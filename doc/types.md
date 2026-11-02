@@ -19,9 +19,12 @@ A recording on an album, usually with audio.
 | `title`      | `String`        | |
 | `artist`     | `String\|null`  | |
 | `albumId`    | `Id\|null`      | Server-set.  Follows from album membership; null for a track on no album. |
+| `genre`      | `String\|null`  | A free string, as the tags have it.  A third of the library has none. |
 | `rating`     | `Number\|null`  | 1 to 5 in steps of 0.5, or null for unrated. |
 | `blobId`     | `Id\|null`      | Server-set.  The served audio.  Null when there is no audio. |
 | `blobType`   | `String\|null`  | Server-set.  The audio's media type, such as `audio/mpeg` or `audio/mp4`.  Null when there is no audio. |
+| `size`       | `UnsignedInt\|null` | Server-set.  The served audio's size in bytes.  Null when there is no audio. |
+| `duration`   | `UnsignedInt\|null` | Server-set.  Whole seconds.  Null when unknown; a gap track keeps the catalog's figure. |
 | `playCount`  | `UnsignedInt`   | Default 0. |
 | `lastPlayed` | `UTCDate\|null` | |
 | `dateAdded`  | `UTCDate`       | When the track joined the library. |
@@ -37,6 +40,10 @@ cannot play, download or pin it.
 Every track rating in it was set by hand, none computed from an album
 rating.  566 tracks carry a half star, so the scale keeps half steps
 rather than rounding them away.
+
+**Genre** is per track because that is where the tags and the 2014
+rules have it.  An album-level genre with per-track exceptions was
+considered and isn't needed.
 
 ## Album
 
@@ -90,11 +97,35 @@ be destroyed; destroying one with tracks fails with the SetError
 
 `Playlist/set` creates, updates and destroys playlists.  Every id in
 `trackIds` must name a track.  As RFC 8620 requires, an update replaces
-`trackIds` whole; a patch can't point into it.
+`trackIds` whole; a patch can't point into it.  Destroying a playlist
+that a smart playlist's rule names fails with the SetError
+`playlistInUse`.
 
-This is the plain playlist only.  Smart playlists, stored `Track/query`
-calls (see [playlists](playlists.md)), come later and will need more
-properties.
+This is the plain playlist only.  A smart playlist is its own type.
+
+## SmartPlaylist
+
+A saved search: a title and the arguments of a `Track/query`.  It has no
+track list; a client gets the tracks by running the query.  See
+[playlists](playlists.md) for why.
+
+| Property       | Type                  | Notes |
+|----------------|-----------------------|-------|
+| `id`           | `Id`                  | Immutable, server-set. |
+| `title`        | `String`              | |
+| `filter`       | `Filter\|null`        | As `Track/query` takes it.  Null matches every track. |
+| `sort`         | `Comparator[]`        | As `Track/query` takes it.  May be empty. |
+| `limit`        | `UnsignedInt\|null`   | At most this many tracks. |
+| `limitBytes`   | `UnsignedInt\|null`   | At most this much audio, by `size`. |
+| `limitSeconds` | `UnsignedInt\|null`   | At most this much playing time, by `duration`. |
+
+`SmartPlaylist/set` compiles the filter and sort before storing them and
+refuses what `Track/query` would refuse, so a stored rule always runs.
+It also refuses a rule naming a playlist of either kind that does not
+exist, and one whose references would form a cycle.  A `random`
+comparator with no `seed` gets one from the server, which the `/set`
+response reports.  Destroying a smart playlist that another's rule names
+fails with `playlistInUse`.
 
 ## Track/query
 
@@ -109,8 +140,13 @@ defaults to.
 | `titleContains` | `String` | title contains the value |
 | `artist` | `String` | artist equals the value |
 | `artistContains` | `String` | artist contains the value |
+| `hasArtist` | `Boolean` | artist is set, or is null |
 | `albumTitle` | `String` | album's title equals the value |
 | `albumTitleContains` | `String` | album's title contains the value |
+| `hasAlbum` | `Boolean` | `albumId` is set, or is null |
+| `genre` | `String` | genre equals the value |
+| `genreContains` | `String` | genre contains the value |
+| `hasGenre` | `Boolean` | genre is set, or is null |
 | `ratingAtLeast` | `Number` | rating is at least the value |
 | `ratingAtMost` | `Number` | rating is at most the value |
 | `hasRating` | `Boolean` | rating is set, or is null |
@@ -119,42 +155,55 @@ defaults to.
 | `lastPlayedBefore` | `UTCDate` | last play was before the value |
 | `lastPlayedAfter` | `UTCDate` | last play was at or after the value |
 | `lastPlayedWithinDays` | `UnsignedInt` | last play was within that many days, to the second, of now |
+| `durationAtLeast` | `UnsignedInt` | duration is at least that many seconds |
+| `durationAtMost` | `UnsignedInt` | duration is at most that many seconds |
 | `inPlaylist` | `Id` | track is in that playlist |
+| `inSmartPlaylist` | `Id` | track matches that smart playlist's rule |
 | `hasAudio` | `Boolean` | `blobId` is set, or is null |
 
-An unrated track matches neither rating bound, and a track never played
-matches neither `lastPlayed` bound; `hasRating` and `playCountAtMost: 0`
-find those.  A track on no album never matches an album condition.
+**A condition is true or false of every track**, as RFC 8620 §5.5
+requires, so a track whose value is missing simply fails the condition,
+and `NOT` of it matches.  An unrated track matches neither rating bound
+and does match `NOT {ratingAtLeast: 3}`; a track on no album never
+matches an album condition and always matches its negation; "genre is
+not Classical" includes the tracks with no genre.  The `has…` conditions
+find the missing values directly.
 
-The last three exist for smart playlists.  A stored filter with an
-absolute date would stop moving, so "played this month" needs
-`lastPlayedWithinDays`.  `inPlaylist` lets one playlist draw on another;
-see [playlists](playlists.md) for why that graph must stay acyclic.
-`hasAudio` lets a playlist leave out gap tracks.
+`lastPlayedWithinDays` exists for smart playlists, where a stored filter
+with an absolute date would stop moving.  `inPlaylist` and
+`inSmartPlaylist` let one playlist draw on another; see
+[playlists](playlists.md) for how references are kept valid.  `hasAudio`
+lets a playlist leave out gap tracks, and nothing does so implicitly.
 
-**Sorting** is on the same properties: `title`, `artist`, `albumTitle`,
-`rating`, `playCount` and `lastPlayed`, plus `albumOrder`, which sorts by
-album title and then by disc and track position.  Nulls sort last in
-either direction.  Ties always break by track id, so a sorted, limited
-list is stable.  Random order, seeded per playlist, is a smart playlist
-feature rather than a `Track/query` sort.
+**Sorting** is on `title`, `artist`, `albumTitle`, `genre`, `rating`,
+`playCount`, `lastPlayed` and `duration`, plus `albumOrder`, which sorts
+by album title and then by disc and track position, and `random`, a
+comparator carrying a `seed` string, which orders by a hash of the track
+id and the seed.  Nulls sort last in either direction, except that a
+track never played counts as played before any other, so `lastPlayed`
+ascending is "least recently played" and starts with the never-played.
+Ties always break by track id, so a sorted, limited list is stable.
+
+**Caps.**  Besides the standard `limit`, the query takes `limitBytes`
+and `limitSeconds`.  After sorting, the result is cut where the running
+total of `size` or `duration` would pass the cap; a track with no audio
+or no known duration counts as zero.  `total` and `position` are of the
+capped list.
 
 ## Sync order
 
-Clients sync Track, then Album, then Playlist.  Even so, a track moved to
-a newly created album briefly names an `albumId` the client has not
-fetched yet.  A client treats an unknown `albumId` as not synced yet, not
-as an error.
+Clients sync Track, then Album, then Playlist, then SmartPlaylist.  Even
+so, a track moved to a newly created album briefly names an `albumId`
+the client has not fetched yet.  A client treats an unknown `albumId` as
+not synced yet, not as an error.
 
 ## Left out for now
 
 Each of these is a likely addition, kept out until it's needed:
 
-- **Genre,** on both types: on Album for the album's genre, and on Track
-  for exceptions, like a skit between two songs.
-- **Duration.**  The player gets it from the audio, but lists will want
-  it without downloading anything.
-- **Year, composer, compilation flag, skip count.**
+- **Year, composer, compilation flag, skip count.**  A `compilation`
+  condition on `Track/query`, true for a track whose album has no
+  artist, would recreate the 2014 "Compilations" list.
 - **Artwork,** which belongs on Album.
 - **Album rating.**  Every album rating in the 2014 library was computed
   from track ratings, so there is nothing to import.
