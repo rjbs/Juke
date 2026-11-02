@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -237,11 +238,11 @@ func (c *compiler) reference(id string) (string, []any, error) {
 		return m.sql, m.params, nil
 	}
 
-	var sort []comparator
-	if err := json.Unmarshal([]byte(sq.Sort), &sort); err != nil {
+	var comparators []comparator
+	if err := json.Unmarshal([]byte(sq.Sort), &comparators); err != nil {
 		return "", nil, err
 	}
-	order, orderParams, err := compileTrackSort(sort)
+	order, orderParams, err := compileTrackSort(comparators)
 	if err != nil {
 		return "", nil, err
 	}
@@ -297,16 +298,16 @@ func (c *compiler) filter(raw json.RawMessage) (string, []any, error) {
 		if err := json.Unmarshal(fields["conditions"], &conditions); err != nil || len(fields) != 2 {
 			return "", nil, errInvalidArguments("a FilterOperator has exactly operator and conditions")
 		}
-		var parts []string
-		var params []any
+		var compiled []part
 		for _, cond := range conditions {
+			before := len(c.refs)
 			sql, p, err := c.filter(cond)
 			if err != nil {
 				return "", nil, err
 			}
-			parts = append(parts, "("+sql+")")
-			params = append(params, p...)
+			compiled = append(compiled, part{"(" + sql + ")", p, len(c.refs) > before})
 		}
+		parts, params := costlyLast(compiled)
 		switch operator {
 		case "AND":
 			if len(parts) == 0 {
@@ -328,9 +329,9 @@ func (c *compiler) filter(raw json.RawMessage) (string, []any, error) {
 		}
 	}
 
-	parts := []string{"1"}
-	var params []any
+	compiled := []part{{sql: "1"}}
 	for _, name := range sortedKeys(fields) {
+		before := len(c.refs)
 		sql, p, err := c.condition(name, fields[name])
 		if err != nil {
 			return "", nil, err
@@ -339,10 +340,43 @@ func (c *compiler) filter(raw json.RawMessage) (string, []any, error) {
 		// 5.5), so NOT and OR must see false, not SQL's null, when the
 		// column it reads is null: "artist is not Devo" includes a track
 		// with no artist. -- claude, 2026-11-01
-		parts = append(parts, "coalesce(("+sql+"), 0)")
-		params = append(params, p...)
+		compiled = append(compiled, part{"coalesce((" + sql + "), 0)", p, len(c.refs) > before})
 	}
+	parts, params := costlyLast(compiled)
 	return strings.Join(parts, " AND "), params, nil
+}
+
+// A part is one compiled term of a filter, and whether it names a
+// playlist.
+type part struct {
+	sql    string
+	params []any
+	costly bool
+}
+
+// costlyLast orders a filter's terms so that those naming a playlist
+// come after the rest, and returns their SQL and parameters in that
+// order.  AND and OR are evaluated left to right and stop at the first
+// term that decides them, and an inlined smart playlist is far dearer
+// than a comparison, so a cheap term in front of it spares most rows
+// its cost. -- claude, 2026-11-02
+func costlyLast(compiled []part) ([]string, []any) {
+	slices.SortStableFunc(compiled, func(a, b part) int {
+		switch {
+		case a.costly == b.costly:
+			return 0
+		case a.costly:
+			return 1
+		}
+		return -1
+	})
+	var parts []string
+	var params []any
+	for _, p := range compiled {
+		parts = append(parts, p.sql)
+		params = append(params, p.params...)
+	}
+	return parts, params
 }
 
 func (c *compiler) condition(name string, raw json.RawMessage) (string, []any, error) {
