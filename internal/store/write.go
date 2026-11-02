@@ -306,3 +306,108 @@ func sortedKeys[V any](m map[string]V) []string {
 	sort.Strings(keys)
 	return keys
 }
+
+// SmartQuery is the Track/query a smart playlist stores, as the JSON the
+// client sent: Filter is nil for none, Sort is always an array.
+type SmartQuery struct {
+	Filter       *string
+	Sort         string
+	Limit        *int64
+	LimitBytes   *int64
+	LimitSeconds *int64
+}
+
+// InsertSmartPlaylist inserts a smart playlist and returns its new id.
+func InsertSmartPlaylist(ctx context.Context, q Queryer, title string, sq SmartQuery) (string, error) {
+	id, err := NewID("S")
+	if err != nil {
+		return "", err
+	}
+	modseq, err := NextModseq(ctx, q)
+	if err != nil {
+		return "", err
+	}
+	_, err = q.ExecContext(ctx, `
+		INSERT INTO smart_playlist (id, title, filter, sort, "limit", limit_bytes, limit_seconds, created_modseq, modseq)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		id, title, sq.Filter, sq.Sort, sq.Limit, sq.LimitBytes, sq.LimitSeconds, modseq, modseq,
+	)
+	return id, err
+}
+
+// WriteSmartPlaylist replaces a smart playlist's title and query, and
+// gives it a new modseq.
+func WriteSmartPlaylist(ctx context.Context, q Queryer, id, title string, sq SmartQuery) error {
+	modseq, err := NextModseq(ctx, q)
+	if err != nil {
+		return err
+	}
+	_, err = q.ExecContext(ctx, `
+		UPDATE smart_playlist SET title = ?, filter = ?, sort = ?, "limit" = ?, limit_bytes = ?, limit_seconds = ?, modseq = ?
+		WHERE id = ?`,
+		title, sq.Filter, sq.Sort, sq.Limit, sq.LimitBytes, sq.LimitSeconds, modseq, id,
+	)
+	return err
+}
+
+// LoadSmartPlaylist reads a smart playlist's title and query, or returns
+// sql.ErrNoRows.
+func LoadSmartPlaylist(ctx context.Context, q Queryer, id string) (string, SmartQuery, error) {
+	var title string
+	var sq SmartQuery
+	err := q.QueryRowContext(ctx,
+		`SELECT title, filter, sort, "limit", limit_bytes, limit_seconds FROM smart_playlist WHERE id = ?`, id,
+	).Scan(&title, &sq.Filter, &sq.Sort, &sq.Limit, &sq.LimitBytes, &sq.LimitSeconds)
+	return title, sq, err
+}
+
+// Ref is a playlist of either kind that a smart playlist's rule names.
+type Ref struct {
+	Type string // TypePlaylist or TypeSmartPlaylist
+	ID   string
+}
+
+// SetSmartPlaylistRefs records what a smart playlist's rule names,
+// replacing what was recorded before.
+func SetSmartPlaylistRefs(ctx context.Context, q Queryer, id string, refs []Ref) error {
+	if _, err := q.ExecContext(ctx, `DELETE FROM smart_playlist_ref WHERE smart_playlist_id = ?`, id); err != nil {
+		return err
+	}
+	for _, r := range refs {
+		if _, err := q.ExecContext(ctx,
+			`INSERT OR IGNORE INTO smart_playlist_ref (smart_playlist_id, ref_type, ref_id) VALUES (?, ?, ?)`, id, r.Type, r.ID,
+		); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// SmartPlaylistRefs returns the smart playlists whose rules name the
+// given smart playlist id, directly.
+func SmartPlaylistRefs(ctx context.Context, q Queryer, id string) ([]string, error) {
+	rows, err := q.QueryContext(ctx,
+		`SELECT ref_id FROM smart_playlist_ref WHERE smart_playlist_id = ? AND ref_type = ?`, id, TypeSmartPlaylist)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var ref string
+		if err := rows.Scan(&ref); err != nil {
+			return nil, err
+		}
+		out = append(out, ref)
+	}
+	return out, rows.Err()
+}
+
+// Referenced reports whether any smart playlist's rule names the object.
+func Referenced(ctx context.Context, q Queryer, typ, id string) (bool, error) {
+	var found bool
+	err := q.QueryRowContext(ctx,
+		`SELECT EXISTS (SELECT 1 FROM smart_playlist_ref WHERE ref_type = ? AND ref_id = ?)`, typ, id,
+	).Scan(&found)
+	return found, err
+}

@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql/driver"
+	"hash/fnv"
 	"strings"
 
 	"modernc.org/sqlite"
@@ -27,4 +28,33 @@ func init() {
 				return v, nil
 			}
 		})
+
+	// juke_hash(id, seed) orders a random sort: the same seed gives the
+	// same order on every run and every client, and a new seed reshuffles.
+	// -- claude, 2026-11-01
+	sqlite.MustRegisterDeterministicScalarFunction("juke_hash", 2,
+		func(_ *sqlite.FunctionContext, args []driver.Value) (driver.Value, error) {
+			return int64(Hash(text(args[0]), text(args[1]))), nil
+		})
+}
+
+// Hash is the hash juke_hash computes: FNV-1a over the id and the seed,
+// as a non-negative number.
+func Hash(id, seed string) uint64 {
+	h := fnv.New64a()
+	h.Write([]byte(id))
+	h.Write([]byte{0})
+	h.Write([]byte(seed))
+	return h.Sum64() >> 1
+}
+
+func text(v driver.Value) string {
+	switch v := v.(type) {
+	case string:
+		return v
+	case []byte:
+		return string(v)
+	default:
+		return ""
+	}
 }

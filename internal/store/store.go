@@ -28,9 +28,10 @@ type Store struct {
 
 // The object types that have JMAP state.
 const (
-	TypeTrack    = "Track"
-	TypeAlbum    = "Album"
-	TypePlaylist = "Playlist"
+	TypeTrack         = "Track"
+	TypeAlbum         = "Album"
+	TypePlaylist      = "Playlist"
+	TypeSmartPlaylist = "SmartPlaylist"
 )
 
 // migrations is applied in order, and PRAGMA user_version records how many
@@ -130,6 +131,33 @@ ALTER TABLE track ADD COLUMN genre TEXT;
 	// import or by backfill, or the catalog's figure for a gap track.  (#44)
 	`
 ALTER TABLE track ADD COLUMN duration INTEGER;
+`,
+
+	// A smart playlist is a saved search: a title and the arguments of a
+	// Track/query, stored as the JSON the client sent.  The refs table
+	// records which playlists of either kind a rule names, so a reference
+	// can be refused before it dangles and a cycle before it closes.  (#11)
+	`
+CREATE TABLE smart_playlist (
+  id             TEXT    NOT NULL PRIMARY KEY,
+  title          TEXT    NOT NULL,
+  filter         TEXT,
+  sort           TEXT    NOT NULL,
+  "limit"        INTEGER,
+  limit_bytes    INTEGER,
+  limit_seconds  INTEGER,
+  created_modseq INTEGER NOT NULL,
+  modseq         INTEGER NOT NULL
+);
+CREATE INDEX smart_playlist_modseq ON smart_playlist (modseq);
+
+CREATE TABLE smart_playlist_ref (
+  smart_playlist_id TEXT NOT NULL REFERENCES smart_playlist (id),
+  ref_type          TEXT NOT NULL,
+  ref_id            TEXT NOT NULL,
+  PRIMARY KEY (smart_playlist_id, ref_type, ref_id)
+);
+CREATE INDEX smart_playlist_ref_target ON smart_playlist_ref (ref_type, ref_id);
 `,
 }
 
@@ -280,9 +308,10 @@ func NextModseq(ctx context.Context, q Queryer) (int64, error) {
 }
 
 var tableFor = map[string]string{
-	TypeTrack:    "track",
-	TypeAlbum:    "album",
-	TypePlaylist: "playlist",
+	TypeTrack:         "track",
+	TypeAlbum:         "album",
+	TypePlaylist:      "playlist",
+	TypeSmartPlaylist: "smart_playlist",
 }
 
 // TypeModseq returns the highest modseq of any object of the type, live or
@@ -332,6 +361,10 @@ func randomToken(n int) (string, error) {
 	}
 	return idEncoding.EncodeToString(b), nil
 }
+
+// NewSeed mints a seed for a random sort: enough randomness that two
+// reshuffles never repeat, in the id alphabet so it reads as opaque.
+func NewSeed() (string, error) { return randomToken(8) }
 
 // NewID mints an opaque id: a one-letter type prefix and random
 // characters from the JMAP id alphabet.
