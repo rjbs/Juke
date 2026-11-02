@@ -171,7 +171,64 @@ final class JukeUITests: XCTestCase {
     XCTAssertFalse(title.waitForExistence(timeout: 2), "the now-playing screen stayed open")
   }
 
+  func testSmartPlaylist() async throws {
+    let title = "UI Smart \(Int(Date().timeIntervalSince1970))"
+    let id = try await jmap("SmartPlaylist/set", ["create": ["s": [
+      "title": title,
+      "filter": ["operator": "AND", "conditions": [["hasAudio": true], ["ratingAtLeast": 3]]],
+      "sort": [["property": "title"]],
+      "limit": 3,
+    ]]])
+    let created = try XCTUnwrap(((id["created"] as? [String: Any])?["s"] as? [String: Any])?["id"] as? String)
+
+    openPlaylist(title)
+    // The first cell is the summary; the rows follow, each reading its
+    // number, then its title.
+    let rows = { self.app.cells.allElementsBoundByIndex.dropFirst().compactMap { $0.staticTexts.allElementsBoundByIndex.dropFirst().first?.label } }
+    let threeRows = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in rows().count == 3 }, object: nil)
+    XCTAssertEqual(XCTWaiter().wait(for: [threeRows], timeout: 10), .completed, "rows are \(rows())")
+    XCTAssertTrue(app.staticTexts["3 tracks"].exists, "no summary line")
+    snapshot("smart playlist")
+
+    let first = try XCTUnwrap(rows().first)
+    app.buttons.containing(.staticText, identifier: first).firstMatch.tap()
+    checkPlaying(first)
+
+    app.buttons["Keep Offline"].tap()
+    XCTAssertTrue(app.staticTexts["Available offline"].waitForExistence(timeout: 60), "never downloaded")
+    snapshot("kept offline")
+
+    _ = try await jmap("SmartPlaylist/set", ["destroy": [created]])
+    XCTAssertTrue(app.staticTexts["No Such Playlist"].waitForExistence(timeout: 10), "never noticed the destroy")
+  }
+
   // MARK: - Helpers
+
+  /// Sends one method call straight to the server, which is how a test
+  /// makes and destroys smart playlists; the app only reads them.
+  func jmap(_ method: String, _ arguments: [String: Any]) async throws -> [String: Any] {
+    let server = try XCTUnwrap(URL(string: testServer))
+    let capability = "https://semiotic.systems/jmap/juke"
+    let (sessionData, _) = try await URLSession.shared.data(from: server.appending(path: ".well-known/jmap"))
+    let session = try XCTUnwrap(try JSONSerialization.jsonObject(with: sessionData) as? [String: Any])
+    let accountId = try XCTUnwrap((session["primaryAccounts"] as? [String: Any])?[capability] as? String)
+    let apiUrl = try XCTUnwrap((session["apiUrl"] as? String).flatMap(URL.init(string:)))
+    var request = URLRequest(url: apiUrl)
+    request.httpMethod = "POST"
+    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+    var args = arguments
+    args["accountId"] = accountId
+    request.httpBody = try JSONSerialization.data(withJSONObject: [
+      "using": ["urn:ietf:params:jmap:core", capability],
+      "methodCalls": [[method, args, "0"]],
+    ])
+    let (data, _) = try await URLSession.shared.data(for: request)
+    let body = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+    let first = try XCTUnwrap((body["methodResponses"] as? [[Any]])?.first)
+    XCTAssertEqual(first[0] as? String, method, "\(first)")
+    return try XCTUnwrap(first[1] as? [String: Any])
+  }
+
 
   /// Opens an album, starts it playing so the player bar shows, scrolls to
   /// the end, and checks the last track sits wholly above the bar.
