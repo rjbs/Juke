@@ -27,7 +27,8 @@ by driving iTunes over Apple events, rewritten to drive Juke over JMAP.
 
 It reads the source playlist, a smart playlist unless only a plain one
 has the title, and gathers its tracks by album.  An album is a candidate
-when it has more than four tracks in the source, its tracks were last
+when none of its tracks is a gap, a track whose audio is missing, it
+has more than four tracks in the source, its tracks were last
 played thirty days ago or more, on average, and the rated tracks on it
 average at least 3.25 stars; an album with no rated tracks counts as good
 enough.  A track never played is taken as played thirty days ago, so an
@@ -164,6 +165,10 @@ for my $album (get_objects('Album', keys %album)) {
   $album{ $album->{id} }{album} = $album;
 }
 
+# The source leaves out gap tracks, so an album's gaps are found in its
+# discs rather than among the tracks fetched.
+my %gap = map {; $_ => 1 } query_ids({ hasAudio => JSON::MaybeXS::false });
+
 my $now = time;
 my $DEFAULT_PLAYED = $now - $MIN_AGE;
 
@@ -178,6 +183,8 @@ sub consider ($rec) {
   my $album  = $rec->{album};
   my @tracks = $rec->{tracks}->@*;
 
+  my $gaps = grep {; $gap{$_} } map {; $_->{trackIds}->@* } $album->{discs}->@*;
+  return skip($rec, "missing $gaps track" . ($gaps == 1 ? "" : "s")) if $gaps;
   return skip($rec, "only " . @tracks . " tracks") if @tracks < $MIN_TRACKS;
 
   my @played = map {; defined $_->{lastPlayed} ? epoch($_->{lastPlayed}) : $DEFAULT_PLAYED } @tracks;
