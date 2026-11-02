@@ -28,6 +28,7 @@ A recording on an album, usually with audio.
 | `playCount`  | `UnsignedInt`   | Default 0. |
 | `lastPlayed` | `UTCDate\|null` | |
 | `dateAdded`  | `UTCDate`       | When the track joined the library. |
+| `artworkBlobId` | `Id\|null` | Server-set.  The track's own art, only where it differs from its album's; see [artwork](artwork.md).  Null means show the album's. |
 
 **A track with no audio** stands for a gap: a track the 2014 catalog
 knows an album had, whose file is lost.  It keeps the catalog's title,
@@ -53,6 +54,7 @@ considered and isn't needed.
 | `title`  | `String`       | One title per album; disc numbers are not part of it. |
 | `artist` | `String\|null` | Null for a various-artists compilation. |
 | `discs`  | `Disc[]`       | At least one. |
+| `artworkBlobId` | `Id\|null` | Server-set.  The album's art, an image served as a blob; see [artwork](artwork.md). |
 
 ### Disc
 

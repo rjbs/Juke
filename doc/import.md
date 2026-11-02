@@ -111,6 +111,5 @@ files, since length isn't in the tags; the headers it needs are small.
 - **Format-aware.**  MP3 files have ID3 frames and M4A files have MP4
   atoms; the column records which.
 - **Binary frames become stubs:** frame type, MIME type, size and SHA-256
-  instead of the bytes.  That covers embedded album art, so later artwork
-  work can see which files have art and whether an album shares one image
-  without rescanning.
+  instead of the bytes.  That covers embedded album art, which is how `juke artwork` knows which
+  files have art without rescanning; see [artwork](artwork.md).

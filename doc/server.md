@@ -42,6 +42,16 @@ server is up, which notices the change on its next poll.  With a
 catalog it also reports how many measured durations disagree with the
 catalog's by more than two seconds, as a check on the measuring.
 
+## Artwork
+
+    var/juke artwork --db var/sample.sqlite --library sample
+
+Finds album art in the files' embedded pictures and in image files
+beside them, stores each distinct image once under `artwork/` in the
+library directory, and sets each album's and track's art by the rule
+in [artwork](artwork.md).  Like `backfill`, it is safe to run again and
+while the server is up.
+
 ## Serving
 
     var/juke serve --db var/sample.sqlite --library sample
@@ -73,7 +83,8 @@ decided for the tailnet.
   or one that would make a loop; see [playlists](playlists.md).
 - **Track/set** updates rating, play count, last played and genre.
   Anything else, and any create or destroy, is refused.
-- **Blob download** serves each track's original file, with range
+- **Blob download** serves each track's original file, or an image of
+  album art ([artwork](artwork.md)), with range
   requests.  A blobId is derived from the track id, metadata version and
   recipe, as [storage](storage.md) describes; for now every track is at
   version 1 with the "original" recipe.
@@ -98,5 +109,5 @@ outside it, such as an import.
 
 - `/queryChanges` always answers `cannotCalculateChanges`.
 - Uploads are refused.
-- Metadata flush and artwork.
+- Metadata flush.
 - Authoring smart playlists anywhere but `bin/recreate-smart-playlists`.

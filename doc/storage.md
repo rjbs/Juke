@@ -40,6 +40,13 @@ plus current tags, so tag edits reach clients without touching originals.
   to rebuild them.  A client caught mid-download refetches the Track and gets
   the new blobId.
 
+## Album art
+
+Images are stored once each under `artwork/` in the library directory,
+named by an id derived from the image's hash, and served as blobs by
+that id.  Which image is an album's, and when a track has its own, is
+in [artwork](artwork.md).
+
 ## Formats other than MP3
 
 The starting library is 42,066 MP3 files, 2,747 M4A files and 4 MP2 files.

@@ -32,6 +32,8 @@ func main() {
 		err = runCheck(ctx, os.Args[2:])
 	case "backfill":
 		err = runBackfill(ctx, os.Args[2:])
+	case "artwork":
+		err = runArtwork(ctx, os.Args[2:])
 	case "measure":
 		err = runMeasure(os.Args[2:])
 	case "serve":
@@ -46,7 +48,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: juke import|check|backfill|measure|originals|serve [options]; juke COMMAND -h for options")
+	fmt.Fprintln(os.Stderr, "usage: juke import|check|backfill|artwork|measure|originals|serve [options]; juke COMMAND -h for options")
 	os.Exit(2)
 }
 
