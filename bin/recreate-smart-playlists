@@ -1,0 +1,322 @@
+#!/usr/bin/env perl
+use v5.36;
+use utf8;
+use open qw(:std :encoding(UTF-8));
+
+use Getopt::Long;
+use HTTP::Tiny;
+use JSON::MaybeXS;
+use Pod::Usage;
+
+=head1 NAME
+
+recreate-smart-playlists - push a set of smart playlists to a Juke server
+
+=head1 SYNOPSIS
+
+  recreate-smart-playlists [--url https://juke.tail0324d.ts.net] [--dry-run] [--only TITLE]
+
+=head1 DESCRIPTION
+
+The smart playlists below are the 2014 iTunes library's, as
+C<decode-smart-playlists> prints them, translated by hand into the rules
+that C<SmartPlaylist/set> takes.  Lists that needed fields Juke doesn't
+have (date added, year, comment, the checked flag) were left out.
+
+Running this makes the server match the list: a playlist with the same
+title is updated if its rule differs, and created otherwise.  Nothing
+is destroyed, so a list dropped from here lingers until it is destroyed
+by hand.  A playlist whose rule names another is pushed after it, since
+a filter has to name a real id.
+
+A rule here names another smart playlist as C<< { inSmart => 'Title' } >>
+and a plain playlist as C<< { inPlain => 'Title' } >>; both are resolved
+to ids before the rule is sent.  Every rule is also restricted to tracks
+with audio, unless it sets C<all>, because the server leaves that
+explicit.
+
+A sort of C<random> gets its seed from the server the first time and
+keeps it afterward, so re-running this doesn't reshuffle anything.
+
+There is no authentication to arrange: the server admits a request from
+a tailnet login it allows.
+
+=cut
+
+my %opt = (url => 'https://juke.tail0324d.ts.net');
+GetOptions(\%opt, 'url=s', 'dry-run|n', 'only=s@', 'help') or pod2usage(2);
+pod2usage(0) if $opt{help};
+
+my $JSON = JSON::MaybeXS->new(canonical => 1, utf8 => 0);
+my $true  = JSON::MaybeXS::true;
+my $false = JSON::MaybeXS::false;
+
+# ---- The rules ------------------------------------------------------------
+
+sub genre_is ($name)   { { genre => $name } }
+sub rating_is ($stars) { { ratingAtLeast => $stars, ratingAtMost => $stars } }
+sub all_of (@conds)    { { operator => 'AND', conditions => [ @conds ] } }
+sub any_of (@conds)    { { operator => 'OR',  conditions => [ @conds ] } }
+sub not_in (@conds)    { { operator => 'NOT', conditions => [ @conds ] } }
+sub in_smart ($title)  { { inSmart => $title } }
+
+sub by ($property, $ascending = 1) {
+  return { property => $property, isAscending => $ascending ? $true : $false };
+}
+
+my $MB = 1024 * 1024;
+
+# "Regular Music" is the 2014 library's idea of music one can shuffle.
+# iTunes' "genre is not X" matched tracks with no genre, and so does
+# NOT genre here, so the translation is NOT (any of these genres).
+my @IRREGULAR = (
+  'Classical', 'Musical', 'Symphonic', 'Noise', 'Audiobook', 'Spoken Word',
+  'Crooning', 'Humor', 'Muzak', 'New Age', 'WTF', 'Yoga', 'World',
+  'TV Theme', 'Game', "Children's Music", 'Silence', 'Voice Memo',
+);
+
+my @PLAYLISTS = (
+  # Genre lists
+  { title => 'Classical', filter => genre_is('Classical'), sort => [ by('albumOrder') ] },
+  { title => 'Latin',     filter => genre_is('Latin'),     sort => [ by('albumOrder') ] },
+  { title => 'Musical',   filter => genre_is('Musical'),   sort => [ by('albumOrder') ] },
+  { title => 'Musical Queue',
+    filter => all_of(genre_is('Musical'), { hasRating => $false }),
+    sort   => [ by('albumOrder') ] },
+
+  # Things to fix.  These include gap tracks on purpose.
+  { title => 'Bad Name', all => 1,
+    filter => any_of({ titleContains => '_' }, { titleContains => '`' }),
+    sort   => [ by('title') ] },
+  { title => 'No Album',  all => 1, filter => { hasAlbum  => $false }, sort => [ by('artist'), by('title') ] },
+  { title => 'No Artist', all => 1, filter => { hasArtist => $false }, sort => [ by('albumOrder') ] },
+  { title => 'No Genre',  all => 1, filter => { hasGenre  => $false }, sort => [ by('albumOrder') ] },
+
+  # Play history
+  { title => 'Most Played',
+    filter => { playCountAtLeast => 1 },
+    sort   => [ by('playCount', 0), by('lastPlayed', 0) ],
+    limit  => 25 },
+  { title => 'Recently Played',
+    filter => { lastPlayedWithinDays => 60 },
+    sort   => [ by('lastPlayed', 0) ] },
+  { title => 'Not Recently Played',
+    filter => not_in(in_smart('Recently Played')),
+    sort   => [ by('albumOrder') ] },
+
+  # Regular music and what's built on it
+  { title => 'Regular Music',
+    filter => not_in(any_of(map {; genre_is($_) } @IRREGULAR)),
+    sort   => [ by('albumOrder') ] },
+  { title => 'Regularer',
+    filter => all_of(in_smart('Regular Music'), not_in(genre_is('Jazz'))),
+    sort   => [ by('albumOrder') ] },
+  { title => 'Short Enough',
+    filter => { durationAtMost => 6 * 60 + 59 },
+    sort   => [ by('albumOrder') ] },
+  { title => 'The Good Stuff',
+    filter => all_of(in_smart('Regular Music'), { ratingAtLeast => 4 }),
+    sort   => [ by('rating', 0), by('albumOrder') ] },
+  { title => 'z| 0 - The Queue',
+    filter => all_of(in_smart('Regular Music'), not_in(genre_is('Game')), { hasRating => $false }),
+    sort   => [ by('albumOrder') ] },
+  { title => 'The Queue',
+    filter => all_of(in_smart('z| 0 - The Queue'), { durationAtMost => 9 * 60 + 59 }),
+    sort   => [ by('albumOrder') ] },
+  { title => 'Queuelet',
+    filter => all_of(in_smart('z| 0 - The Queue'), { durationAtMost => 9 * 60 + 59 }),
+    sort   => [ by('random') ],
+    limitBytes => 1024 * $MB },
+
+  # Rating tiers.  iTunes matched a whole star exactly, so a half-star
+  # rating is in no tier; ratingAtMost => $n + 0.5 would change that.
+  (map {; my ($n, $name) = @$_;
+     +{ title => "z| $n - $name", filter => rating_is($n), sort => [ by('albumOrder') ] } }
+   [ 1, 'Crap' ], [ 2, 'Tolerable' ], [ 3, 'Good' ], [ 4, 'Great' ], [ 5, 'Awesome' ]),
+
+  # The RR lists: unrecent music at a rating, sampled by size
+  { title => 'z| RR 3S Unrecent',
+    filter => all_of(map {; in_smart($_) } 'z| 3 - Good', 'Regular Music', 'Not Recently Played', 'Short Enough'),
+    sort   => [ by('random') ],
+    limitBytes => 500 * $MB },
+  { title => 'z| RR 3S Random',
+    filter => all_of(in_smart('Regular Music'), rating_is(3),
+                     map {; in_smart($_) } 'Not Recently Played', 'z| RR 3S Unrecent', 'Short Enough'),
+    sort   => [ by('random') ],
+    limitBytes => 200 * $MB },
+  { title => 'z| RR 45 Unrecent',
+    filter => all_of(map {; in_smart($_) } 'The Good Stuff', 'Short Enough', 'Not Recently Played'),
+    sort   => [ by('lastPlayed') ],
+    limitBytes => 500 * $MB },
+  { title => 'z| RR 45 Random',
+    filter => all_of(map {; in_smart($_) } 'The Good Stuff', 'Not Recently Played', 'z| RR 45 Unrecent', 'Short Enough'),
+    sort   => [ by('random') ],
+    limitBytes => 400 * $MB },
+  { title => 'Radio RJBS',
+    filter => any_of(map {; in_smart($_) } 'z| RR 3S Random', 'z| RR 3S Unrecent', 'z| RR 45 Random', 'z| RR 45 Unrecent'),
+    sort   => [ by('random') ] },
+
+  # The S lists: the least played of the unrecent, by size
+  { title => 'z| S 3',
+    filter => all_of(map {; in_smart($_) } 'z| 3 - Good', 'Regular Music', 'Not Recently Played', 'Short Enough'),
+    sort   => [ by('playCount'), by('random') ],
+    limitBytes => 250 * $MB },
+  { title => 'z| S 45',
+    filter => all_of(map {; in_smart($_) } 'The Good Stuff', 'Not Recently Played', 'Short Enough'),
+    sort   => [ by('playCount'), by('random') ],
+    limitBytes => 500 * $MB },
+  { title => 'Shuffle',
+    filter => any_of(in_smart('z| S 3'), in_smart('z| S 45')),
+    sort   => [ by('playCount'), by('random') ],
+    limitBytes => 640 * $MB },
+);
+
+# ---- JMAP -----------------------------------------------------------------
+
+my $http = HTTP::Tiny->new(verify_SSL => 1, timeout => 120);
+
+sub get_json ($url) {
+  my $res = $http->get($url);
+  die "GET $url: $res->{status} $res->{reason}\n" unless $res->{success};
+  return $JSON->decode(do { utf8::decode(my $c = $res->{content}); $c });
+}
+
+my $session = get_json("$opt{url}/.well-known/jmap");
+my $account = $session->{primaryAccounts}{'https://semiotic.systems/jmap/juke'}
+  // die "no juke account in the session\n";
+
+# jmap makes one request of the given calls, each [ method, args ], and
+# returns the response arguments in order, dying on a method error.
+sub jmap (@calls) {
+  my $body = $JSON->encode({
+    using => [ 'urn:ietf:params:jmap:core', 'https://semiotic.systems/jmap/juke' ],
+    methodCalls => [ map {; [ $calls[$_][0], { accountId => $account, $calls[$_][1]->%* }, "$_" ] } keys @calls ],
+  });
+  utf8::encode($body);
+  my $res = $http->post($session->{apiUrl}, {
+    headers => { 'Content-Type' => 'application/json' },
+    content => $body,
+  });
+  die "POST $session->{apiUrl}: $res->{status} $res->{reason}\n$res->{content}\n" unless $res->{success};
+  my $reply = $JSON->decode(do { utf8::decode(my $c = $res->{content}); $c });
+  return map {;
+    my ($name, $args) = @$_;
+    die "$name: $args->{type}" . ($args->{description} ? ": $args->{description}" : '') . "\n" if $name eq 'error';
+    $args;
+  } $reply->{methodResponses}->@*;
+}
+
+sub set_error ($e) { "$e->{type}" . ($e->{description} ? ": $e->{description}" : '') }
+
+# ---- What's there ---------------------------------------------------------
+
+my ($plain, $smart) = jmap(
+  [ 'Playlist/get',      { ids => undef } ],
+  [ 'SmartPlaylist/get', { ids => undef } ],
+);
+
+my %plain_id = map {; $_->{title} => $_->{id} } reverse $plain->{list}->@*;
+my %existing = map {; $_->{title} => $_ } reverse $smart->{list}->@*;
+
+for my $list ($plain, $smart) {
+  my %seen;
+  for my $pl ($list->{list}->@*) {
+    warn "more than one playlist is titled \"$pl->{title}\"; using the first\n" if $seen{ $pl->{title} }++ == 1;
+  }
+}
+
+# ---- Pushing --------------------------------------------------------------
+
+my %def = map {; $_->{title} => $_ } @PLAYLISTS;
+die "two rules here are titled \"$_->{title}\"\n" for grep {; $def{ $_->{title} } != $_ } @PLAYLISTS;
+
+my %only = map {; $_ => 1 } ($opt{only} // [])->@*;
+for my $title (keys %only) {
+  die "no rule here is titled \"$title\"\n" unless $def{$title};
+}
+
+# resolve replaces the inSmart and inPlain placeholders in a filter with
+# the server's conditions, pushing a smart playlist named along the way
+# first, so it has an id.
+sub resolve ($node) {
+  return $node unless ref $node eq 'HASH';
+  if (exists $node->{inSmart}) {
+    my $id = push_playlist($node->{inSmart})
+      // die "\"$node->{inSmart}\" is named by a rule but is not on the server, or the rules here loop\n";
+    return { inSmartPlaylist => $id };
+  }
+  if (exists $node->{inPlain}) {
+    my $id = $plain_id{ $node->{inPlain} }
+      // die "no plain playlist on the server is titled \"$node->{inPlain}\"\n";
+    return { inPlaylist => $id };
+  }
+  return $node unless $node->{conditions};
+  return { %$node, conditions => [ map {; resolve($_) } $node->{conditions}->@* ] };
+}
+
+# keep_seeds copies the seed of each random comparator from the stored
+# sort to the wanted one, position by position, so a re-run keeps the
+# shuffle it has.
+sub keep_seeds ($want, $have) {
+  for my $i (keys @$want) {
+    next unless $want->[$i]{property} eq 'random' && ! $want->[$i]{seed};
+    my $stored = $have->[$i] // next;
+    $want->[$i]{seed} = $stored->{seed} if $stored->{property} eq 'random' && $stored->{seed};
+  }
+}
+
+my %pushed;  # title => id, once pushed (or skipped) this run
+
+# push_playlist creates or updates the playlist with this title, after
+# any it names, and returns its id.  A title with no rule here returns
+# the id of a playlist of that title already on the server, if any.
+sub push_playlist ($title) {
+  return $pushed{$title} if exists $pushed{$title};
+  my $def = $def{$title} // return $existing{$title} ? $existing{$title}{id} : undef;
+  $pushed{$title} = undef;  # guards against a cycle in the rules here
+
+  my $filter = resolve($def->{filter});
+  $filter = all_of({ hasAudio => $true }, $filter) unless $def->{all};
+
+  my $want = {
+    title        => $title,
+    filter       => $filter,
+    sort         => [ map {; +{ %$_ } } $def->{sort}->@* ],
+    limit        => $def->{limit},
+    limitBytes   => $def->{limitBytes},
+    limitSeconds => $def->{limitSeconds},
+  };
+
+  my $have = $existing{$title};
+  if (%only && ! $only{$title}) {
+    die "\"$title\" is not on the server, and --only leaves it out\n" unless $have;
+    return $pushed{$title} = $have->{id};
+  }
+
+  if ($have) {
+    keep_seeds($want->{sort}, $have->{sort});
+    my %patch = map {; $_ => $want->{$_} }
+                grep {; $JSON->encode($want->{$_}) ne $JSON->encode($have->{$_}) }
+                keys %$want;
+    unless (%patch) {
+      say "unchanged  $title";
+      return $pushed{$title} = $have->{id};
+    }
+    say "update     $title (" . join(', ', sort keys %patch) . ")";
+    return $pushed{$title} = $have->{id} if $opt{'dry-run'};
+    my ($r) = jmap([ 'SmartPlaylist/set', { update => { $have->{id} => \%patch } } ]);
+    die "  failed: " . set_error($r->{notUpdated}{ $have->{id} }) . "\n" if $r->{notUpdated};
+    return $pushed{$title} = $have->{id};
+  }
+
+  say "create     $title";
+  return $pushed{$title} = "(new)" if $opt{'dry-run'};
+  my ($r) = jmap([ 'SmartPlaylist/set', { create => { new => $want } } ]);
+  die "  failed: " . set_error($r->{notCreated}{new}) . "\n" if $r->{notCreated};
+  return $pushed{$title} = $r->{created}{new}{id};
+}
+
+push_playlist($_->{title}) for @PLAYLISTS;
+
+my @extra = sort grep {; ! $def{$_} } keys %existing;
+say "on the server but not here: " . join(', ', map {; "\"$_\"" } @extra) if @extra;

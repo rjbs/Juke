@@ -82,6 +82,7 @@ library.
 The 2014 library's smart playlists survive as binary blobs in the
 catalog, and `bin/decode-smart-playlists` prints them as the rules they
 were.  They are not imported; the ones worth having are recreated by
-hand.  Almost all of them hang off one list, "Regular Music", which is
+hand, in `bin/recreate-smart-playlists`, which pushes its rules to a
+server over JMAP and can be re-run as they change.  Almost all of them hang off one list, "Regular Music", which is
 eighteen "genre is not" rules, so genre on Track came first.  Their
 "checked only" flag has no counterpart here and is dropped.
