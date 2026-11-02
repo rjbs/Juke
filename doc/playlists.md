@@ -86,3 +86,13 @@ hand, in `bin/recreate-smart-playlists`, which pushes its rules to a
 server over JMAP and can be re-run as they change.  Almost all of them hang off one list, "Regular Music", which is
 eighteen "genre is not" rules, so genre on Track came first.  Their
 "checked only" flag has no counterpart here and is dropped.
+
+## Playlists of albums
+
+A smart playlist is a list of tracks, and nothing here builds a list of
+albums.  The 2014 library didn't either: a program drove iTunes to fill
+a plain playlist, "Albumen", with whole albums from "Regularer" that
+hadn't been played in a while, least recently played first, one album
+per artist, up to a gigabyte.  `bin/albumen` is that program, driving
+Juke over JMAP instead; it rewrites the plain playlist each time it is
+run, so a client that keeps "Albumen" offline follows it.

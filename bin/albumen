@@ -1,0 +1,259 @@
+#!/usr/bin/env perl
+use v5.36;
+use utf8;
+use open qw(:std :encoding(UTF-8));
+
+use Getopt::Long;
+use HTTP::Tiny;
+use JSON::MaybeXS;
+use List::Util qw(sum0);
+use Pod::Usage;
+use Time::Piece;
+
+=head1 NAME
+
+albumen - fill a playlist with whole albums due for a listen
+
+=head1 SYNOPSIS
+
+  albumen [--url https://juke.tail0324d.ts.net] [--dry-run] [--interactive] [--verbose]
+          [--source 'Regularer'] [--target 'Albumen']
+
+=head1 DESCRIPTION
+
+A smart playlist is a list of tracks; nothing in Juke builds a list of
+albums.  This is the program that did that for the 2014 iTunes library,
+by driving iTunes over Apple events, rewritten to drive Juke over JMAP.
+
+It reads the source playlist, a smart playlist unless only a plain one
+has the title, and gathers its tracks by album.  An album is a candidate
+when it has more than four tracks in the source, its tracks were last
+played thirty days ago or more, on average, and the rated tracks on it
+average at least 3.25 stars; an album with no rated tracks counts as good
+enough.  A track never played is taken as played thirty days ago, so an
+album of them is a candidate but not a pressing one.
+
+Candidates are taken least recently played first, at most one per
+artist, with a compilation not counting against anyone, until adding an
+album would pass a gigabyte.  The target playlist, a plain one, is
+rewritten to hold exactly those albums' tracks, in album order.  It is
+created when the server has no playlist of that title.
+
+C<--interactive> asks about each album before taking it.  C<--dry-run>
+prints what it would do and writes nothing.  C<--verbose> also says why
+each album was passed over.
+
+There is no authentication to arrange: the server admits a request from
+a tailnet login it allows.
+
+=cut
+
+my %opt = (url => 'https://juke.tail0324d.ts.net', source => 'Regularer', target => 'Albumen');
+GetOptions(\%opt, 'url=s', 'source=s', 'target=s', 'dry-run|n', 'interactive|i', 'verbose|v', 'help')
+  or pod2usage(2);
+pod2usage(0) if $opt{help};
+
+my $MIN_TRACKS = 5;
+my $MIN_AGE    = 30 * 86_400;
+my $MIN_RATING = 3.25;   # the 2014 program's 65, on its scale of 100
+my $MAX_BYTES  = 1_000_000_000;
+
+my $JSON = JSON::MaybeXS->new(canonical => 1, utf8 => 0);
+
+# ---- The server -----------------------------------------------------------
+
+my $http = HTTP::Tiny->new(verify_SSL => 1, timeout => 120);
+
+sub get_json ($url) {
+  my $res = $http->get($url);
+  die "GET $url: $res->{status} $res->{reason}\n" unless $res->{success};
+  return $JSON->decode(do { utf8::decode(my $c = $res->{content}); $c });
+}
+
+my $session = get_json("$opt{url}/.well-known/jmap");
+my $account = $session->{primaryAccounts}{'https://semiotic.systems/jmap/juke'}
+  // die "no juke account in the session\n";
+my $core = $session->{capabilities}{'urn:ietf:params:jmap:core'};
+
+# jmap makes one request of the given calls, each [ method, args ], and
+# returns the response arguments in order, dying on a method error.
+sub jmap (@calls) {
+  my $body = $JSON->encode({
+    using => [ 'urn:ietf:params:jmap:core', 'https://semiotic.systems/jmap/juke' ],
+    methodCalls => [ map {; [ $calls[$_][0], { accountId => $account, $calls[$_][1]->%* }, "$_" ] } keys @calls ],
+  });
+  utf8::encode($body);
+  my $res = $http->post($session->{apiUrl}, {
+    headers => { 'Content-Type' => 'application/json' },
+    content => $body,
+  });
+  die "POST $session->{apiUrl}: $res->{status} $res->{reason}\n$res->{content}\n" unless $res->{success};
+  my $reply = $JSON->decode(do { utf8::decode(my $c = $res->{content}); $c });
+  return map {;
+    my ($name, $args) = @$_;
+    die "$name: $args->{type}" . ($args->{description} ? ": $args->{description}" : '') . "\n" if $name eq 'error';
+    $args;
+  } $reply->{methodResponses}->@*;
+}
+
+# get_objects fetches the objects of a type with these ids, in as few
+# requests as the session's limits allow, and returns them in no
+# particular order.
+sub get_objects ($type, @ids) {
+  my @calls;
+  while (@ids) {
+    my @chunk = splice @ids, 0, $core->{maxObjectsInGet};
+    push @calls, [ "$type/get", { ids => \@chunk } ];
+  }
+  my @objects;
+  while (@calls) {
+    my @batch = splice @calls, 0, $core->{maxCallsInRequest};
+    push @objects, map {; $_->{list}->@* } jmap(@batch);
+  }
+  return @objects;
+}
+
+# query_ids runs a Track/query for the filter and returns every matching
+# id, in the server's order, paging past the most it answers at once.
+sub query_ids ($filter) {
+  my @ids;
+  while (1) {
+    my ($r) = jmap([ 'Track/query', { filter => $filter, position => scalar @ids, calculateTotal => JSON::MaybeXS::true } ]);
+    push @ids, $r->{ids}->@*;
+    last if @ids >= $r->{total} || ! $r->{ids}->@*;
+  }
+  return @ids;
+}
+
+sub set_error ($e) { "$e->{type}" . ($e->{description} ? ": $e->{description}" : '') }
+
+sub epoch ($utcdate) {
+  $utcdate =~ s/\.\d+Z\z/Z/;
+  return Time::Piece->strptime($utcdate, '%Y-%m-%dT%H:%M:%SZ')->epoch;
+}
+
+# ---- The source and the target --------------------------------------------
+
+my ($plain, $smart) = jmap(
+  [ 'Playlist/get',      { ids => undef } ],
+  [ 'SmartPlaylist/get', { ids => undef } ],
+);
+
+my ($source_smart) = grep {; $_->{title} eq $opt{source} } $smart->{list}->@*;
+my ($source_plain) = grep {; $_->{title} eq $opt{source} } $plain->{list}->@*;
+my $source_filter = $source_smart ? { inSmartPlaylist => $source_smart->{id} }
+                  : $source_plain ? { inPlaylist      => $source_plain->{id} }
+                  : die "no playlist on the server is titled \"$opt{source}\"\n";
+
+my ($target) = grep {; $_->{title} eq $opt{target} } $plain->{list}->@*;
+die "\"$opt{target}\" is the source playlist, so it can't be the target\n"
+  if $target && $source_plain && $target->{id} eq $source_plain->{id};
+
+# ---- Gathering the source by album ----------------------------------------
+
+my @tracks = get_objects('Track', query_ids($source_filter));
+say "$opt{source} has " . @tracks . " tracks";
+
+my %album;   # album id => { album => Album, tracks => [ Track, ... ] }
+for my $track (@tracks) {
+  my $id = $track->{albumId} // next;
+  push $album{$id}{tracks}->@*, $track;
+}
+
+for my $album (get_objects('Album', keys %album)) {
+  $album{ $album->{id} }{album} = $album;
+}
+
+my $now = time;
+my $DEFAULT_PLAYED = $now - $MIN_AGE;
+
+sub skip ($rec, $why) {
+  say "skipping \"$rec->{album}{title}\": $why" if $opt{verbose};
+  return;
+}
+
+# consider fills in the record of an album with the figures the choice
+# is made on, and returns it if the album is a candidate.
+sub consider ($rec) {
+  my $album  = $rec->{album};
+  my @tracks = $rec->{tracks}->@*;
+
+  return skip($rec, "only " . @tracks . " tracks") if @tracks < $MIN_TRACKS;
+
+  my @played = map {; defined $_->{lastPlayed} ? epoch($_->{lastPlayed}) : $DEFAULT_PLAYED } @tracks;
+  $rec->{age} = $now - sum0(@played) / @played;
+  return skip($rec, "played " . int($rec->{age} / 86_400) . " days ago, on average") if $rec->{age} < $MIN_AGE;
+
+  my @ratings = grep {; defined && $_ > 0 } map {; $_->{rating} } @tracks;
+  $rec->{rating} = @ratings ? sum0(@ratings) / @ratings : undef;
+  return skip($rec, sprintf "rated %.2f, on average", $rec->{rating})
+    if defined $rec->{rating} && $rec->{rating} < $MIN_RATING;
+
+  # The album's tracks go in album order, whatever order the source has.
+  my (%position, $n);
+  for my $disc ($album->{discs}->@*) {
+    $position{$_} = $n++ for $disc->{trackIds}->@*;
+  }
+  $rec->{tracks} = [ sort {; $position{ $a->{id} } <=> $position{ $b->{id} } } @tracks ];
+  $rec->{bytes}  = sum0(map {; $_->{size} // 0 } @tracks);
+
+  return $rec;
+}
+
+my @candidates = sort {; $b->{age} <=> $a->{age} || $a->{album}{title} cmp $b->{album}{title} }
+                 grep {; consider($_) } values %album;
+
+# ---- Choosing -------------------------------------------------------------
+
+sub wanted ($rec) {
+  return 1 unless $opt{interactive};
+  local $| = 1;
+  while (1) {
+    print "include \"$rec->{album}{title}\" by $rec->{artist}? [y/n] ";
+    my $line = <STDIN> // die "\nno answer; nothing written\n";
+    return 1 if $line =~ /\Ay/i;
+    return 0 if $line =~ /\An/i;
+  }
+}
+
+my (@chosen, %seen_artist);
+my $bytes = 0;
+for my $rec (@candidates) {
+  $rec->{artist} = $rec->{album}{artist} // '(various)';
+  next if defined $rec->{album}{artist} && $seen_artist{ $rec->{album}{artist} }++;
+  next unless wanted($rec);
+
+  push @chosen, $rec;
+  $bytes += $rec->{bytes};
+  printf "%-40.40s  %-24.24s  %3d tracks  %4d MB  %4d days  %s\n",
+    $rec->{album}{title}, $rec->{artist}, scalar $rec->{tracks}->@*,
+    $rec->{bytes} / 1_000_000, $rec->{age} / 86_400,
+    defined $rec->{rating} ? sprintf('%.2f', $rec->{rating}) : '-';
+
+  last if $bytes > $MAX_BYTES;
+}
+
+my @track_ids = map {; $_->{id} } map {; $_->{tracks}->@* } @chosen;
+printf "%d albums, %d tracks, %d MB\n", scalar @chosen, scalar @track_ids, $bytes / 1_000_000;
+
+# ---- Writing the target ---------------------------------------------------
+
+if ($target && $JSON->encode($target->{trackIds}) eq $JSON->encode(\@track_ids)) {
+  say "\"$opt{target}\" already has exactly these tracks";
+  exit;
+}
+
+if ($opt{'dry-run'}) {
+  say $target ? "would rewrite \"$opt{target}\"" : "would create \"$opt{target}\"";
+  exit;
+}
+
+if ($target) {
+  my ($r) = jmap([ 'Playlist/set', { update => { $target->{id} => { trackIds => \@track_ids } } } ]);
+  die "rewriting \"$opt{target}\" failed: " . set_error($r->{notUpdated}{ $target->{id} }) . "\n" if $r->{notUpdated};
+  say "rewrote \"$opt{target}\"";
+} else {
+  my ($r) = jmap([ 'Playlist/set', { create => { new => { title => $opt{target}, trackIds => \@track_ids } } } ]);
+  die "creating \"$opt{target}\" failed: " . set_error($r->{notCreated}{new}) . "\n" if $r->{notCreated};
+  say "created \"$opt{target}\"";
+}
