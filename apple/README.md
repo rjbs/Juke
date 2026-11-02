@@ -4,8 +4,9 @@ One SwiftUI app for both platforms, nearly all of it in the `JukeKit`
 package so the two share everything they can:
 
 - **JukeKit** keeps the library: a [Jinx](../../Jinx) mirror of the
-  server's Tracks, Albums and Playlists, an in-memory index kept current
-  from Jinx's change stream, rating and play-count writes, and a player
+  server's Tracks, Albums and Playlists of both kinds, an in-memory index
+  kept current from Jinx's change stream, each smart playlist's rule run
+  as a query subscription, rating and play-count writes, and a player
   that plays from Jinx's blob cache and reports to the system's
   now-playing display and remote commands.
 - **JukeUI** is the views, shared by both platforms; on an iPhone the

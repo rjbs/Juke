@@ -15,6 +15,7 @@ struct LibraryView: View {
     case songs
     case offline
     case playlist(Playlist.ID)
+    case smartPlaylist(String)
   }
 
   @State private var selection: SidebarItem? = .albums
@@ -47,10 +48,16 @@ struct LibraryView: View {
         Label("Artists", systemImage: "music.mic").tag(SidebarItem.artists)
         Label("Songs", systemImage: "music.note").tag(SidebarItem.songs)
         Label("Offline", systemImage: "arrow.down.circle").tag(SidebarItem.offline)
-        if !library.playlists.isEmpty {
+        let rows = PlaylistRow.rows(of: library)
+        if !rows.isEmpty {
           Section("Playlists") {
-            ForEach(library.playlists) { p in
-              Label(p.title, systemImage: "music.note.list").tag(SidebarItem.playlist(p.id))
+            ForEach(rows) { row in
+              switch row {
+              case .plain(let p):
+                Label(p.title, systemImage: "music.note.list").tag(SidebarItem.playlist(p.id))
+              case .smart(let s):
+                Label(s.title, systemImage: "gearshape").tag(SidebarItem.smartPlaylist(s.id))
+              }
             }
           }
         }
@@ -93,9 +100,37 @@ struct LibraryView: View {
           OfflineView(library: library, player: player)
         case .playlist(let key):
           PlaylistView(library: library, player: player, key: key)
+        case .smartPlaylist(let id):
+          SmartPlaylistView(library: library, player: player, id: id)
         }
       }
       .id(selection)
+    }
+  }
+
+  /// A playlist of either kind, for a list that shows them together by
+  /// title, a smart playlist wearing a gear.
+  enum PlaylistRow: Identifiable {
+    case plain(Playlist)
+    case smart(SmartPlaylist)
+
+    var id: String {
+      switch self {
+      case .plain(let p): "playlist:\(p.key)"
+      case .smart(let s): "smart:\(s.id)"
+      }
+    }
+
+    var title: String {
+      switch self {
+      case .plain(let p): p.title
+      case .smart(let s): s.title
+      }
+    }
+
+    @MainActor static func rows(of library: Library) -> [PlaylistRow] {
+      (library.playlists.map(PlaylistRow.plain) + library.smartPlaylists.map(PlaylistRow.smart))
+        .sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
     }
   }
 
