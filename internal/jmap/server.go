@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"semiotic.systems/juke/internal/artwork"
 	"semiotic.systems/juke/internal/store"
 )
 
@@ -156,18 +157,24 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 	enc.Encode(session)
 }
 
-// handleDownload serves a blob.  A blobId always names the same bytes,
-// so the response may be cached forever; range requests come from
-// http.ServeContent.
+// handleDownload serves a blob: a track's audio, or an image of album
+// art.  A blobId always names the same bytes, so the response may be
+// cached forever; range requests come from http.ServeContent.
 func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
 	if r.PathValue("accountId") != s.cfg.AccountID {
 		http.NotFound(w, r)
 		return
 	}
+	blobID := r.PathValue("blobId")
 	var path, contentType string
 	err := s.store.DB.QueryRowContext(r.Context(),
-		`SELECT path, content_type FROM track WHERE blob_id = ?`, r.PathValue("blobId"),
+		`SELECT path, content_type FROM track WHERE blob_id = ?`, blobID,
 	).Scan(&path, &contentType)
+	name := filepath.Join(s.cfg.Library, filepath.FromSlash(path))
+	if errors.Is(err, sql.ErrNoRows) {
+		err = s.store.DB.QueryRowContext(r.Context(), `SELECT mime FROM artwork WHERE id = ?`, blobID).Scan(&contentType)
+		name = artwork.Path(s.cfg.Library, blobID)
+	}
 	if errors.Is(err, sql.ErrNoRows) {
 		http.NotFound(w, r)
 		return
@@ -176,7 +183,7 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "database error", http.StatusInternalServerError)
 		return
 	}
-	f, err := os.Open(filepath.Join(s.cfg.Library, filepath.FromSlash(path)))
+	f, err := os.Open(name)
 	if err != nil {
 		s.cfg.Log.Printf("blob %s: %v", r.PathValue("blobId"), err)
 		http.NotFound(w, r)

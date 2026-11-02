@@ -1,11 +1,18 @@
 package jmap
 
 import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"testing"
+
+	"semiotic.systems/juke/internal/artwork"
+	"semiotic.systems/juke/internal/store"
 )
 
 // checkQuery runs a Track/query and checks the titles it returns, in
@@ -458,4 +465,50 @@ func TestTrackQueryCountOnly(t *testing.T) {
 		"limitSeconds": 300, "limit": 0, "calculateTotal": true,
 	})
 	checkEqual(t, "capped total", r["total"], float64(2))
+}
+
+// An image stored as album art is a blob too: named by Album and Track,
+// and served with its own media type.
+func TestArtworkBlobs(t *testing.T) {
+	f := newFixture(t, Config{})
+	ctx := context.Background()
+	data := []byte("\x89PNG\r\n\x1a\nnot really a picture")
+	sum := sha256.Sum256(data)
+	id := store.ArtworkID(hex.EncodeToString(sum[:]))
+	if err := os.MkdirAll(artwork.Dir(f.library), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(artwork.Path(f.library, id), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.store.DB.ExecContext(ctx, `INSERT INTO artwork (id, sha256, mime, size) VALUES (?, ?, 'image/png', ?)`, id, hex.EncodeToString(sum[:]), len(data)); err != nil {
+		t.Fatal(err)
+	}
+	albumID := f.call("Track/get", map[string]any{"ids": []string{f.ids["Whip It"]}, "properties": []string{"albumId"}})["list"].([]any)[0].(map[string]any)["albumId"].(string)
+	if _, err := f.store.DB.ExecContext(ctx, `UPDATE album SET artwork_id = ? WHERE id = ?`, id, albumID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.store.DB.ExecContext(ctx, `UPDATE track SET artwork_id = ? WHERE id = ?`, id, f.ids["Brave Sir Robin"]); err != nil {
+		t.Fatal(err)
+	}
+
+	r := f.call("Album/get", map[string]any{"ids": []string{albumID}, "properties": []string{"artworkBlobId"}})
+	checkEqual(t, "album artworkBlobId", r["list"].([]any)[0].(map[string]any)["artworkBlobId"], id)
+	trackArt := func(title string) any {
+		r := f.call("Track/get", map[string]any{"ids": []string{f.ids[title]}, "properties": []string{"artworkBlobId"}})
+		return r["list"].([]any)[0].(map[string]any)["artworkBlobId"]
+	}
+	checkEqual(t, "track with its own art", trackArt("Brave Sir Robin"), id)
+	checkEqual(t, "track with its album's art", trackArt("Whip It"), nil)
+
+	req, _ := http.NewRequest("GET", f.srv.URL+"/jmap/download/music/"+id+"/cover", nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	checkEqual(t, "artwork status", resp.StatusCode, http.StatusOK)
+	checkEqual(t, "artwork type", resp.Header.Get("Content-Type"), "image/png")
+	checkEqual(t, "artwork body", string(body), string(data))
 }
