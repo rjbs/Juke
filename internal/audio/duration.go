@@ -117,6 +117,9 @@ type frame struct {
 	samples int // per frame
 	rate    int // samples per second
 	bitrate int // bits per second
+	version string
+	layer   int
+	mono    bool
 	// Where a Xing or VBRI header would sit, from the start of the frame.
 	xingAt, vbriAt int
 }
@@ -157,6 +160,9 @@ func parseFrame(h []byte) *frame {
 	f := &frame{
 		bitrate: bitrates[[2]int{family, layer}][bitrateIndex-1] * 1000,
 		rate:    sampleRates[version][rateIndex],
+		version: map[int]string{1: "1", 2: "2", 25: "2.5"}[version],
+		layer:   layer,
+		mono:    mono,
 	}
 	switch {
 	case layer == 1:
@@ -187,96 +193,32 @@ func (f *frame) duration() time.Duration {
 	return time.Duration(float64(f.samples) / float64(f.rate) * float64(time.Second))
 }
 
-// mpegDuration finds the first frame after any ID3v2 tags, and takes the
-// length from a Xing, Info or VBRI header if the encoder left one.
-// Otherwise it reads a few frames; if they share a bitrate the file is
-// taken as constant-rate, and its audio bytes divided by that rate.  A
-// variable-rate file with no header is the slow case, and the only one
-// that reads the whole file: every frame is counted.
-// -- claude, 2026-11-01
+// mpegDuration measures an MPEG audio file as analyzeMPEG describes,
+// walking its frames only when nothing else answers.
 func mpegDuration(r io.ReadSeeker) (time.Duration, error) {
-	size, err := r.Seek(0, io.SeekEnd)
+	a, err := analyzeMPEG(r, false)
 	if err != nil {
 		return 0, err
 	}
-	start, err := skipID3v2(r)
-	if err != nil {
-		return 0, err
-	}
-	end, err := trimID3v1(r, size)
-	if err != nil {
-		return 0, err
-	}
-
-	first, at, err := firstFrame(r, start, end)
-	if err != nil {
-		return 0, err
-	}
-	if _, err := r.Seek(at, io.SeekStart); err != nil {
-		return 0, err
-	}
-	head := make([]byte, min(first.length, int(end-at)))
-	if _, err := io.ReadFull(r, head); err != nil {
-		return 0, err
-	}
-	if frames, ok := headerFrameCount(first, head); ok {
-		return time.Duration(frames) * first.duration(), nil
-	}
-
-	// No header.  Look at the next few frames' bitrates.
-	constant := true
-	pos := at
-	for i := 0; i < 32 && constant; i++ {
-		f, err := frameAt(r, pos, end)
-		if err != nil || f == nil {
-			break
-		}
-		if f.bitrate != first.bitrate {
-			constant = false
-		}
-		pos += int64(f.length)
-	}
-	if constant {
-		return time.Duration(float64(end-at) * 8 / float64(first.bitrate) * float64(time.Second)), nil
-	}
-
-	var total time.Duration
-	for pos := at; pos+4 <= end; {
-		f, err := frameAt(r, pos, end)
-		if err != nil {
-			return 0, err
-		}
-		if f == nil {
-			// Junk between frames: resync at the next header.
-			_, next, err := firstFrame(r, pos+1, end)
-			if err != nil {
-				break
-			}
-			pos = next
-			continue
-		}
-		total += f.duration()
-		pos += int64(f.length)
-	}
-	return total, nil
+	return a.Chosen, nil
 }
 
-// headerFrameCount returns the frame count a Xing, Info or VBRI header
-// in the first frame declares.
-func headerFrameCount(f *frame, head []byte) (int, bool) {
+// headerFrameCount returns the kind and frame count of a Xing, Info or
+// VBRI header in the first frame, or "" and 0 for none.
+func headerFrameCount(f *frame, head []byte) (string, int) {
 	if n := f.xingAt; n+12 <= len(head) {
 		tag := string(head[n : n+4])
 		if tag == "Xing" || tag == "Info" {
 			flags := binary.BigEndian.Uint32(head[n+4:])
 			if flags&1 != 0 {
-				return int(binary.BigEndian.Uint32(head[n+8:])), true
+				return tag, int(binary.BigEndian.Uint32(head[n+8:]))
 			}
 		}
 	}
 	if n := f.vbriAt; n+18 <= len(head) && string(head[n:n+4]) == "VBRI" {
-		return int(binary.BigEndian.Uint32(head[n+14:])), true
+		return "VBRI", int(binary.BigEndian.Uint32(head[n+14:]))
 	}
-	return 0, false
+	return "", 0
 }
 
 // skipID3v2 returns the offset of the first byte after any ID3v2 tags at

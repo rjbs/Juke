@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -122,5 +123,23 @@ func TestMPEG(t *testing.T) {
 
 	if _, err := Duration(bytes.NewReader(nil), "audio/ogg"); err == nil {
 		t.Error("unknown content type: no error")
+	}
+}
+
+func TestAnalyze(t *testing.T) {
+	// A header that lies is still what Duration believes; the walk
+	// shows what it would have found.
+	a, err := Analyze(bytes.NewReader(concat(mp3Header("Xing", 300), mp3Frames(400, 5, 14))))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.Header != "Xing" || a.HeaderFrames != 300 || a.ConstantRate || !a.Walked || a.WalkFrames != 401 || a.MinBitrate != 64000 || a.MaxBitrate != 320000 || a.Chosen != a.HeaderDuration {
+		t.Errorf("analysis = %+v", a)
+	}
+	if a.Version != "1" || a.Layer != 3 || a.SampleRate != 44100 || a.Mono {
+		t.Errorf("first frame = MPEG-%s layer %d %d Hz mono %v", a.Version, a.Layer, a.SampleRate, a.Mono)
+	}
+	if s := a.String(); !strings.Contains(s, "Xing header: 300 frames") || !strings.Contains(s, "walk: 401 frames") {
+		t.Errorf("String() = %q", s)
 	}
 }
