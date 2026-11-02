@@ -47,6 +47,11 @@ func TestTrackQueryFilters(t *testing.T) {
 	checkQuery(t, f, map[string]any{"lastPlayedWithinDays": 7}, nil, "Smells Like Nirvana", "Brave Sir Robin")
 	checkQuery(t, f, map[string]any{"lastPlayedWithinDays": 5}, nil, "Brave Sir Robin")
 	checkQuery(t, f, map[string]any{"hasAudio": false}, nil, "Lost Track")
+	checkQuery(t, f, map[string]any{"genre": "rock"}, nil, "We Will Rock You", "Bohemian Rhapsody")
+	checkQuery(t, f, map[string]any{"genreContains": "WAVE"}, nil, "Whip It", "Jocko Homo")
+	checkQuery(t, f, map[string]any{"hasGenre": false}, nil, "Trigger Happy", "Brave Sir Robin")
+	checkQuery(t, f, map[string]any{"hasAlbum": false}, nil, "Brave Sir Robin")
+	checkQuery(t, f, map[string]any{"hasArtist": false}, nil)
 	checkQuery(t, f, map[string]any{"inPlaylist": f.ids["Brave Sir Robin"]}, nil)
 
 	checkQuery(t, f, map[string]any{"operator": "AND", "conditions": []any{
@@ -91,14 +96,19 @@ func TestTrackQuerySorts(t *testing.T) {
 	unratedLast := map[string]any{"operator": "OR", "conditions": []any{queen, map[string]any{"artist": "Devo"}}}
 	checkQuery(t, f, unratedLast, by("rating", true), "Bohemian Rhapsody", "We Will Rock You", "Whip It")
 	checkQuery(t, f, unratedLast, by("rating", false), "We Will Rock You", "Bohemian Rhapsody", "Whip It")
+
+	// A genre sort folds case and puts the genre-less last; title breaks
+	// the ties within a genre.
+	checkQuery(t, f, map[string]any{"albumTitleContains": "e"}, append(by("genre", false), by("title", true)...),
+		"Bohemian Rhapsody", "We Will Rock You", "Jocko Homo", "Whip It", "Lost Track", "Smells Like Nirvana", "Trigger Happy")
 }
 
 func TestTrackQueryErrors(t *testing.T) {
 	f := newFixture(t, Config{})
-	checkMethodError(t, f, "Track/query", map[string]any{"filter": map[string]any{"genre": "Funk"}}, "unsupportedFilter")
+	checkMethodError(t, f, "Track/query", map[string]any{"filter": map[string]any{"composer": "Funk"}}, "unsupportedFilter")
 	checkMethodError(t, f, "Track/query", map[string]any{"filter": map[string]any{"ratingAtLeast": "four"}}, "invalidArguments")
 	checkMethodError(t, f, "Track/query", map[string]any{"filter": map[string]any{"lastPlayedAfter": "June"}}, "invalidArguments")
-	checkMethodError(t, f, "Track/query", map[string]any{"sort": by("genre", true)}, "unsupportedSort")
+	checkMethodError(t, f, "Track/query", map[string]any{"sort": by("composer", true)}, "unsupportedSort")
 	checkMethodError(t, f, "Track/query", map[string]any{"anchor": "Tnope"}, "anchorNotFound")
 	checkMethodError(t, f, "Album/query", map[string]any{"filter": map[string]any{"title": "x"}}, "unsupportedFilter")
 	checkMethodError(t, f, "Track/queryChanges", map[string]any{}, "cannotCalculateChanges")
@@ -150,7 +160,7 @@ func TestGet(t *testing.T) {
 	all := f.call("Track/get", map[string]any{"ids": nil})
 	checkEqual(t, "every track", len(all["list"].([]any)), 8)
 
-	checkMethodError(t, f, "Track/get", map[string]any{"properties": []string{"genre"}}, "invalidArguments")
+	checkMethodError(t, f, "Track/get", map[string]any{"properties": []string{"composer"}}, "invalidArguments")
 	checkMethodError(t, f, "Track/get", map[string]any{"accountId": "nobody"}, "accountNotFound")
 	checkMethodError(t, f, "Track/get", map[string]any{"bogus": 1}, "invalidArguments")
 }

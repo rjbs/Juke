@@ -51,8 +51,8 @@ decided for the tailnet.
   `/query`.  Albums and playlists can be sorted by title but not
   filtered; Track's filters and sorts are listed in
   [object types](types.md).
-- **Track/set** updates rating, play count and last played.  Anything
-  else, and any create or destroy, is refused.
+- **Track/set** updates rating, play count, last played and genre.
+  Anything else, and any create or destroy, is refused.
 - **Blob download** serves each track's original file, with range
   requests.  A blobId is derived from the track id, metadata version and
   recipe, as [storage](storage.md) describes; for now every track is at

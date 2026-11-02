@@ -30,7 +30,7 @@ func (s *Server) objectTypes() []*objectType {
 			name:  store.TypeTrack,
 			table: "track",
 			properties: []string{
-				"id", "title", "artist", "albumId", "rating", "blobId", "blobType",
+				"id", "title", "artist", "genre", "albumId", "rating", "blobId", "blobType",
 				"playCount", "lastPlayed", "dateAdded",
 			},
 			load:  loadTracks,
@@ -231,7 +231,7 @@ func nullString(v sql.NullString) any {
 func loadTracks(ctx context.Context, q store.Queryer, ids []string) (map[string]object, []string, error) {
 	where, args := inClause("id", ids)
 	rows, err := q.QueryContext(ctx, `
-		SELECT id, title, artist, album_id, rating, blob_id, content_type, play_count, last_played, date_added
+		SELECT id, title, artist, genre, album_id, rating, blob_id, content_type, play_count, last_played, date_added
 		FROM track`+where+` ORDER BY id`, args...)
 	if err != nil {
 		return nil, nil, err
@@ -241,16 +241,17 @@ func loadTracks(ctx context.Context, q store.Queryer, ids []string) (map[string]
 	var order []string
 	for rows.Next() {
 		var id, title, dateAdded string
-		var artist, albumID, blobID, blobType, lastPlayed sql.NullString
+		var artist, genre, albumID, blobID, blobType, lastPlayed sql.NullString
 		var rating sql.NullFloat64
 		var playCount int64
-		if err := rows.Scan(&id, &title, &artist, &albumID, &rating, &blobID, &blobType, &playCount, &lastPlayed, &dateAdded); err != nil {
+		if err := rows.Scan(&id, &title, &artist, &genre, &albumID, &rating, &blobID, &blobType, &playCount, &lastPlayed, &dateAdded); err != nil {
 			return nil, nil, err
 		}
 		obj := object{
 			"id":         id,
 			"title":      title,
 			"artist":     nullString(artist),
+			"genre":      nullString(genre),
 			"albumId":    nullString(albumID),
 			"rating":     nil,
 			"blobId":     nullString(blobID),
@@ -619,8 +620,10 @@ func queryIDs(ctx context.Context, q store.Queryer, query string, args ...any) (
 // ---- Track/set ------------------------------------------------------------
 
 // The Track properties a client may set.  Everything else about a track
-// comes from its file or its album.
-var settableTrackProperties = map[string]bool{"rating": true, "playCount": true, "lastPlayed": true}
+// comes from its file or its album.  Genre is the one piece of tag data
+// among them: the "No Genre" repair queue needs somewhere to put the
+// answer, and a later metadata flush (#5) carries it to the file.
+var settableTrackProperties = map[string]bool{"rating": true, "playCount": true, "lastPlayed": true, "genre": true}
 
 var trackSetter = &setter{
 	typ: store.TypeTrack,
@@ -685,7 +688,7 @@ func trackPatch(patch map[string]json.RawMessage) ([]columnValue, *methodError) 
 	if len(bad) > 0 {
 		return nil, &methodError{
 			Type:        "invalidProperties",
-			Description: "only rating, playCount and lastPlayed may be set, to valid values",
+			Description: "only rating, playCount, lastPlayed and genre may be set, to valid values",
 			Properties:  bad,
 		}
 	}
@@ -710,6 +713,18 @@ func trackValue(prop string, raw json.RawMessage) (columnValue, bool) {
 			return columnValue{}, false
 		}
 		return columnValue{"play_count", int64(n)}, true
+	case "genre":
+		if isNull {
+			return columnValue{"genre", nil}, true
+		}
+		var str string
+		if json.Unmarshal(raw, &str) != nil {
+			return columnValue{}, false
+		}
+		if str = strings.TrimSpace(str); str == "" {
+			return columnValue{"genre", nil}, true
+		}
+		return columnValue{"genre", str}, true
 	case "lastPlayed":
 		if isNull {
 			return columnValue{"last_played", nil}, true

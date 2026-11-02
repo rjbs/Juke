@@ -113,7 +113,7 @@ func (s *Server) compileCondition(name string, raw json.RawMessage) (string, []a
 		return v, json.Unmarshal(raw, &v) == nil && !bytes.Equal(raw, []byte("null"))
 	}
 
-	textColumns := map[string]string{"title": "t.title", "artist": "t.artist", "albumTitle": "a.title"}
+	textColumns := map[string]string{"title": "t.title", "artist": "t.artist", "albumTitle": "a.title", "genre": "t.genre"}
 	if col, ok := textColumns[name]; ok {
 		v, ok := str()
 		if !ok {
@@ -150,6 +150,13 @@ func (s *Server) compileCondition(name string, raw json.RawMessage) (string, []a
 			return bad("a boolean")
 		}
 		return "(t.rating IS NOT NULL) = ?", []any{v}, nil
+	case "hasArtist", "hasAlbum", "hasGenre":
+		v, ok := boolean()
+		if !ok {
+			return bad("a boolean")
+		}
+		col := map[string]string{"hasArtist": "t.artist", "hasAlbum": "t.album_id", "hasGenre": "t.genre"}[name]
+		return "(" + col + " IS NOT NULL) = ?", []any{v}, nil
 	case "hasAudio":
 		v, ok := boolean()
 		if !ok {
@@ -189,6 +196,7 @@ var trackSortColumns = map[string][]string{
 	"title":      {"juke_fold(t.title)"},
 	"artist":     {"juke_fold(t.artist)"},
 	"albumTitle": {"juke_fold(a.title)"},
+	"genre":      {"juke_fold(t.genre)"},
 	"rating":     {"t.rating"},
 	"playCount":  {"t.play_count"},
 	"lastPlayed": {"t.last_played"},

@@ -291,3 +291,22 @@ func TestAlbumSetRefusals(t *testing.T) {
 
 	checkAlbum(t, f, weird, "Off the Deep End", "Weird Al Yankovic", []string{"Smells Like Nirvana", "Lost Track", "Trigger Happy"})
 }
+
+// checkTrackGenre sets a track's genre and checks what Track/get then says.
+func checkTrackGenre(t *testing.T, f *fixture, title string, set any, want any) {
+	t.Helper()
+	id := f.ids[title]
+	f.set("Track", map[string]any{"update": map[string]any{id: map[string]any{"genre": set}}})
+	got := f.call("Track/get", map[string]any{"ids": []string{id}})["list"].([]any)[0].(map[string]any)
+	checkEqual(t, "genre of "+title, got["genre"], want)
+}
+
+func TestTrackSetGenre(t *testing.T) {
+	f := newFixture(t, Config{})
+	checkTrackGenre(t, f, "Trigger Happy", "Polka", "Polka")
+	checkTrackGenre(t, f, "Trigger Happy", "  Oompah  ", "Oompah")
+	checkTrackGenre(t, f, "Trigger Happy", "", nil)
+	checkTrackGenre(t, f, "Whip It", nil, nil)
+	update := map[string]any{"update": map[string]any{f.ids["Whip It"]: map[string]any{"genre": 7}}}
+	checkSetError(t, f, "Track", update, "invalidProperties", "genre")
+}
