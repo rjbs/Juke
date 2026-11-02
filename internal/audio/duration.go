@@ -203,24 +203,6 @@ func mpegDuration(r io.ReadSeeker) (time.Duration, error) {
 	return a.Chosen, nil
 }
 
-// headerFrameCount returns the kind and frame count of a Xing, Info or
-// VBRI header in the first frame, or "" and 0 for none.
-func headerFrameCount(f *frame, head []byte) (string, int) {
-	if n := f.xingAt; n+12 <= len(head) {
-		tag := string(head[n : n+4])
-		if tag == "Xing" || tag == "Info" {
-			flags := binary.BigEndian.Uint32(head[n+4:])
-			if flags&1 != 0 {
-				return tag, int(binary.BigEndian.Uint32(head[n+8:]))
-			}
-		}
-	}
-	if n := f.vbriAt; n+18 <= len(head) && string(head[n:n+4]) == "VBRI" {
-		return "VBRI", int(binary.BigEndian.Uint32(head[n+14:]))
-	}
-	return "", 0
-}
-
 // skipID3v2 returns the offset of the first byte after any ID3v2 tags at
 // the start of the file.
 func skipID3v2(r io.ReadSeeker) (int64, error) {
@@ -266,7 +248,11 @@ func trimID3v1(r io.ReadSeeker, size int64) (int64, error) {
 // firstFrame scans forward from start for a frame header that another
 // valid header follows, so a stray sync byte in junk isn't taken for one.
 func firstFrame(r io.ReadSeeker, start, end int64) (*frame, int64, error) {
-	const window = 64 * 1024
+	return firstFrameWithin(r, start, end, 64*1024)
+}
+
+// firstFrameWithin is firstFrame looking only so far ahead.
+func firstFrameWithin(r io.ReadSeeker, start, end int64, window int) (*frame, int64, error) {
 	if _, err := r.Seek(start, io.SeekStart); err != nil {
 		return nil, 0, err
 	}

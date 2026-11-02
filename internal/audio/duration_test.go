@@ -28,13 +28,14 @@ func mp3Frames(n int, bitrateIndexes ...int) []byte {
 }
 
 // mp3Header makes a first frame carrying a Xing-style header that
-// declares the frame count.
-func mp3Header(tag string, frames int) []byte {
+// declares the frame count and the byte count.
+func mp3Header(tag string, frames, bytes int) []byte {
 	b := mp3Frame(9)
 	at := 4 + 32
 	copy(b[at:], tag)
-	binary.BigEndian.PutUint32(b[at+4:], 1)
+	binary.BigEndian.PutUint32(b[at+4:], 3)
 	binary.BigEndian.PutUint32(b[at+8:], uint32(frames))
+	binary.BigEndian.PutUint32(b[at+12:], uint32(bytes))
 	return b
 }
 
@@ -106,12 +107,17 @@ func TestMPEG(t *testing.T) {
 	frame := 1152 * time.Second / 44100
 	ftyp := box("ftyp", []byte("M4A \x00\x00\x00\x00"))
 
-	checkDuration(t, "Xing", concat(mp3Header("Xing", 1000), mp3Frames(20, 9)), "audio/mpeg", 1000*frame)
-	checkDuration(t, "Info", concat(mp3Header("Info", 1000), mp3Frames(20, 9)), "audio/mpeg", 1000*frame)
-	checkDuration(t, "constant rate, no header", mp3Frames(500, 9), "audio/mpeg", time.Duration(500*417*8)*time.Second/128000)
+	cbr := func(frames int) time.Duration { return time.Duration(frames*417*8) * time.Second / 128000 }
+	checkDuration(t, "Xing", concat(mp3Header("Xing", 1000, 21*417), mp3Frames(20, 9)), "audio/mpeg", 1000*frame)
+	checkDuration(t, "Info", concat(mp3Header("Info", 1000, 21*417), mp3Frames(20, 9)), "audio/mpeg", 1000*frame)
+	checkDuration(t, "header whose byte count is wrong", concat(mp3Header("Xing", 1000, 1000*417), mp3Frames(20, 9)), "audio/mpeg", cbr(21))
+	checkDuration(t, "header whose byte count is wrong, variable rate", concat(mp3Header("Xing", 1000, 1000*417), mp3Frames(400, 5, 14)), "audio/mpeg", 401*frame)
+	checkDuration(t, "constant at the start, variable later", concat(mp3Frames(100, 9), mp3Frames(300, 5, 14)), "audio/mpeg", 400*frame)
+	checkDuration(t, "audio then junk", concat(mp3Frames(100, 9), []byte{0, 0}, bytes.Repeat([]byte{0xFF, 0xFB, 0x90, 0x00, 0x00}, 10000)), "audio/mpeg", 100*frame)
+	checkDuration(t, "constant rate, no header", mp3Frames(500, 9), "audio/mpeg", cbr(500))
 	checkDuration(t, "variable rate, no header", mp3Frames(400, 5, 14), "audio/mpeg", 400*frame)
-	checkDuration(t, "tags either side", concat(id3v2(2000), mp3Frames(500, 9), id3v1()), "audio/mpeg", time.Duration(500*417*8)*time.Second/128000)
-	checkDuration(t, "junk before the frames", concat([]byte("junk\xff\xfbjunk"), mp3Header("Xing", 300), mp3Frames(5, 9)), "audio/mpeg", 300*frame)
+	checkDuration(t, "tags either side", concat(id3v2(2000), mp3Frames(500, 9), id3v1()), "audio/mpeg", cbr(500))
+	checkDuration(t, "junk before the frames", concat([]byte("junk\xff\xfbjunk"), mp3Header("Xing", 300, 6*417), mp3Frames(5, 9)), "audio/mpeg", 300*frame)
 	checkDuration(t, "junk between frames", concat(mp3Frames(100, 5, 14), []byte("\x00\x00junk"), mp3Frames(100, 5, 14)), "audio/mpeg", 200*frame)
 	checkUnknown(t, "no frames", []byte("this is not audio at all, not even a little"), "audio/mpeg")
 
@@ -127,13 +133,15 @@ func TestMPEG(t *testing.T) {
 }
 
 func TestAnalyze(t *testing.T) {
-	// A header that lies is still what Duration believes; the walk
-	// shows what it would have found.
-	a, err := Analyze(bytes.NewReader(concat(mp3Header("Xing", 300), mp3Frames(400, 5, 14))))
+	// A header whose frame count lies but whose byte count is right is
+	// still believed: only a walk could tell, and the walk is what the
+	// analysis adds.
+	body := mp3Frames(400, 5, 14)
+	a, err := Analyze(bytes.NewReader(concat(mp3Header("Xing", 300, 417+len(body)), body)))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if a.Header != "Xing" || a.HeaderFrames != 300 || a.ConstantRate || !a.Walked || a.WalkFrames != 401 || a.MinBitrate != 64000 || a.MaxBitrate != 320000 || a.Chosen != a.HeaderDuration {
+	if a.Header != "Xing" || a.HeaderFrames != 300 || !a.HeaderTrusted || a.ConstantRate || !a.Walked || a.WalkFrames != 401 || a.MinBitrate != 64000 || a.MaxBitrate != 320000 || a.Chosen != a.HeaderDuration {
 		t.Errorf("analysis = %+v", a)
 	}
 	if a.Version != "1" || a.Layer != 3 || a.SampleRate != 44100 || a.Mono {

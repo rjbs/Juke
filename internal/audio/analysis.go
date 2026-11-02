@@ -1,15 +1,19 @@
 package audio
 
 import (
+	"bufio"
+	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
+	"math"
 	"time"
 )
 
 // Analysis is everything the measuring can find out about an MPEG
 // audio file, for when a length looks wrong.  Duration chooses one of
-// its figures: the header's, else the estimate for a constant-rate
-// file, else the walk's.
+// its figures: a trusted header's, else the estimate for a file that
+// is constant-rate throughout, else the walk's.
 type Analysis struct {
 	Start, End int64 // where the audio begins and ends, tags excluded
 
@@ -20,12 +24,18 @@ type Analysis struct {
 	SampleRate int
 	Mono       bool
 
+	// A Xing, Info or VBRI header, if the encoder left one, and whether
+	// its byte count matches the file, which is what makes it believable.
 	Header         string // "Xing", "Info", "VBRI" or ""
 	HeaderFrames   int
+	HeaderBytes    int64
+	HeaderTrusted  bool
 	HeaderDuration time.Duration
 
-	ConstantRate bool          // the first frames share a bitrate
-	Estimate     time.Duration // audio bytes over the first frame's bitrate
+	// Whether frames sampled across the whole file share the first
+	// frame's bitrate, and the length that implies if so.
+	ConstantRate bool
+	Estimate     time.Duration
 
 	// The walk, done when the file is analysed or when nothing else
 	// answers: every frame counted, and the bitrates seen.
@@ -33,7 +43,7 @@ type Analysis struct {
 	WalkFrames             int
 	WalkDuration           time.Duration
 	MinBitrate, MaxBitrate int
-	Resyncs                int // junk skipped between frames
+	Resyncs                int // runs of junk skipped between frames
 
 	Chosen time.Duration
 }
@@ -52,16 +62,19 @@ func (a *Analysis) String() string {
 		s += ", mono"
 	}
 	s += "\n"
-	if a.Header != "" {
-		s += fmt.Sprintf("%s header: %d frames, %v\n", a.Header, a.HeaderFrames, a.HeaderDuration.Round(time.Millisecond))
-	} else {
+	switch {
+	case a.Header == "":
 		s += "no Xing, Info or VBRI header\n"
+	case a.HeaderTrusted:
+		s += fmt.Sprintf("%s header: %d frames, %d bytes, %v\n", a.Header, a.HeaderFrames, a.HeaderBytes, a.HeaderDuration.Round(time.Millisecond))
+	default:
+		s += fmt.Sprintf("%s header: %d frames, %d bytes, %v; not trusted, the byte count is wrong\n", a.Header, a.HeaderFrames, a.HeaderBytes, a.HeaderDuration.Round(time.Millisecond))
 	}
 	rate := "variable"
 	if a.ConstantRate {
 		rate = "constant"
 	}
-	s += fmt.Sprintf("first frames %s rate; estimate at %d kbps: %v\n", rate, a.Bitrate/1000, a.Estimate.Round(time.Millisecond))
+	s += fmt.Sprintf("sampled frames %s rate; estimate at %d kbps: %v\n", rate, a.Bitrate/1000, a.Estimate.Round(time.Millisecond))
 	if a.Walked {
 		s += fmt.Sprintf("walk: %d frames, %v, %d to %d kbps, %d resyncs\n",
 			a.WalkFrames, a.WalkDuration.Round(time.Millisecond), a.MinBitrate/1000, a.MaxBitrate/1000, a.Resyncs)
@@ -71,13 +84,17 @@ func (a *Analysis) String() string {
 }
 
 // analyzeMPEG finds the first frame after any ID3v2 tags, and takes the
-// length from a Xing, Info or VBRI header if the encoder left one.
-// Otherwise it reads a few frames; if they share a bitrate the file is
-// taken as constant-rate, and its audio bytes divided by that rate.  A
-// variable-rate file with no header is the slow case, and the only one
-// that reads the whole file: every frame is counted.  With walk set the
-// frames are counted regardless, for comparison.
-// -- claude, 2026-11-01
+// length from a Xing, Info or VBRI header if the encoder left one and
+// its byte count matches the file; a header that survived a re-cut of
+// the audio declares the old length, and two such were found in the
+// library.  Otherwise it samples frames at sixteen points through the
+// file; if every one has the first frame's bitrate the file is taken as
+// constant-rate, and its audio bytes divided by that rate.  Thirty-two
+// frames from the start was not enough: files that open at one rate and
+// vary later fooled it.  A variable-rate file with no trusted header is
+// the slow case, and the only one that reads the whole file: every
+// frame is counted.  With walk set the frames are counted regardless,
+// for comparison. -- claude, 2026-11-01
 func analyzeMPEG(r io.ReadSeeker, walk bool) (*Analysis, error) {
 	size, err := r.Seek(0, io.SeekEnd)
 	if err != nil {
@@ -109,26 +126,21 @@ func analyzeMPEG(r io.ReadSeeker, walk bool) (*Analysis, error) {
 	if _, err := io.ReadFull(r, head); err != nil {
 		return nil, err
 	}
-	a.Header, a.HeaderFrames = headerFrameCount(first, head)
+	a.Header, a.HeaderFrames, a.HeaderBytes = headerInfo(first, head)
 	if a.Header != "" {
 		a.HeaderDuration = time.Duration(a.HeaderFrames) * first.duration()
+		a.HeaderTrusted = a.HeaderBytes > 0 && (within(a.HeaderBytes, end-at, 0.02) || within(a.HeaderBytes, size, 0.02))
 	}
 
-	a.ConstantRate = true
-	pos := at
-	for i := 0; i < 32 && a.ConstantRate; i++ {
-		f, err := frameAt(r, pos, end)
-		if err != nil || f == nil {
-			break
+	if !a.HeaderTrusted {
+		a.ConstantRate, err = sampledConstant(r, first, at, end)
+		if err != nil {
+			return nil, err
 		}
-		if f.bitrate != first.bitrate {
-			a.ConstantRate = false
-		}
-		pos += int64(f.length)
 	}
 
 	switch {
-	case a.Header != "":
+	case a.HeaderTrusted:
 		a.Chosen = a.HeaderDuration
 	case a.ConstantRate:
 		a.Chosen = a.Estimate
@@ -140,30 +152,150 @@ func analyzeMPEG(r io.ReadSeeker, walk bool) (*Analysis, error) {
 	}
 
 	a.Walked = true
-	a.MinBitrate = first.bitrate
-	for pos := at; pos+4 <= end; {
-		f, err := frameAt(r, pos, end)
-		if err != nil {
-			return nil, err
-		}
-		if f == nil {
-			// Junk between frames: resync at the next header.
-			_, next, err := firstFrame(r, pos+1, end)
-			if err != nil {
-				break
-			}
-			a.Resyncs++
-			pos = next
-			continue
-		}
-		a.WalkFrames++
-		a.WalkDuration += f.duration()
-		a.MinBitrate = min(a.MinBitrate, f.bitrate)
-		a.MaxBitrate = max(a.MaxBitrate, f.bitrate)
-		pos += int64(f.length)
+	if err := walkFrames(r, at, end, a); err != nil {
+		return nil, err
 	}
-	if a.Header == "" && !a.ConstantRate {
+	if !a.HeaderTrusted && !a.ConstantRate {
 		a.Chosen = a.WalkDuration
 	}
 	return a, nil
+}
+
+// within reports whether a is within the fraction of b.
+func within(a, b int64, fraction float64) bool {
+	diff := float64(a - b)
+	if diff < 0 {
+		diff = -diff
+	}
+	return diff <= float64(b)*fraction
+}
+
+// headerInfo returns the kind, frame count and byte count of a Xing,
+// Info or VBRI header in the first frame, or "" and zeros for none.  A
+// Xing header's byte count is optional; a VBRI header always has one.
+func headerInfo(f *frame, head []byte) (string, int, int64) {
+	if n := f.xingAt; n+8 <= len(head) {
+		tag := string(head[n : n+4])
+		if tag == "Xing" || tag == "Info" {
+			flags := binary.BigEndian.Uint32(head[n+4:])
+			var frames int
+			var bytes int64
+			p := n + 8
+			if flags&1 != 0 && p+4 <= len(head) {
+				frames = int(binary.BigEndian.Uint32(head[p:]))
+				p += 4
+			}
+			if flags&2 != 0 && p+4 <= len(head) {
+				bytes = int64(binary.BigEndian.Uint32(head[p:]))
+			}
+			if frames > 0 {
+				return tag, frames, bytes
+			}
+		}
+	}
+	if n := f.vbriAt; n+18 <= len(head) && string(head[n:n+4]) == "VBRI" {
+		return "VBRI", int(binary.BigEndian.Uint32(head[n+14:])), int64(binary.BigEndian.Uint32(head[n+10:]))
+	}
+	return "", 0, 0
+}
+
+// sampledConstant looks for a frame at each of two dozen points through
+// the audio and reports whether every one, and the frame after it, has
+// the first frame's bitrate and sample rate.  The points are spaced by
+// the golden ratio rather than evenly, so a file whose frames alternate
+// with a period can't line every sample up on the same kind; and a
+// point where no frame can be found counts against it, since a file
+// that stops being audio partway isn't constant-rate either.
+func sampledConstant(r io.ReadSeeker, first *frame, at, end int64) (bool, error) {
+	const points = 24
+	span := end - at
+	for i := 1; i <= points; i++ {
+		frac := math.Mod(float64(i)*0.6180339887, 1)
+		pos := at + int64(float64(span)*frac)
+		if pos+int64(first.length) >= end {
+			continue // inside the last frame, where nothing follows
+		}
+		f, where, err := firstFrameWithin(r, pos, end, 16*1024)
+		if err != nil {
+			if errors.Is(err, ErrUnknown) {
+				return false, nil
+			}
+			return false, err
+		}
+		next, err := frameAt(r, where+int64(f.length), end)
+		if err != nil {
+			return false, err
+		}
+		for _, g := range []*frame{f, next} {
+			if g != nil && (g.bitrate != first.bitrate || g.rate != first.rate) {
+				return false, nil
+			}
+		}
+	}
+	return true, nil
+}
+
+// walkFrames counts every frame from at to end, reading sequentially
+// through a buffer so the walk costs one pass over the file and little
+// else.  Junk between frames is skipped a byte at a time until a header
+// that another header follows turns up.
+func walkFrames(r io.ReadSeeker, at, end int64, a *Analysis) error {
+	if _, err := r.Seek(at, io.SeekStart); err != nil {
+		return err
+	}
+	br := bufio.NewReaderSize(io.LimitReader(r, end-at), 1<<20)
+	a.MinBitrate = 0
+	inJunk := false
+	// A header is believed if the header after it parses too (or it ends
+	// the audio), or if the frame before it was believed that way.  So the
+	// last real frame before a run of junk still counts, and a stray sync
+	// pattern inside the junk doesn't start a chain. -- claude, 2026-11-01
+	prevValidated := false
+	for {
+		head, err := br.Peek(4)
+		if err != nil {
+			break
+		}
+		f := parseFrame(head)
+		if f == nil {
+			if !inJunk {
+				a.Resyncs++
+				inJunk = true
+			}
+			prevValidated = false
+			br.Discard(1)
+			continue
+		}
+		nextParses := false
+		if next, err := br.Peek(f.length + 4); err == nil {
+			nextParses = parseFrame(next[f.length:]) != nil
+		} else if _, err := br.Peek(f.length); err == nil {
+			_, err := br.Peek(f.length + 1)
+			nextParses = err != nil // the frame ends exactly where the audio does
+		}
+		if !nextParses && !prevValidated {
+			if !inJunk {
+				a.Resyncs++
+				inJunk = true
+			}
+			br.Discard(1)
+			continue
+		}
+		inJunk = false
+		prevValidated = nextParses
+		a.WalkFrames++
+		a.WalkDuration += f.duration()
+		if a.MinBitrate == 0 || f.bitrate < a.MinBitrate {
+			a.MinBitrate = f.bitrate
+		}
+		a.MaxBitrate = max(a.MaxBitrate, f.bitrate)
+		if _, err := br.Discard(f.length); err != nil {
+			break
+		}
+	}
+	// Junk at the very end isn't a resync.
+	if inJunk {
+		a.Resyncs--
+	}
+	return nil
 }
