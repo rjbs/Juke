@@ -43,7 +43,8 @@ type Analysis struct {
 	WalkFrames             int
 	WalkDuration           time.Duration
 	MinBitrate, MaxBitrate int
-	Resyncs                int // runs of junk skipped between frames
+	Resyncs                int   // runs of junk skipped between frames
+	JunkBytes              int64 // bytes skipped as junk, between frames or after the last
 
 	Chosen time.Duration
 }
@@ -76,8 +77,8 @@ func (a *Analysis) String() string {
 	}
 	s += fmt.Sprintf("sampled frames %s rate; estimate at %d kbps: %v\n", rate, a.Bitrate/1000, a.Estimate.Round(time.Millisecond))
 	if a.Walked {
-		s += fmt.Sprintf("walk: %d frames, %v, %d to %d kbps, %d resyncs\n",
-			a.WalkFrames, a.WalkDuration.Round(time.Millisecond), a.MinBitrate/1000, a.MaxBitrate/1000, a.Resyncs)
+		s += fmt.Sprintf("walk: %d frames, %v, %d to %d kbps, %d resyncs, %d bytes of junk\n",
+			a.WalkFrames, a.WalkDuration.Round(time.Millisecond), a.MinBitrate/1000, a.MaxBitrate/1000, a.Resyncs, a.JunkBytes)
 	}
 	s += fmt.Sprintf("chosen: %v\n", a.Chosen.Round(time.Millisecond))
 	return s
@@ -264,6 +265,7 @@ func walkFrames(r io.ReadSeeker, at, end int64, a *Analysis) error {
 			}
 			prevValidated = false
 			br.Discard(1)
+			a.JunkBytes++
 			continue
 		}
 		nextParses := false
@@ -279,6 +281,7 @@ func walkFrames(r io.ReadSeeker, at, end int64, a *Analysis) error {
 				inJunk = true
 			}
 			br.Discard(1)
+			a.JunkBytes++
 			continue
 		}
 		inJunk = false
@@ -293,7 +296,9 @@ func walkFrames(r io.ReadSeeker, at, end int64, a *Analysis) error {
 			break
 		}
 	}
-	// Junk at the very end isn't a resync.
+	// The last few bytes, too short for a header, and junk at the very
+	// end isn't a resync.
+	a.JunkBytes += int64(br.Buffered())
 	if inJunk {
 		a.Resyncs--
 	}

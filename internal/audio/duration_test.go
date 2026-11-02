@@ -150,4 +150,13 @@ func TestAnalyze(t *testing.T) {
 	if s := a.String(); !strings.Contains(s, "Xing header: 300 frames") || !strings.Contains(s, "walk: 401 frames") {
 		t.Errorf("String() = %q", s)
 	}
+
+	// Junk is counted whether it sits between frames or after the last.
+	a, err = Analyze(bytes.NewReader(concat(mp3Frames(100, 5, 14), []byte("\x00\x00junk"), mp3Frames(100, 5, 14), make([]byte, 5000))))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.WalkFrames != 200 || a.Resyncs != 1 || a.JunkBytes != 5006 {
+		t.Errorf("walk = %d frames, %d resyncs, %d junk bytes; want 200, 1, 5006", a.WalkFrames, a.Resyncs, a.JunkBytes)
+	}
 }
