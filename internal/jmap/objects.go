@@ -505,8 +505,8 @@ func (s *Server) changes(ctx context.Context, t *objectType, raw json.RawMessage
 
 type comparator struct {
 	Property    string `json:"property"`
-	IsAscending *bool  `json:"isAscending"`
-	Collation   string `json:"collation"`
+	IsAscending *bool  `json:"isAscending,omitempty"`
+	Collation   string `json:"collation,omitempty"`
 	// Seed is for the Track sort "random", which orders by a hash of the
 	// id and the seed; see doc/types.md.
 	Seed string `json:"seed,omitempty"`
