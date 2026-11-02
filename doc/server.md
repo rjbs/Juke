@@ -47,8 +47,10 @@ catalog's by more than two seconds, as a check on the measuring.
     var/juke serve --db var/sample.sqlite --library sample
 
 It listens on `localhost:8737`, where `/` is a review page: a single HTML
-file, built into the binary, that browses albums, tracks and playlists,
-plays them, and sets ratings, all through the JMAP API.  A track played
+file, built into the binary, that browses albums, tracks and playlists
+of both kinds, plays them, and sets ratings, all through the JMAP API.
+A smart playlist shows the tracks its rule matches now, and the rule
+itself on request; nothing on the page creates or edits one yet.  A track played
 to its end there counts as a play.  `--web-dir internal/web` serves the
 page from the source tree instead, so edits show on reload.
 
@@ -97,5 +99,5 @@ outside it, such as an import.
 - `/queryChanges` always answers `cannotCalculateChanges`.
 - Uploads are refused.
 - Metadata flush and artwork.
-- Smart playlists in the review page and the Apple client; the server
-  side is done.
+- Authoring smart playlists anywhere but over raw JMAP, and showing
+  them in the Apple client.
