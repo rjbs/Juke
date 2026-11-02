@@ -60,6 +60,12 @@ func TestTrackQueryFilters(t *testing.T) {
 	checkQuery(t, f, map[string]any{"operator": "NOT", "conditions": []any{
 		map[string]any{"hasRating": true},
 	}}, nil, "Whip It", "Jocko Homo", "Brave Sir Robin")
+	checkQuery(t, f, map[string]any{"operator": "NOT", "conditions": []any{
+		map[string]any{"albumTitle": "Off the Deep End"},
+	}}, nil, "We Will Rock You", "Bohemian Rhapsody", "Whip It", "Jocko Homo", "Brave Sir Robin")
+	checkQuery(t, f, map[string]any{"operator": "NOT", "conditions": []any{
+		map[string]any{"ratingAtLeast": 3},
+	}}, nil, "Trigger Happy", "Whip It", "Jocko Homo", "Brave Sir Robin")
 }
 
 func TestTrackQueryInPlaylist(t *testing.T) {

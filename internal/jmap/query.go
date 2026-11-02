@@ -86,7 +86,11 @@ func (s *Server) compileFilter(raw json.RawMessage) (string, []any, error) {
 		if err != nil {
 			return "", nil, err
 		}
-		parts = append(parts, "("+sql+")")
+		// A condition is true or false of every track (RFC 8620 section
+		// 5.5), so NOT and OR must see false, not SQL's null, when the
+		// column it reads is null: "artist is not Devo" includes a track
+		// with no artist. -- claude, 2026-11-01
+		parts = append(parts, "coalesce(("+sql+"), 0)")
 		params = append(params, p...)
 	}
 	return strings.Join(parts, " AND "), params, nil
