@@ -19,28 +19,57 @@ import (
 // a rule sent straight to Track/query could name a long chain.
 const maxSmartDepth = 16
 
-// queryTracks runs a Track/query as one SQL statement.  The filter and
-// sort compile to a WHERE and ORDER BY over track t and album a; each
-// smart playlist the filter names becomes a common table expression
-// ahead of them, so the whole thing runs inside SQLite.  The query's own
-// caps are cut here as the sorted rows stream.  The filter conditions
-// are listed in doc/types.md.
-func queryTracks(ctx context.Context, s *Server, args *queryArgs) ([]string, error) {
-	c := &compiler{s: s, ctx: ctx, q: s.store.DB}
+// A trackSQL is a compiled Track/query: the WITH clause of any capped
+// smart playlists the filter names, the FROM and WHERE, the ORDER BY,
+// and the parameters of each.  The filter conditions are listed in
+// doc/types.md.
+type trackSQL struct {
+	with, from, order                    string
+	withParams, whereParams, orderParams []any
+}
+
+func compileTrackQuery(ctx context.Context, s *Server, q store.Queryer, args *queryArgs) (trackSQL, error) {
+	c := &compiler{s: s, ctx: ctx, q: q}
 	where, params, err := c.filter(args.Filter)
 	if err != nil {
-		return nil, err
+		return trackSQL{}, err
 	}
 	order, orderParams, err := compileTrackSort(args.Sort)
 	if err != nil {
-		return nil, err
+		return trackSQL{}, err
 	}
 	with, withParams := c.with()
-	rows, err := s.store.DB.QueryContext(ctx, with+`
-		SELECT t.id, coalesce(t.size, 0), coalesce(t.duration, 0)
-		FROM track t LEFT JOIN album a ON a.id = t.album_id
-		WHERE `+where+`
-		ORDER BY `+order, append(append(withParams, params...), orderParams...)...)
+	return trackSQL{
+		with:       with,
+		from:       "FROM track t LEFT JOIN album a ON a.id = t.album_id WHERE " + where,
+		order:      order,
+		withParams: withParams, whereParams: params, orderParams: orderParams,
+	}, nil
+}
+
+// statement returns a SELECT of the given columns over the compiled
+// query, sorted when ordered is set, with its parameters.
+func (q trackSQL) statement(columns string, ordered bool) (string, []any) {
+	stmt := q.with + "SELECT " + columns + " " + q.from
+	params := append(append([]any{}, q.withParams...), q.whereParams...)
+	if ordered {
+		stmt += " ORDER BY " + q.order
+		params = append(params, q.orderParams...)
+	}
+	return stmt, params
+}
+
+// queryTracks runs a Track/query as one SQL statement and returns every
+// id it matches, in order.  Each smart playlist the filter names is
+// compiled into the statement, so the whole thing runs inside SQLite.
+// The query's own caps are cut here as the sorted rows stream.
+func queryTracks(ctx context.Context, s *Server, args *queryArgs) ([]string, error) {
+	q, err := compileTrackQuery(ctx, s, s.store.DB, args)
+	if err != nil {
+		return nil, err
+	}
+	stmt, params := q.statement("t.id, coalesce(t.size, 0), coalesce(t.duration, 0)", true)
+	rows, err := s.store.DB.QueryContext(ctx, stmt, params...)
 	if err != nil {
 		return nil, err
 	}
@@ -65,6 +94,49 @@ func queryTracks(ctx context.Context, s *Server, args *queryArgs) ([]string, err
 		ids = append(ids, id)
 	}
 	return ids, rows.Err()
+}
+
+// queryTracksPage answers a Track/query with no caps in SQL alone: a
+// count, and the page's ids by LIMIT and OFFSET, so asking for a few of
+// many tracks, or for none but the count, doesn't stream them all.  Both
+// run in one read transaction so they agree.  A capped query declines,
+// since a cap is a running total over the whole sorted list.
+func queryTracksPage(ctx context.Context, s *Server, args *queryArgs, position, limit int) ([]string, int, bool, error) {
+	if args.LimitBytes != nil || args.LimitSeconds != nil {
+		return nil, 0, false, nil
+	}
+	tx, err := s.store.DB.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, 0, false, err
+	}
+	defer tx.Rollback()
+	q, err := compileTrackQuery(ctx, s, tx, args)
+	if err != nil {
+		return nil, 0, false, err
+	}
+	stmt, params := q.statement("count(*)", false)
+	var total int
+	if err := tx.QueryRowContext(ctx, stmt, params...).Scan(&total); err != nil {
+		return nil, 0, false, err
+	}
+	ids := []string{}
+	if limit == 0 || position >= total {
+		return ids, total, true, nil
+	}
+	stmt, params = q.statement("t.id", true)
+	rows, err := tx.QueryContext(ctx, stmt+" LIMIT ? OFFSET ?", append(params, limit, position)...)
+	if err != nil {
+		return nil, 0, false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, 0, false, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, total, true, rows.Err()
 }
 
 // A compiler turns a filter into SQL over track t and album a.  It

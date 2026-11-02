@@ -442,3 +442,20 @@ func TestBlobType(t *testing.T) {
 	checkBlobType(t, f, "We Will Rock You", "audio/mp4")
 	checkBlobType(t, f, "Lost Track", nil)
 }
+
+func TestTrackQueryCountOnly(t *testing.T) {
+	f := newFixture(t, Config{})
+	r := f.call("Track/query", map[string]any{"limit": 0, "calculateTotal": true})
+	checkEqual(t, "no ids", r["ids"], []any{})
+	checkEqual(t, "total", r["total"], float64(8))
+	checkEqual(t, "position", r["position"], float64(0))
+	r = f.call("Track/query", map[string]any{"limit": 0, "position": 20, "calculateTotal": true})
+	checkEqual(t, "position past the end", r["position"], float64(8))
+
+	// A capped query can't be counted without running it in full.
+	r = f.call("Track/query", map[string]any{
+		"filter": map[string]any{"albumTitle": "Off the Deep End"}, "sort": by("title", true),
+		"limitSeconds": 300, "limit": 0, "calculateTotal": true,
+	})
+	checkEqual(t, "capped total", r["total"], float64(2))
+}

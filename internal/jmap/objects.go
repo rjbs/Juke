@@ -22,6 +22,12 @@ type objectType struct {
 	properties []string
 	load       func(ctx context.Context, q store.Queryer, ids []string) (map[string]object, []string, error)
 	query      func(ctx context.Context, s *Server, args *queryArgs) ([]string, error)
+
+	// page, if set, answers a query for one page in SQL: the ids from
+	// position, at most limit of them, and the total.  It may decline by
+	// returning false, and the query then runs through query and is
+	// paged by the handler.
+	page func(ctx context.Context, s *Server, args *queryArgs, position, limit int) ([]string, int, bool, error)
 }
 
 func (s *Server) objectTypes() []*objectType {
@@ -35,6 +41,7 @@ func (s *Server) objectTypes() []*objectType {
 			},
 			load:  loadTracks,
 			query: queryTracks,
+			page:  queryTracksPage,
 		},
 		{
 			name:       store.TypeAlbum,
@@ -551,38 +558,49 @@ func (s *Server) query(ctx context.Context, t *objectType, raw json.RawMessage) 
 	if err != nil {
 		return nil, err
 	}
-	all, err := t.query(ctx, s, &args)
-	if err != nil {
-		return nil, err
-	}
-
-	total := len(all)
-	position := args.Position
-	if args.Anchor != nil {
-		idx := -1
-		for i, id := range all {
-			if id == *args.Anchor {
-				idx = i
-				break
-			}
-		}
-		if idx < 0 {
-			return nil, errorOf("anchorNotFound", "%q is not in the results", *args.Anchor)
-		}
-		position = max(idx+args.AnchorOffset, 0)
-	} else if position < 0 {
-		position = max(total+position, 0)
-	}
-
 	limit := s.cfg.MaxQueryLimit
 	limited := true
 	if args.Limit != nil && *args.Limit <= s.cfg.MaxQueryLimit {
 		limit, limited = *args.Limit, false
 	}
-	end := min(position+limit, total)
-	ids := []string{}
-	if position < total {
-		ids = all[position:end]
+
+	var ids []string
+	var total, position int
+	paged := false
+	if t.page != nil && args.Anchor == nil && args.Position >= 0 {
+		ids, total, paged, err = t.page(ctx, s, &args, args.Position, limit)
+		if err != nil {
+			return nil, err
+		}
+		position = args.Position
+	}
+	if !paged {
+		all, err := t.query(ctx, s, &args)
+		if err != nil {
+			return nil, err
+		}
+		total = len(all)
+		position = args.Position
+		if args.Anchor != nil {
+			idx := -1
+			for i, id := range all {
+				if id == *args.Anchor {
+					idx = i
+					break
+				}
+			}
+			if idx < 0 {
+				return nil, errorOf("anchorNotFound", "%q is not in the results", *args.Anchor)
+			}
+			position = max(idx+args.AnchorOffset, 0)
+		} else if position < 0 {
+			position = max(total+position, 0)
+		}
+		end := min(position+limit, total)
+		ids = []string{}
+		if position < total {
+			ids = all[position:end]
+		}
 	}
 
 	resp := map[string]any{
