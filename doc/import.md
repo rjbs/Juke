@@ -30,6 +30,10 @@ the server doesn't recognize resyncs from scratch.
 - **"Various Artists"** (or "Various") means no artist for a track.  For
   an album, as its album artist or its artist directory, it means a
   compilation, like an album under `Compilations`.
+- **Genre** comes from the tags, with ID3v2's numbered form expanded
+  ("(17)" is Rock, and iTunes's "(36)Game" is Game), or from the XML
+  when the tags are silent, which is also where a gap track's comes from.
+  A third of the library has none, in the XML as in the tags.
 - **Plain playlists** come from the XML too, which is their only source.
 
 The 2014 XML is the only listening history there is.  The current Apple
@@ -90,7 +94,10 @@ album as incomplete duplicates.
 Tags Juke doesn't model yet stay in the files, which are never modified.
 The import also stores every file's tags as found, in one unindexed
 column per track, so adding a property later is a query over stored data
-rather than a rescan.
+rather than a rescan: `juke backfill` fills a property added since the
+import from that column, and from the catalog for what the tags don't
+say, matching a track to the catalog by title, album and number.  Genre
+was the first (#43).
 
 - **Server-side only.**  It is not a JMAP property; clients have no use
   for it.

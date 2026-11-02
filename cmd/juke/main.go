@@ -2,6 +2,7 @@
 //
 //	juke import --library DIR --catalog FILE --out FILE [--include NAME ...]
 //	juke check  --db FILE --library DIR
+//	juke backfill --db FILE [--catalog FILE]
 //	juke originals --db FILE --library DIR [--dry-run]
 //	juke serve  --db FILE --library DIR [--listen ADDR]
 //	            [--tailnet NAME --tailnet-state DIR --allow LOGIN ...]
@@ -28,6 +29,8 @@ func main() {
 		err = runOriginals(ctx, os.Args[2:])
 	case "check":
 		err = runCheck(ctx, os.Args[2:])
+	case "backfill":
+		err = runBackfill(ctx, os.Args[2:])
 	case "serve":
 		err = runServe(ctx, os.Args[2:])
 	default:
@@ -40,7 +43,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: juke import|check|originals|serve [options]; juke COMMAND -h for options")
+	fmt.Fprintln(os.Stderr, "usage: juke import|check|backfill|originals|serve [options]; juke COMMAND -h for options")
 	os.Exit(2)
 }
 

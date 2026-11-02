@@ -27,6 +27,17 @@ imports in under a second as 188 tracks with audio, 4 gap tracks,
 19 albums and 3 playlists.  `--include` defaults to `Undamaged` alone,
 which is what the first real import uses.
 
+## Backfilling
+
+    var/juke backfill --db var/sample.sqlite --catalog /Volumes/Video/music/catalog.sqlite
+
+A database imported before a property existed has it empty.  `backfill`
+fills what it can from the tags the import stored, and from the catalog
+when one is given, giving every track it changes one new modseq so
+clients refetch them once; see [import](import.md).  It is safe to run
+again, and to run while the server is up, which notices the change on
+its next poll.  Today it fills genre.
+
 ## Serving
 
     var/juke serve --db var/sample.sqlite --library sample
