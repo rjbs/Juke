@@ -31,8 +31,9 @@ type setter struct {
 	// in "created": its id and any property the client didn't give.
 	create func(ctx context.Context, tx *sql.Tx, props map[string]json.RawMessage) (object, error)
 
-	// update applies a patch to an existing object.
-	update func(ctx context.Context, tx *sql.Tx, id string, patch map[string]json.RawMessage) error
+	// update applies a patch to an existing object, and returns any
+	// property the server set as a side effect, for "updated".
+	update func(ctx context.Context, tx *sql.Tx, id string, patch map[string]json.RawMessage) (object, error)
 
 	// destroy removes an object, leaving a tombstone.
 	destroy func(ctx context.Context, tx *sql.Tx, id string) error
@@ -109,13 +110,18 @@ func (s *Server) set(ctx context.Context, h *setter, raw json.RawMessage) (any, 
 			notUpdated[key] = &methodError{Type: "notFound", Description: "no object was created as " + key}
 			continue
 		}
-		if err := h.update(ctx, tx, id, args.Update[key]); err != nil {
+		changed, err := h.update(ctx, tx, id, args.Update[key])
+		if err != nil {
 			if err := setError(notUpdated, key, err); err != nil {
 				return nil, err
 			}
 			continue
 		}
-		updated[id] = nil
+		if len(changed) == 0 {
+			updated[id] = nil
+		} else {
+			updated[id] = changed
+		}
 	}
 
 	destroyed, notDestroyed := []string{}, map[string]any{}
@@ -177,9 +183,9 @@ func sortedKeys[V any](m map[string]V) []string {
 
 // mustExist returns a notFound SetError if the table has no row with the
 // id.
-func mustExist(ctx context.Context, tx *sql.Tx, table, id string) error {
+func mustExist(ctx context.Context, q store.Queryer, table, id string) error {
 	var found bool
-	if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM `+table+` WHERE id = ?)`, id).Scan(&found); err != nil {
+	if err := q.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM `+table+` WHERE id = ?)`, id).Scan(&found); err != nil {
 		return err
 	}
 	if !found {
@@ -306,31 +312,38 @@ var playlistSetter = &setter{
 		created["id"] = id
 		return created, nil
 	},
-	update: func(ctx context.Context, tx *sql.Tx, id string, patch map[string]json.RawMessage) error {
+	update: func(ctx context.Context, tx *sql.Tx, id string, patch map[string]json.RawMessage) (object, error) {
 		if err := mustExist(ctx, tx, "playlist", id); err != nil {
-			return err
+			return nil, err
 		}
 		p, err := decodePlaylistProps(ctx, tx, patch)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		modseq, err := store.NextModseq(ctx, tx)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if _, err := tx.ExecContext(ctx,
 			`UPDATE playlist SET modseq = ?, title = coalesce(?, title) WHERE id = ?`, modseq, p.title, id,
 		); err != nil {
-			return err
+			return nil, err
 		}
 		if p.trackIDs != nil {
-			return store.SetPlaylistTracks(ctx, tx, id, *p.trackIDs)
+			return nil, store.SetPlaylistTracks(ctx, tx, id, *p.trackIDs)
 		}
-		return nil
+		return nil, nil
 	},
 	destroy: func(ctx context.Context, tx *sql.Tx, id string) error {
 		if err := mustExist(ctx, tx, "playlist", id); err != nil {
 			return err
+		}
+		used, err := store.Referenced(ctx, tx, store.TypePlaylist, id)
+		if err != nil {
+			return err
+		}
+		if used {
+			return errPlaylistInUse
 		}
 		if _, err := tx.ExecContext(ctx, `DELETE FROM playlist_track WHERE playlist_id = ?`, id); err != nil {
 			return err
@@ -464,29 +477,29 @@ var albumSetter = &setter{
 		created["id"] = id
 		return created, nil
 	},
-	update: func(ctx context.Context, tx *sql.Tx, id string, patch map[string]json.RawMessage) error {
+	update: func(ctx context.Context, tx *sql.Tx, id string, patch map[string]json.RawMessage) (object, error) {
 		if err := mustExist(ctx, tx, "album", id); err != nil {
-			return err
+			return nil, err
 		}
 		p, err := decodeAlbumProps(ctx, tx, patch)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		modseq, err := store.NextModseq(ctx, tx)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if _, err := tx.ExecContext(ctx, `
 			UPDATE album SET modseq = ?, title = coalesce(?, title),
 			  artist = CASE WHEN ? THEN ? ELSE artist END
 			WHERE id = ?`, modseq, p.title, p.hasArtist, p.artist, id,
 		); err != nil {
-			return err
+			return nil, err
 		}
 		if p.discs != nil {
-			return store.SetDiscs(ctx, tx, id, p.discs)
+			return nil, store.SetDiscs(ctx, tx, id, p.discs)
 		}
-		return nil
+		return nil, nil
 	},
 	destroy: func(ctx context.Context, tx *sql.Tx, id string) error {
 		if err := mustExist(ctx, tx, "album", id); err != nil {

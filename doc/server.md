@@ -62,10 +62,13 @@ decided for the tailnet.
 
 ## What is served
 
-- **Track, Album and Playlist** each have `/get`, `/changes` and
-  `/query`.  Albums and playlists can be sorted by title but not
-  filtered; Track's filters and sorts are listed in
-  [object types](types.md).
+- **Track, Album, Playlist and SmartPlaylist** each have `/get`,
+  `/changes` and `/query`.  Albums and playlists of both kinds can be
+  sorted by title but not filtered; Track's filters, sorts and caps are
+  listed in [object types](types.md).
+- **SmartPlaylist/set** stores a saved search, refusing a rule that
+  `Track/query` would refuse, one naming a playlist that doesn't exist,
+  or one that would make a loop; see [playlists](playlists.md).
 - **Track/set** updates rating, play count, last played and genre.
   Anything else, and any create or destroy, is refused.
 - **Blob download** serves each track's original file, with range
@@ -93,4 +96,6 @@ outside it, such as an import.
 
 - `/queryChanges` always answers `cannotCalculateChanges`.
 - Uploads are refused.
-- Smart playlists, metadata flush and artwork.
+- Metadata flush and artwork.
+- Smart playlists in the review page and the Apple client; the server
+  side is done.

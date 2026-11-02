@@ -3,37 +3,104 @@ package jmap
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"regexp"
 	"strings"
 	"time"
+
+	"semiotic.systems/juke/internal/store"
 )
 
-// queryTracks runs a Track/query, compiling its filter and sort to SQL.
-// The filter conditions are listed in doc/types.md.
+// maxSmartDepth bounds how deeply smart playlists may reference one
+// another through inSmartPlaylist.  Stored rules can't form a cycle, but
+// a rule sent straight to Track/query could name a long chain.
+const maxSmartDepth = 16
+
+// queryTracks runs a Track/query, compiling its filter and sort to SQL
+// and then cutting the sorted list at any cap.  The filter conditions
+// are listed in doc/types.md.
 func queryTracks(ctx context.Context, s *Server, args *queryArgs) ([]string, error) {
-	where := "1"
-	var params []any
-	if len(args.Filter) > 0 && string(args.Filter) != "null" {
-		var err error
-		where, params, err = s.compileFilter(args.Filter)
-		if err != nil {
-			return nil, err
-		}
-	}
-	order, err := compileTrackSort(args.Sort)
+	c := &compiler{s: s, ctx: ctx, q: s.store.DB, depth: args.depth}
+	where, params, err := c.filter(args.Filter)
 	if err != nil {
 		return nil, err
 	}
-	return queryIDs(ctx, s.store.DB, `
-		SELECT t.id FROM track t LEFT JOIN album a ON a.id = t.album_id
+	order, orderParams, err := compileTrackSort(args.Sort)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := s.store.DB.QueryContext(ctx, `
+		SELECT t.id, coalesce(t.size, 0), coalesce(t.duration, 0)
+		FROM track t LEFT JOIN album a ON a.id = t.album_id
 		WHERE `+where+`
-		ORDER BY `+order, params...)
+		ORDER BY `+order, append(params, orderParams...)...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	ids := []string{}
+	var bytes, seconds int64
+	for rows.Next() {
+		var id string
+		var size, duration int64
+		if err := rows.Scan(&id, &size, &duration); err != nil {
+			return nil, err
+		}
+		// A cap cuts the list where the running total would pass it; a
+		// track with no audio or no known length counts as nothing.
+		bytes += size
+		seconds += duration
+		if args.maxTracks != nil && int64(len(ids)) >= *args.maxTracks ||
+			args.LimitBytes != nil && bytes > *args.LimitBytes ||
+			args.LimitSeconds != nil && seconds > *args.LimitSeconds {
+			break
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
 }
 
-// compileFilter turns a FilterOperator or FilterCondition into a SQL
-// expression over track t and album a.
-func (s *Server) compileFilter(raw json.RawMessage) (string, []any, error) {
+// smartPlaylistIDs evaluates a stored smart playlist: its filter, sort
+// and caps, run as a Track/query would run them.
+func (s *Server) smartPlaylistIDs(ctx context.Context, q store.Queryer, id string, depth int) ([]string, error) {
+	_, sq, err := store.LoadSmartPlaylist(ctx, q, id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, errInvalidArguments("no smart playlist %q", id)
+	}
+	if err != nil {
+		return nil, err
+	}
+	args := &queryArgs{LimitBytes: sq.LimitBytes, LimitSeconds: sq.LimitSeconds, maxTracks: sq.Limit, depth: depth}
+	if sq.Filter != nil {
+		args.Filter = json.RawMessage(*sq.Filter)
+	}
+	if err := json.Unmarshal([]byte(sq.Sort), &args.Sort); err != nil {
+		return nil, err
+	}
+	return queryTracks(ctx, s, args)
+}
+
+// A compiler turns a filter into SQL over track t and album a.  It
+// records the playlists the filter names, which SmartPlaylist/set keeps;
+// with validate set it checks that they exist instead of evaluating
+// them, and the SQL it returns is not meant to run.
+type compiler struct {
+	s        *Server
+	ctx      context.Context
+	q        store.Queryer
+	depth    int
+	validate bool
+	refs     []store.Ref
+}
+
+// filter compiles a FilterOperator or FilterCondition.
+func (c *compiler) filter(raw json.RawMessage) (string, []any, error) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return "1", nil, nil
+	}
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &fields); err != nil {
 		return "", nil, errInvalidArguments("a filter must be an object")
@@ -50,8 +117,8 @@ func (s *Server) compileFilter(raw json.RawMessage) (string, []any, error) {
 		}
 		var parts []string
 		var params []any
-		for _, c := range conditions {
-			sql, p, err := s.compileFilter(c)
+		for _, cond := range conditions {
+			sql, p, err := c.filter(cond)
 			if err != nil {
 				return "", nil, err
 			}
@@ -81,8 +148,8 @@ func (s *Server) compileFilter(raw json.RawMessage) (string, []any, error) {
 
 	parts := []string{"1"}
 	var params []any
-	for name, val := range fields {
-		sql, p, err := s.compileCondition(name, val)
+	for _, name := range sortedKeys(fields) {
+		sql, p, err := c.condition(name, fields[name])
 		if err != nil {
 			return "", nil, err
 		}
@@ -96,7 +163,7 @@ func (s *Server) compileFilter(raw json.RawMessage) (string, []any, error) {
 	return strings.Join(parts, " AND "), params, nil
 }
 
-func (s *Server) compileCondition(name string, raw json.RawMessage) (string, []any, error) {
+func (c *compiler) condition(name string, raw json.RawMessage) (string, []any, error) {
 	bad := func(want string) (string, []any, error) {
 		return "", nil, errInvalidArguments("filter %s must be %s", name, want)
 	}
@@ -183,14 +250,48 @@ func (s *Server) compileCondition(name string, raw json.RawMessage) (string, []a
 		if !ok || v < 0 || v != float64(int64(v)) {
 			return bad("a non-negative integer")
 		}
-		since := s.cfg.Now().UTC().Add(-time.Duration(v) * 24 * time.Hour).Format(utcDateLayout)
+		since := c.s.cfg.Now().UTC().Add(-time.Duration(v) * 24 * time.Hour).Format(utcDateLayout)
 		return "t.last_played >= ?", []any{since}, nil
 	case "inPlaylist":
 		v, ok := str()
 		if !ok {
 			return bad("a playlist id")
 		}
+		c.refs = append(c.refs, store.Ref{Type: store.TypePlaylist, ID: v})
+		if c.validate {
+			if err := mustExist(c.ctx, c.q, "playlist", v); err != nil {
+				return bad("the id of a playlist")
+			}
+			return "1", nil, nil
+		}
 		return "EXISTS (SELECT 1 FROM playlist_track pt WHERE pt.playlist_id = ? AND pt.track_id = t.id)", []any{v}, nil
+	case "inSmartPlaylist":
+		v, ok := str()
+		if !ok {
+			return bad("a smart playlist id")
+		}
+		c.refs = append(c.refs, store.Ref{Type: store.TypeSmartPlaylist, ID: v})
+		if c.validate {
+			if err := mustExist(c.ctx, c.q, "smart_playlist", v); err != nil {
+				return bad("the id of a smart playlist")
+			}
+			return "1", nil, nil
+		}
+		if c.depth >= maxSmartDepth {
+			return "", nil, errInvalidArguments("smart playlists nest too deeply")
+		}
+		ids, err := c.s.smartPlaylistIDs(c.ctx, c.q, v, c.depth+1)
+		if err != nil {
+			return "", nil, err
+		}
+		// The referenced playlist's whole result, caps included, goes in
+		// as one JSON array: an id list can be longer than SQLite lets a
+		// statement have parameters. -- claude, 2026-11-01
+		list, err := json.Marshal(ids)
+		if err != nil {
+			return "", nil, err
+		}
+		return "t.id IN (SELECT value FROM json_each(?))", []any{string(list)}, nil
 	}
 	return "", nil, errorOf("unsupportedFilter", "no filter condition %q", name)
 }
@@ -211,26 +312,36 @@ var trackSortColumns = map[string][]string{
 	"albumOrder": {"juke_fold(a.title)", "t.album_id", "t.disc_index", "t.position"},
 }
 
-// compileTrackSort returns an ORDER BY clause.  Nulls sort last in either
-// direction, and ties always break by id, so a sorted, limited list is
-// stable.
-func compileTrackSort(sort []comparator) (string, error) {
+// compileTrackSort returns an ORDER BY clause and its parameters.  Nulls
+// sort last in either direction, and ties always break by id, so a
+// sorted, limited list is stable.  A random comparator orders by a hash
+// of the id and its seed, so it is as stable as any other.
+func compileTrackSort(sort []comparator) (string, []any, error) {
 	var parts []string
+	var params []any
 	for _, c := range sort {
-		cols, ok := trackSortColumns[c.Property]
-		if !ok {
-			return "", errorOf("unsupportedSort", "cannot sort on %q", c.Property)
-		}
 		dir := " ASC"
 		if !c.ascending() {
 			dir = " DESC"
+		}
+		if c.Property == "random" {
+			if c.Seed == "" {
+				return "", nil, errorOf("unsupportedSort", "a random sort needs a seed")
+			}
+			parts = append(parts, "juke_hash(t.id, ?)"+dir)
+			params = append(params, c.Seed)
+			continue
+		}
+		cols, ok := trackSortColumns[c.Property]
+		if !ok {
+			return "", nil, errorOf("unsupportedSort", "cannot sort on %q", c.Property)
 		}
 		for _, col := range cols {
 			parts = append(parts, "("+col+" IS NULL)", col+dir)
 		}
 	}
 	parts = append(parts, "t.id")
-	return strings.Join(parts, ", "), nil
+	return strings.Join(parts, ", "), params, nil
 }
 
 const utcDateLayout = "2006-01-02T15:04:05Z"

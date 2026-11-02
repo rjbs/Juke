@@ -46,7 +46,7 @@ func (w *wakeup) wake() {
 	}
 }
 
-var pushTypes = []string{store.TypeTrack, store.TypeAlbum, store.TypePlaylist}
+var pushTypes = []string{store.TypeTrack, store.TypeAlbum, store.TypePlaylist, store.TypeSmartPlaylist}
 
 func (s *Server) handleEventSource(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()

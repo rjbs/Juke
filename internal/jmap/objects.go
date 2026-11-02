@@ -50,6 +50,13 @@ func (s *Server) objectTypes() []*objectType {
 			load:       loadPlaylists,
 			query:      queryByTitle("playlist"),
 		},
+		{
+			name:       store.TypeSmartPlaylist,
+			table:      "smart_playlist",
+			properties: []string{"id", "title", "filter", "sort", "limit", "limitBytes", "limitSeconds"},
+			load:       loadSmartPlaylists,
+			query:      queryByTitle("smart_playlist"),
+		},
 	}
 }
 
@@ -66,6 +73,9 @@ func (s *Server) methodTable() map[string]method {
 		}},
 		"Album/set": {CapJuke, func(ctx context.Context, s *Server, args json.RawMessage) (any, error) {
 			return s.set(ctx, albumSetter, args)
+		}},
+		"SmartPlaylist/set": {CapJuke, func(ctx context.Context, s *Server, args json.RawMessage) (any, error) {
+			return s.set(ctx, s.smartPlaylistSetter(), args)
 		}},
 	}
 	for _, t := range s.objectTypes() {
@@ -497,6 +507,9 @@ type comparator struct {
 	Property    string `json:"property"`
 	IsAscending *bool  `json:"isAscending"`
 	Collation   string `json:"collation"`
+	// Seed is for the Track sort "random", which orders by a hash of the
+	// id and the seed; see doc/types.md.
+	Seed string `json:"seed,omitempty"`
 }
 
 func (c comparator) ascending() bool { return c.IsAscending == nil || *c.IsAscending }
@@ -510,6 +523,17 @@ type queryArgs struct {
 	AnchorOffset   int             `json:"anchorOffset"`
 	Limit          *int            `json:"limit"`
 	CalculateTotal bool            `json:"calculateTotal"`
+
+	// Track/query's caps on the sorted list: at most this much audio by
+	// size, or by playing time.  See doc/types.md.
+	LimitBytes   *int64 `json:"limitBytes"`
+	LimitSeconds *int64 `json:"limitSeconds"`
+
+	// For a stored smart playlist run through queryTracks: at most this
+	// many tracks, and how deep in a chain of inSmartPlaylist references
+	// this evaluation is.
+	maxTracks *int64
+	depth     int
 }
 
 func (s *Server) query(ctx context.Context, t *objectType, raw json.RawMessage) (any, error) {
@@ -639,17 +663,17 @@ var trackSetter = &setter{
 	create: func(context.Context, *sql.Tx, map[string]json.RawMessage) (object, error) {
 		return nil, &methodError{Type: "forbidden", Description: "tracks are created only by import"}
 	},
-	update: func(ctx context.Context, tx *sql.Tx, id string, patch map[string]json.RawMessage) error {
+	update: func(ctx context.Context, tx *sql.Tx, id string, patch map[string]json.RawMessage) (object, error) {
 		cols, invalid := trackPatch(patch)
 		if invalid != nil {
-			return invalid
+			return nil, invalid
 		}
 		if err := mustExist(ctx, tx, "track", id); err != nil {
-			return err
+			return nil, err
 		}
 		modseq, err := store.NextModseq(ctx, tx)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		set := []string{"modseq = ?"}
 		vals := []any{modseq}
@@ -659,7 +683,7 @@ var trackSetter = &setter{
 		}
 		vals = append(vals, id)
 		_, err = tx.ExecContext(ctx, `UPDATE track SET `+strings.Join(set, ", ")+` WHERE id = ?`, vals...)
-		return err
+		return nil, err
 	},
 	destroy: func(context.Context, *sql.Tx, string) error {
 		return &methodError{Type: "forbidden", Description: "tracks are destroyed only by import"}

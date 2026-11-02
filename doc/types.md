@@ -122,10 +122,17 @@ track list; a client gets the tracks by running the query.  See
 `SmartPlaylist/set` compiles the filter and sort before storing them and
 refuses what `Track/query` would refuse, so a stored rule always runs.
 It also refuses a rule naming a playlist of either kind that does not
-exist, and one whose references would form a cycle.  A `random`
-comparator with no `seed` gets one from the server, which the `/set`
-response reports.  Destroying a smart playlist that another's rule names
-fails with `playlistInUse`.
+exist, and one whose references would form a cycle; both are
+`invalidProperties` on `filter`.  A reference must be a real id: a
+creation id from the same call is not resolved inside a filter.  A
+`random` comparator with no `seed` gets one from the server, which the
+`/set` response reports in `created` or `updated`.  Destroying a smart
+playlist that another's rule names fails with `playlistInUse`.
+
+`limit` is a cap like the other two, applied before any paging by the
+client that runs the query: a client that wants the first ten of a
+limited list asks `Track/query` for them and gets the stored limit's
+first ten.
 
 ## Track/query
 
@@ -179,7 +186,7 @@ lets a playlist leave out gap tracks, and nothing does so implicitly.
 `playCount`, `lastPlayed` and `duration`, plus `albumOrder`, which sorts
 by album title and then by disc and track position, and `random`, a
 comparator carrying a `seed` string, which orders by a hash of the track
-id and the seed.  Nulls sort last in either direction, except that a
+id and the seed and is refused without one.  Nulls sort last in either direction, except that a
 track never played counts as played before any other, so `lastPlayed`
 ascending is "least recently played" and starts with the never-played.
 Ties always break by track id, so a sorted, limited list is stable.
