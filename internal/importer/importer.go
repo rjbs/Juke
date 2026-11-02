@@ -31,6 +31,7 @@ import (
 	"github.com/dhowden/tag"
 
 	"semiotic.systems/juke/internal/store"
+	"semiotic.systems/juke/internal/tags"
 )
 
 // Options configures an import.
@@ -87,6 +88,7 @@ type catalogTrack struct {
 	Artist      sql.NullString
 	AlbumArtist sql.NullString
 	Album       sql.NullString
+	Genre       sql.NullString
 	TrackNumber sql.NullInt64
 	TrackCount  sql.NullInt64
 	DiscNumber  sql.NullInt64
@@ -98,14 +100,14 @@ type catalogTrack struct {
 }
 
 const catalogTrackColumns = `
-	t.track_id, t.name, t.artist, t.album_artist, t.album,
+	t.track_id, t.name, t.artist, t.album_artist, t.album, t.genre,
 	t.track_number, t.track_count, t.disc_number, t.rating, t.play_count,
 	t.play_date, t.date_added, ta.album_id`
 
 func scanCatalogTrack(rows interface{ Scan(...any) error }) (catalogTrack, error) {
 	var c catalogTrack
 	err := rows.Scan(
-		&c.ID, &c.Name, &c.Artist, &c.AlbumArtist, &c.Album,
+		&c.ID, &c.Name, &c.Artist, &c.AlbumArtist, &c.Album, &c.Genre,
 		&c.TrackNumber, &c.TrackCount, &c.DiscNumber, &c.Rating, &c.PlayCount,
 		&c.PlayDate, &c.DateAdded, &c.AlbumID,
 	)
@@ -161,6 +163,7 @@ type audioFile struct {
 	artist       string
 	albumArtist  string
 	album        string
+	genre        string
 	trackNumber  int
 	trackCount   int
 	discNumber   int
@@ -417,6 +420,7 @@ func (im *run) readFile(ctx context.Context, p, rel, contentType string) (*audio
 		f.artist = artistName(m.Artist())
 		f.albumArtist = albumArtistName(m.AlbumArtist())
 		f.album = strings.TrimSpace(m.Album())
+		f.genre = tags.Genre(m.Raw())
 		f.trackNumber, f.trackCount = m.Track()
 		f.discNumber, _ = m.Disc()
 	}
@@ -816,9 +820,9 @@ func (im *run) insertFile(ctx context.Context, dir string, f *audioFile, fallbac
 	if dateAdded == "" {
 		dateAdded = f.mtime.Format("2006-01-02T15:04:05Z")
 	}
-	var catName, catArtist string
+	var catName, catArtist, catGenre string
 	if f.catalog != nil {
-		catName, catArtist = f.catalog.Name.String, f.catalog.Artist.String
+		catName, catArtist, catGenre = f.catalog.Name.String, f.catalog.Artist.String, f.catalog.Genre.String
 	}
 	stem := titleFromName(f.name)
 
@@ -826,6 +830,7 @@ func (im *run) insertFile(ctx context.Context, dir string, f *audioFile, fallbac
 	id, err := store.InsertTrack(ctx, im.tx, store.NewTrack{
 		Title:        firstNonEmpty(f.title, catName, stem),
 		Artist:       nonEmpty(firstNonEmpty(f.artist, catArtist, fallbackArtist)),
+		Genre:        nonEmpty(firstNonEmpty(f.genre, catGenre)),
 		AlbumID:      albumID,
 		DiscIndex:    disc,
 		Position:     pos,
@@ -859,6 +864,7 @@ func (im *run) insertGap(ctx context.Context, dir string, g *catalogTrack, album
 	id, err := store.InsertTrack(ctx, im.tx, store.NewTrack{
 		Title:      title,
 		Artist:     nonEmpty(g.Artist.String),
+		Genre:      nonEmpty(g.Genre.String),
 		AlbumID:    &albumID,
 		DiscIndex:  &disc,
 		Position:   &pos,

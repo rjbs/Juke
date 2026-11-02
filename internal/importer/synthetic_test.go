@@ -15,7 +15,7 @@ import (
 // followed by some bytes standing in for audio.
 func id3(frames map[string]string) []byte {
 	var body bytes.Buffer
-	for _, id := range []string{"TIT2", "TPE1", "TPE2", "TALB", "TRCK", "TPOS"} {
+	for _, id := range []string{"TIT2", "TPE1", "TPE2", "TALB", "TRCK", "TPOS", "TCON"} {
 		text, ok := frames[id]
 		if !ok {
 			continue
@@ -67,6 +67,11 @@ INSERT INTO itunes_playlist (playlist_id, name) VALUES (1, 'Complete'), (2, 'Par
 INSERT INTO itunes_playlist_item VALUES (1, 0, 2), (1, 1, 1), (2, 0, 1), (2, 1, 99);
 
 ALTER TABLE itunes_track ADD COLUMN track_count INTEGER;
+
+-- The tags win for genre, so One's "Pop" loses to its TCON frame; the
+-- gap Two and the genre-less Three take the catalog's.
+ALTER TABLE itunes_track ADD COLUMN genre TEXT;
+UPDATE itunes_track SET genre = CASE track_id WHEN 1 THEN 'Pop' WHEN 2 THEN 'Rock' WHEN 3 THEN 'Jazz' END;
 `
 
 // syntheticImport builds a small library and catalog, imports them, and
@@ -85,11 +90,11 @@ func syntheticImport(t *testing.T) (*sql.DB, *Report) {
 			t.Fatal(err)
 		}
 	}
-	write("Undamaged/Band/Album/01 One.mp3", id3(map[string]string{"TIT2": "One", "TPE1": "Band", "TALB": "Album", "TRCK": "1"}))
+	write("Undamaged/Band/Album/01 One.mp3", id3(map[string]string{"TIT2": "One", "TPE1": "Band", "TALB": "Album", "TRCK": "1", "TCON": "(17)"}))
 	write("Undamaged/Band/Album/03 Three.mp3", id3(map[string]string{"TIT2": "Three", "TPE1": "Band", "TALB": "Album", "TRCK": "3/3"}))
 	write("Undamaged/Band/Album/cover.jpg", []byte("JPEG"))
 	write("Undamaged/Band/Unknown Album/Loose.mp3", id3(map[string]string{"TIT2": "Loose", "TPE1": "Band"}))
-	write("Undamaged/Compilations/Mix/01 A.mp3", id3(map[string]string{"TIT2": "A", "TPE1": "X", "TALB": "Mix", "TRCK": "1"}))
+	write("Undamaged/Compilations/Mix/01 A.mp3", id3(map[string]string{"TIT2": "A", "TPE1": "X", "TALB": "Mix", "TRCK": "1", "TCON": "(36)Game"}))
 	write("Undamaged/Compilations/Mix/02 B.mp3", id3(map[string]string{"TIT2": "B", "TPE1": "Y", "TALB": "Mix", "TRCK": "2"}))
 	write("Undamaged/Other/Thing/10 Static.mp3", []byte("\xff\xfbNO-TAGS-AT-ALL"))
 	write("Undamaged/Other/Thing/9 Hiss.mp3", []byte("\xff\xfbNO-TAGS-AT-ALL"))
@@ -240,6 +245,13 @@ func TestSyntheticImport(t *testing.T) {
 		t.Errorf("playlist Complete = %q, want [Two One]", playlistTitles)
 	}
 
+	// Genre comes from the tags, numbered or not, then from the catalog.
+	checkTrackGenre(t, db, "One", "Rock")
+	checkTrackGenre(t, db, "A", "Game")
+	checkTrackGenre(t, db, "Two", "Rock")
+	checkTrackGenre(t, db, "Three", "Jazz")
+	checkTrackGenre(t, db, "Loose", "")
+
 	var tags string
 	db.QueryRow(`SELECT original_tags FROM track WHERE title = 'One'`).Scan(&tags)
 	if !bytes.Contains([]byte(tags), []byte(`"TIT2":"One"`)) {
@@ -257,6 +269,19 @@ func mtimeOf(t *testing.T, db *sql.DB, title string) string {
 		t.Errorf("track %q date added %q is not a date", title, s)
 	}
 	return s
+}
+
+// checkTrackGenre checks the genre of one imported track, "" for none.
+func checkTrackGenre(t *testing.T, db *sql.DB, title, genre string) {
+	t.Helper()
+	var got sql.NullString
+	if err := db.QueryRow(`SELECT genre FROM track WHERE title = ?`, title).Scan(&got); err != nil {
+		t.Errorf("track %q: %v", title, err)
+		return
+	}
+	if got.String != genre {
+		t.Errorf("track %q: genre %q, want %q", title, got.String, genre)
+	}
 }
 
 // checkTrackArtist checks the artist of one imported track, found by title.

@@ -119,6 +119,12 @@ CREATE INDEX tombstone_modseq ON tombstone (type, modseq);
 	`
 ALTER TABLE disc ADD COLUMN track_count INTEGER;
 `,
+
+	// A track's genre, as its tags give it, or the catalog's for a gap
+	// track.  A later backfill fills it from original_tags.  (#43)
+	`
+ALTER TABLE track ADD COLUMN genre TEXT;
+`,
 }
 
 func dsn(path string, readOnly bool) string {
