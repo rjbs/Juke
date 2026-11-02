@@ -49,7 +49,7 @@ func runBackfill(ctx context.Context, args []string) error {
 		return err
 	}
 	fmt.Printf("duration from files:   %d\n", d.FromFiles)
-	fmt.Printf("  unreadable:          %d\n", d.Unreadable)
+	fmt.Printf("  unmeasured:          %d\n", d.Unmeasured)
 	fmt.Printf("duration from catalog: %d\n", d.FromCatalog)
 	fmt.Printf("still without one:     %d\n", d.Without)
 	if catalog != nil {

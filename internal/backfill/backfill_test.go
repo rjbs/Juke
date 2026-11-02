@@ -193,8 +193,8 @@ func TestDuration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r.FromFiles != 3 || r.Unreadable != 1 || r.FromCatalog != 1 || r.Without != 2 || r.CatalogDisagrees != 1 {
-		t.Errorf("report = %+v, want 3 from files, 1 unreadable, 1 from the catalog, 2 without, 1 disagreeing", r)
+	if r.FromFiles != 3 || r.Unmeasured != 1 || r.FromCatalog != 1 || r.Without != 2 || r.CatalogDisagrees != 1 {
+		t.Errorf("report = %+v, want 3 from files, 1 unmeasured, 1 from the catalog, 2 without, 1 disagreeing", r)
 	}
 
 	after := before + 1
@@ -212,7 +212,16 @@ func TestDuration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r.FromFiles != 0 || r.Unreadable != 1 || r.FromCatalog != 0 || r.Without != 2 {
+	if r.FromFiles != 0 || r.Unmeasured != 1 || r.FromCatalog != 0 || r.Without != 2 {
 		t.Errorf("second report = %+v, want nothing filled", r)
 	}
+
+	// A file that can't be read at all fails the run, and changes nothing.
+	if err := os.Remove(filepath.Join(library, "Garbage.mp3")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Duration(ctx, db, library, catalog); err == nil {
+		t.Error("missing file: no error")
+	}
+	checkDuration(t, db, "Garbage", 0, before-2)
 }

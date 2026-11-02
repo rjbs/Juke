@@ -71,7 +71,7 @@ func Genre(ctx context.Context, db *sql.DB, catalog *sql.DB) (*GenreReport, erro
 // DurationReport counts what a duration backfill did.
 type DurationReport struct {
 	FromFiles        int // tracks measured from their audio
-	Unreadable       int // tracks with audio that couldn't be measured
+	Unmeasured       int // tracks whose audio gave no length
 	FromCatalog      int // tracks given the catalog's figure, having no audio
 	Without          int // tracks still without one
 	CatalogDisagrees int // measured tracks whose catalog entry says something else
@@ -81,7 +81,9 @@ type DurationReport struct {
 // from its file under the library for a track with audio, and taken
 // from the catalog for a track without.  Where a measured track has a
 // catalog entry, the two are compared, and a difference of more than
-// two seconds is counted, as a check on the measuring.
+// two seconds is counted, as a check on the measuring.  A file that
+// can't be opened fails the run: one usually means all of them, as when
+// the library isn't readable by the user running this.
 func Duration(ctx context.Context, db *sql.DB, library string, catalog *sql.DB) (*DurationReport, error) {
 	r := &DurationReport{}
 	err := fill(ctx, db, "duration", func(ctx context.Context, tx *sql.Tx, set func(id string, value any) error) error {
@@ -104,9 +106,12 @@ func Duration(ctx context.Context, db *sql.DB, library string, catalog *sql.DB) 
 			return err
 		}
 		for _, f := range files {
-			seconds, err := measure(filepath.Join(library, filepath.FromSlash(f.path)), f.contentType)
+			seconds, measured, err := measure(filepath.Join(library, filepath.FromSlash(f.path)), f.contentType)
 			if err != nil {
-				r.Unreadable++
+				return fmt.Errorf("track %s: %w", f.id, err)
+			}
+			if !measured {
+				r.Unmeasured++
 				continue
 			}
 			if err := set(f.id, seconds); err != nil {
@@ -172,18 +177,19 @@ func fill(ctx context.Context, db *sql.DB, column string, run func(context.Conte
 	return tx.Commit()
 }
 
-// measure returns a file's length in whole seconds.
-func measure(path, contentType string) (int64, error) {
+// measure returns a file's length in whole seconds, or false if the
+// audio didn't give one.  An error is a file that couldn't be read.
+func measure(path, contentType string) (int64, bool, error) {
 	fh, err := os.Open(path)
 	if err != nil {
-		return 0, err
+		return 0, false, err
 	}
 	defer fh.Close()
 	d, err := audio.Duration(fh, contentType)
 	if err != nil {
-		return 0, err
+		return 0, false, nil
 	}
-	return int64(math.Round(d.Seconds())), nil
+	return int64(math.Round(d.Seconds())), true, nil
 }
 
 type trackValue struct{ id, value string }
