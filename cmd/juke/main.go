@@ -2,7 +2,7 @@
 //
 //	juke import --library DIR --catalog FILE --out FILE [--include NAME ...]
 //	juke check  --db FILE --library DIR
-//	juke backfill --db FILE [--catalog FILE]
+//	juke backfill --db FILE --library DIR [--catalog FILE]
 //	juke originals --db FILE --library DIR [--dry-run]
 //	juke serve  --db FILE --library DIR [--listen ADDR]
 //	            [--tailnet NAME --tailnet-state DIR --allow LOGIN ...]

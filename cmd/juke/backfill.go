@@ -10,14 +10,16 @@ import (
 	"semiotic.systems/juke/internal/store"
 )
 
-// runBackfill fills in properties that older imports didn't record,
-// from the tags the import stored and, given the catalog, from it.
-// Today that is genre.  The server notices the change on its next poll.
+// runBackfill fills in properties that older imports didn't record:
+// genre from the tags the import stored, duration from the audio under
+// the library, and either from the catalog for what those don't say.
+// The server notices the change on its next poll.
 func runBackfill(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("backfill", flag.ExitOnError)
 	dbPath := fs.String("db", "", "the Juke database")
-	catalogPath := fs.String("catalog", "", "the recovery's catalog database, for what the tags don't say")
-	parse(fs, args, "db")
+	library := fs.String("library", "", "the library tree that track paths are relative to")
+	catalogPath := fs.String("catalog", "", "the recovery's catalog database, for what the files don't say")
+	parse(fs, args, "db", "library")
 
 	s, err := store.Open(*dbPath)
 	if err != nil {
@@ -34,12 +36,24 @@ func runBackfill(ctx context.Context, args []string) error {
 		defer catalog.Close()
 	}
 
-	r, err := backfill.Genre(ctx, s.DB, catalog)
+	g, err := backfill.Genre(ctx, s.DB, catalog)
 	if err != nil {
 		return err
 	}
-	fmt.Printf("genre from tags:    %d\n", r.FromTags)
-	fmt.Printf("genre from catalog: %d\n", r.FromCatalog)
-	fmt.Printf("still without one:  %d\n", r.Without)
+	fmt.Printf("genre from tags:       %d\n", g.FromTags)
+	fmt.Printf("genre from catalog:    %d\n", g.FromCatalog)
+	fmt.Printf("still without one:     %d\n", g.Without)
+
+	d, err := backfill.Duration(ctx, s.DB, *library, catalog)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("duration from files:   %d\n", d.FromFiles)
+	fmt.Printf("  unreadable:          %d\n", d.Unreadable)
+	fmt.Printf("duration from catalog: %d\n", d.FromCatalog)
+	fmt.Printf("still without one:     %d\n", d.Without)
+	if catalog != nil {
+		fmt.Printf("catalog disagrees:     %d\n", d.CatalogDisagrees)
+	}
 	return nil
 }

@@ -34,6 +34,10 @@ the server doesn't recognize resyncs from scratch.
   ("(17)" is Rock, and iTunes's "(36)Game" is Game), or from the XML
   when the tags are silent, which is also where a gap track's comes from.
   A third of the library has none, in the XML as in the tags.
+- **Duration** is measured from the audio: an MP4 file's movie header,
+  or an MP3's frame count from its Xing header, its bytes over its
+  bitrate, or a walk of its frames when it has neither.  A gap track
+  takes the XML's figure.
 - **Plain playlists** come from the XML too, which is their only source.
 
 The 2014 XML is the only listening history there is.  The current Apple
@@ -97,7 +101,8 @@ column per track, so adding a property later is a query over stored data
 rather than a rescan: `juke backfill` fills a property added since the
 import from that column, and from the catalog for what the tags don't
 say, matching a track to the catalog by title, album and number.  Genre
-was the first (#43).
+was the first (#43).  Duration (#44) is the exception that does open the
+files, since length isn't in the tags; the headers it needs are small.
 
 - **Server-side only.**  It is not a JMAP property; clients have no use
   for it.
