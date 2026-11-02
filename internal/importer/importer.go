@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"math"
 	"os"
 	"path"
 	"path/filepath"
@@ -30,6 +31,7 @@ import (
 
 	"github.com/dhowden/tag"
 
+	"semiotic.systems/juke/internal/audio"
 	"semiotic.systems/juke/internal/store"
 	"semiotic.systems/juke/internal/tags"
 )
@@ -70,6 +72,10 @@ type Report struct {
 	Playlists      int
 	SkippedFiles   int
 
+	// NoDuration counts the files whose length couldn't be read from
+	// their audio.
+	NoDuration int
+
 	// TitledFromName lists the files with no title in their tags or the
 	// catalog, whose titles came from their filenames.
 	TitledFromName []string
@@ -89,6 +95,7 @@ type catalogTrack struct {
 	AlbumArtist sql.NullString
 	Album       sql.NullString
 	Genre       sql.NullString
+	TotalTime   sql.NullInt64 // milliseconds
 	TrackNumber sql.NullInt64
 	TrackCount  sql.NullInt64
 	DiscNumber  sql.NullInt64
@@ -100,14 +107,14 @@ type catalogTrack struct {
 }
 
 const catalogTrackColumns = `
-	t.track_id, t.name, t.artist, t.album_artist, t.album, t.genre,
+	t.track_id, t.name, t.artist, t.album_artist, t.album, t.genre, t.total_time,
 	t.track_number, t.track_count, t.disc_number, t.rating, t.play_count,
 	t.play_date, t.date_added, ta.album_id`
 
 func scanCatalogTrack(rows interface{ Scan(...any) error }) (catalogTrack, error) {
 	var c catalogTrack
 	err := rows.Scan(
-		&c.ID, &c.Name, &c.Artist, &c.AlbumArtist, &c.Album, &c.Genre,
+		&c.ID, &c.Name, &c.Artist, &c.AlbumArtist, &c.Album, &c.Genre, &c.TotalTime,
 		&c.TrackNumber, &c.TrackCount, &c.DiscNumber, &c.Rating, &c.PlayCount,
 		&c.PlayDate, &c.DateAdded, &c.AlbumID,
 	)
@@ -164,6 +171,7 @@ type audioFile struct {
 	albumArtist  string
 	album        string
 	genre        string
+	duration     *int64 // seconds; nil when the audio didn't say
 	trackNumber  int
 	trackCount   int
 	discNumber   int
@@ -402,6 +410,15 @@ func (im *run) readFile(ctx context.Context, p, rel, contentType string) (*audio
 		return nil, err
 	}
 	defer fh.Close()
+	if d, err := audio.Duration(fh, contentType); err == nil {
+		seconds := int64(math.Round(d.Seconds()))
+		f.duration = &seconds
+	} else {
+		im.report.NoDuration++
+	}
+	if _, err := fh.Seek(0, io.SeekStart); err != nil {
+		return nil, err
+	}
 	m, err := tag.ReadFrom(fh)
 	switch {
 	case errors.Is(err, tag.ErrNoTagsFound):
@@ -793,6 +810,15 @@ func nonEmpty(s string) *string {
 	return &s
 }
 
+// catalogSeconds is a catalog track's length in whole seconds, or nil.
+func catalogSeconds(c *catalogTrack) *int64 {
+	if c == nil || !c.TotalTime.Valid {
+		return nil
+	}
+	s := int64(math.Round(float64(c.TotalTime.Int64) / 1000))
+	return &s
+}
+
 // listening converts a catalog track's listening data.  Ratings are
 // stored 0 to 100 in steps of 10; Juke's are 1 to 5 in steps of 0.5.
 func listening(c *catalogTrack) (rating *float64, playCount int64, lastPlayed *string, dateAdded string) {
@@ -831,6 +857,7 @@ func (im *run) insertFile(ctx context.Context, dir string, f *audioFile, fallbac
 		Title:        firstNonEmpty(f.title, catName, stem),
 		Artist:       nonEmpty(firstNonEmpty(f.artist, catArtist, fallbackArtist)),
 		Genre:        nonEmpty(firstNonEmpty(f.genre, catGenre)),
+		Duration:     f.duration,
 		AlbumID:      albumID,
 		DiscIndex:    disc,
 		Position:     pos,
@@ -865,6 +892,7 @@ func (im *run) insertGap(ctx context.Context, dir string, g *catalogTrack, album
 		Title:      title,
 		Artist:     nonEmpty(g.Artist.String),
 		Genre:      nonEmpty(g.Genre.String),
+		Duration:   catalogSeconds(g),
 		AlbumID:    &albumID,
 		DiscIndex:  &disc,
 		Position:   &pos,

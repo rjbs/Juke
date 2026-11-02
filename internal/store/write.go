@@ -55,6 +55,7 @@ type NewTrack struct {
 	Title        string
 	Artist       *string
 	Genre        *string
+	Duration     *int64
 	AlbumID      *string
 	DiscIndex    *int
 	Position     *int
@@ -86,12 +87,12 @@ func InsertTrack(ctx context.Context, q Queryer, t NewTrack) (string, error) {
 	}
 	_, err = q.ExecContext(ctx, `
 		INSERT INTO track (
-		  id, title, artist, genre, album_id, disc_index, position,
+		  id, title, artist, genre, duration, album_id, disc_index, position,
 		  rating, play_count, last_played, date_added,
 		  blob_id, path, size, content_type, tag_format, original_tags,
 		  created_modseq, modseq
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		id, t.Title, t.Artist, t.Genre, t.AlbumID, t.DiscIndex, t.Position,
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		id, t.Title, t.Artist, t.Genre, t.Duration, t.AlbumID, t.DiscIndex, t.Position,
 		t.Rating, t.PlayCount, t.LastPlayed, t.DateAdded,
 		blobID, t.Path, t.Size, t.ContentType, t.TagFormat, t.OriginalTags,
 		modseq, modseq,

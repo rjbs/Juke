@@ -31,6 +31,24 @@ func id3(frames map[string]string) []byte {
 	return append(append(header, body.Bytes()...), []byte("\xff\xfbAUDIO-FRAMES")...)
 }
 
+// withAudio replaces a tag's stand-in audio with n real 128 kbps frames
+// behind a Xing header that counts them, so the import can measure it:
+// each frame is 1152 samples at 44.1 kHz.
+func withAudio(tagged []byte, n int) []byte {
+	tagged = bytes.TrimSuffix(tagged, []byte("\xff\xfbAUDIO-FRAMES"))
+	frame := make([]byte, 417)
+	copy(frame, []byte{0xFF, 0xFB, 0x90, 0x00})
+	first := append([]byte{}, frame...)
+	copy(first[36:], "Xing")
+	binary.BigEndian.PutUint32(first[40:], 1)
+	binary.BigEndian.PutUint32(first[44:], uint32(n))
+	tagged = append(tagged, first...)
+	for i := 0; i < n; i++ {
+		tagged = append(tagged, frame...)
+	}
+	return tagged
+}
+
 const syntheticCatalogSchema = `
 CREATE TABLE move_log (file_id INTEGER PRIMARY KEY, dest TEXT);
 CREATE TABLE move_plan (file_id INTEGER PRIMARY KEY, displaced_by INTEGER);
@@ -71,6 +89,8 @@ ALTER TABLE itunes_track ADD COLUMN track_count INTEGER;
 -- The tags win for genre, so One's "Pop" loses to its TCON frame; the
 -- gap Two and the genre-less Three take the catalog's.
 ALTER TABLE itunes_track ADD COLUMN genre TEXT;
+ALTER TABLE itunes_track ADD COLUMN total_time INTEGER;
+UPDATE itunes_track SET total_time = CASE track_id WHEN 1 THEN 1000 WHEN 2 THEN 123456 END;
 UPDATE itunes_track SET genre = CASE track_id WHEN 1 THEN 'Pop' WHEN 2 THEN 'Rock' WHEN 3 THEN 'Jazz' END;
 `
 
@@ -90,7 +110,7 @@ func syntheticImport(t *testing.T) (*sql.DB, *Report) {
 			t.Fatal(err)
 		}
 	}
-	write("Undamaged/Band/Album/01 One.mp3", id3(map[string]string{"TIT2": "One", "TPE1": "Band", "TALB": "Album", "TRCK": "1", "TCON": "(17)"}))
+	write("Undamaged/Band/Album/01 One.mp3", withAudio(id3(map[string]string{"TIT2": "One", "TPE1": "Band", "TALB": "Album", "TRCK": "1", "TCON": "(17)"}), 3000))
 	write("Undamaged/Band/Album/03 Three.mp3", id3(map[string]string{"TIT2": "Three", "TPE1": "Band", "TALB": "Album", "TRCK": "3/3"}))
 	write("Undamaged/Band/Album/cover.jpg", []byte("JPEG"))
 	write("Undamaged/Band/Unknown Album/Loose.mp3", id3(map[string]string{"TIT2": "Loose", "TPE1": "Band"}))
@@ -252,6 +272,14 @@ func TestSyntheticImport(t *testing.T) {
 	checkTrackGenre(t, db, "Three", "Jazz")
 	checkTrackGenre(t, db, "Loose", "")
 
+	// Duration is read from the audio, 3000 frames of 1152 samples at
+	// 44.1 kHz here, and the catalog's for a gap.  A stand-in file whose
+	// few bytes happen to parse as one frame measures as nothing at all.
+	checkTrackDuration(t, db, "One", 78)
+	checkTrackDuration(t, db, "Two", 123)
+	checkTrackDuration(t, db, "Three", 0)
+	checkTrackDuration(t, db, "Loose", 0)
+
 	var tags string
 	db.QueryRow(`SELECT original_tags FROM track WHERE title = 'One'`).Scan(&tags)
 	if !bytes.Contains([]byte(tags), []byte(`"TIT2":"One"`)) {
@@ -269,6 +297,19 @@ func mtimeOf(t *testing.T, db *sql.DB, title string) string {
 		t.Errorf("track %q date added %q is not a date", title, s)
 	}
 	return s
+}
+
+// checkTrackDuration checks a track's duration in seconds, -1 for none.
+func checkTrackDuration(t *testing.T, db *sql.DB, title string, want int64) {
+	t.Helper()
+	var got sql.NullInt64
+	if err := db.QueryRow(`SELECT duration FROM track WHERE title = ?`, title).Scan(&got); err != nil {
+		t.Errorf("track %q: %v", title, err)
+		return
+	}
+	if (!got.Valid && want != -1) || (got.Valid && got.Int64 != want) {
+		t.Errorf("track %q: duration %v, want %d", title, got, want)
+	}
 }
 
 // checkTrackGenre checks the genre of one imported track, "" for none.

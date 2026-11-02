@@ -125,6 +125,12 @@ ALTER TABLE disc ADD COLUMN track_count INTEGER;
 	`
 ALTER TABLE track ADD COLUMN genre TEXT;
 `,
+
+	// How long a track plays, in whole seconds, read from its audio at
+	// import or by backfill, or the catalog's figure for a gap track.  (#44)
+	`
+ALTER TABLE track ADD COLUMN duration INTEGER;
+`,
 }
 
 func dsn(path string, readOnly bool) string {
