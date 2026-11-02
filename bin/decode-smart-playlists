@@ -1,0 +1,203 @@
+#!/usr/bin/env perl
+use v5.36;
+use utf8;
+use open qw(:std :encoding(UTF-8));
+
+use DBI;
+use Getopt::Long;
+use Pod::Usage;
+
+=head1 NAME
+
+decode-smart-playlists - print the 2014 catalog's smart playlists as rules
+
+=head1 SYNOPSIS
+
+  decode-smart-playlists --db var/catalog.sqlite [--name 'Most Played']
+
+=head1 DESCRIPTION
+
+iTunes exports a smart playlist as two binary blobs, "Smart Info" and
+"Smart Criteria", which the catalog keeps as C<smart_info> and
+C<smart_criteria>.  This prints each one as the limit and rules a person
+would read in the smart playlist editor, so the ones worth recreating
+can be picked out and translated.
+
+The layout is the one libgpod documents for the iTunesDB's mhod 50 and
+51.  Codes not in the tables below are printed in hex rather than
+guessed at.
+
+=cut
+
+my %opt = (db => 'var/catalog.sqlite');
+GetOptions(\%opt, 'db=s', 'name=s', 'help') or pod2usage(2);
+pod2usage(0) if $opt{help};
+
+my %FIELD = (
+  0x02 => 'name',        0x03 => 'album',        0x04 => 'artist',
+  0x05 => 'bit rate',    0x06 => 'sample rate',  0x07 => 'year',
+  0x08 => 'genre',       0x09 => 'kind',         0x0A => 'date modified',
+  0x0B => 'track number', 0x0C => 'size',        0x0D => 'time',
+  0x0E => 'comment',     0x10 => 'date added',   0x12 => 'composer',
+  0x16 => 'play count',  0x17 => 'last played',  0x18 => 'disc number',
+  0x19 => 'rating',      0x1F => 'compilation',  0x23 => 'bpm',
+  0x27 => 'grouping',    0x28 => 'playlist',     0x29 => 'purchased',
+  0x36 => 'description', 0x37 => 'category',     0x39 => 'podcast',
+  0x3C => 'media kind',  0x3E => 'show',         0x3F => 'season',
+  0x44 => 'skip count',  0x45 => 'last skipped', 0x47 => 'album artist',
+  0x5A => q{album rating}, 0x1D => q{unchecked},
+);
+
+my %STRING_FIELD = map {; $_ => 1 } 0x02, 0x03, 0x04, 0x08, 0x09, 0x0E,
+  0x12, 0x27, 0x36, 0x37, 0x3E, 0x47;
+
+my %DATE_FIELD = map {; $_ => 1 } 0x0A, 0x10, 0x17, 0x45;
+
+my %STRING_ACTION = (
+  0x01000001 => q{is},          0x03000001 => q{is not},
+  0x01000002 => q{contains},    0x03000002 => q{does not contain},
+  0x01000004 => q{starts with}, 0x03000004 => q{does not start with},
+  0x01000008 => q{ends with},   0x03000008 => q{does not end with},
+);
+
+my %VALUE_ACTION = (
+  0x0001 => 'is',               0x02000001 => 'is not',
+  0x0010 => 'is greater than',  0x02000010 => 'is not greater than',
+  0x0040 => 'is less than',     0x02000040 => 'is not less than',
+  0x0100 => 'is in the range',  0x02000100 => 'is not in the range',
+  0x0200 => 'is in the last',   0x02000200 => 'is not in the last',
+);
+
+my %LIMIT_TYPE = (1 => 'minutes', 2 => 'MB', 3 => 'songs', 4 => 'hours', 5 => 'GB');
+
+# The sort codes iTunes 11 writes to the XML, which differ from the
+# iTunesDB ones libgpod lists.  0x19, 0x1A and 0x1C were worked out from
+# playlists whose names say what they do. -- claude, 2026-11-01
+my %LIMIT_SORT = (
+  0x02 => 'random',          0x03 => 'name',           0x04 => 'album',
+  0x05 => 'artist',          0x07 => 'genre',          0x10 => 'most recently added',
+  0x19 => 'most often played', 0x1A => 'most recently played',
+);
+
+my %OPPOSITE = (
+  'most recently added' => 'least recently added',
+  'most often played'   => 'least often played',
+  'most recently played' => 'least recently played',
+);
+
+my %UNIT = (86400 => 'days', 604800 => 'weeks', 2628000 => 'months');
+
+my $UNSET = unpack q{Q>}, pack q{H16}, q{2DAE2DAE2DAE2DAE};
+my $MAC_EPOCH = -2082844800;
+
+my $dbh = DBI->connect("dbi:SQLite:dbname=$opt{db}", '', '', { RaiseError => 1 });
+
+my %playlist_name = map {; $_->[0] => $_->[1] } @{ $dbh->selectall_arrayref(
+  'SELECT persistent_id, name FROM itunes_playlist'
+) };
+
+my $rows = $dbh->selectall_arrayref(<<~'SQL', { Slice => {} }, $opt{name} // '%');
+  SELECT p.name, p.smart_info, p.smart_criteria,
+         (SELECT count(*) FROM itunes_playlist_item i WHERE i.playlist_id = p.playlist_id) AS n
+  FROM itunes_playlist p
+  WHERE p.smart_criteria IS NOT NULL AND p.name LIKE ?
+  ORDER BY p.name
+  SQL
+
+for my $row (@$rows) {
+  say "$row->{name}  ($row->{n} tracks in 2014)";
+  say "  $_" for describe_info($row->{smart_info});
+  say "  $_" for describe_rules($row->{smart_criteria}, 1);
+  say '';
+}
+
+sub describe_info ($blob) {
+  my ($live, $check_rules, $check_limit, $type, $sort, $value, $checked_only, $opposite)
+    = unpack 'C C C C N N C C', $blob;
+
+  my @flags;
+  push @flags, 'live updating' if $live;
+  push @flags, 'checked only' if $checked_only;
+  push @flags, 'rules off' unless $check_rules;
+
+  my $limit = 'no limit';
+  if ($check_limit) {
+    my $by = $LIMIT_SORT{$sort} // sprintf('sort 0x%X', $sort);
+    $by = $OPPOSITE{$by} // "$by (reversed)" if $opposite;
+    $limit = sprintf 'limit %d %s by %s', $value, $LIMIT_TYPE{$type} // "type $type", $by;
+  }
+
+  return join '; ', $limit, @flags;
+}
+
+# A rules block is "SLst", a version, a rule count, an operator (0 for
+# all, 1 for any), 120 bytes of nothing, then the rules.  A rule whose
+# data is itself a rules block is a nested group.
+sub describe_rules ($blob, $depth) {
+  my ($magic, $version, $count, $any) = unpack 'a4 N N N', $blob;
+  die "not a rules block: $magic" unless $magic eq 'SLst';
+
+  my $indent = '  ' x ($depth - 1);
+  my @lines = ($indent . ($any ? 'match ANY of:' : 'match ALL of:'));
+
+  my $offset = 136;
+  for (1 .. $count) {
+    my ($field, $action, $length) = unpack "x$offset N N x44 N", $blob;
+    $offset += 56;
+    my $data = substr $blob, $offset, $length;
+    $offset += $length;
+
+    if (substr($data, 0, 4) eq 'SLst') {
+      push @lines, map {; "$indent  $_" } describe_rules($data, $depth + 1);
+      next;
+    }
+    push @lines, "$indent  " . describe_rule($field, $action, $data);
+  }
+  return @lines;
+}
+
+sub describe_rule ($field, $action, $data) {
+  my $name = $FIELD{$field} // sprintf('field 0x%X', $field);
+
+  if ($STRING_FIELD{$field}) {
+    my $verb = $STRING_ACTION{$action} // sprintf('action 0x%X', $action);
+    my $str = $data;
+    $str = pack 'U*', unpack 'n*', $data;
+    return qq{$name $verb "$str"};
+  }
+
+  my $verb = $VALUE_ACTION{$action} // sprintf('action 0x%X', $action);
+  my ($from, $from_date, $from_units, $to, $to_date, $to_units) = unpack 'Q> q> Q> Q> q> Q>', $data;
+
+  if ($field == 0x28) {
+    my $id = sprintf '%016X', $from;
+    return "$name is " . ($playlist_name{$id} // "unknown $id");
+  }
+
+  if ($action & 0x0200) {
+    my $n = -$from_date;
+    my $unit = $UNIT{$from_units} // "x $from_units seconds";
+    return "$name $verb $n $unit";
+  }
+
+  my $fmt = sub ($v) { format_value($field, $v) };
+  if ($action & 0x0100) {
+    return "$name $verb " . $fmt->($from) . ' to ' . $fmt->($to);
+  }
+  return "$name $verb " . $fmt->($from);
+}
+
+sub format_value ($field, $v) {
+  return 'unset' if $v == $UNSET;
+  if ($DATE_FIELD{$field}) {
+    my @t = gmtime($v + $MAC_EPOCH);
+    return sprintf '%04d-%02d-%02d', $t[5] + 1900, $t[4] + 1, $t[3];
+  }
+  # iTunes writes the top of a star range as the next step minus one,
+  # so 4 to 5 stars is stored as 80 to 109; flooring to a half star
+  # shows what the editor showed. -- claude, 2026-11-01
+  return sprintf q{%g stars}, int($v / 10) / 2 if $field == 0x19 || $field == 0x5A;
+  return sprintf '%d:%02d', int($v / 60000), ($v / 1000) % 60 if $field == 0x0D;
+  return sprintf '%.1f MB', $v / 1048576 if $field == 0x0C;
+  return $v;
+}
