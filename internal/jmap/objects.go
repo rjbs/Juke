@@ -528,12 +528,6 @@ type queryArgs struct {
 	// size, or by playing time.  See doc/types.md.
 	LimitBytes   *int64 `json:"limitBytes"`
 	LimitSeconds *int64 `json:"limitSeconds"`
-
-	// For a stored smart playlist run through queryTracks: at most this
-	// many tracks, and how deep in a chain of inSmartPlaylist references
-	// this evaluation is.
-	maxTracks *int64
-	depth     int
 }
 
 func (s *Server) query(ctx context.Context, t *objectType, raw json.RawMessage) (any, error) {

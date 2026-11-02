@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"regexp"
 	"strings"
 	"time"
@@ -18,11 +19,14 @@ import (
 // a rule sent straight to Track/query could name a long chain.
 const maxSmartDepth = 16
 
-// queryTracks runs a Track/query, compiling its filter and sort to SQL
-// and then cutting the sorted list at any cap.  The filter conditions
+// queryTracks runs a Track/query as one SQL statement.  The filter and
+// sort compile to a WHERE and ORDER BY over track t and album a; each
+// smart playlist the filter names becomes a common table expression
+// ahead of them, so the whole thing runs inside SQLite.  The query's own
+// caps are cut here as the sorted rows stream.  The filter conditions
 // are listed in doc/types.md.
 func queryTracks(ctx context.Context, s *Server, args *queryArgs) ([]string, error) {
-	c := &compiler{s: s, ctx: ctx, q: s.store.DB, depth: args.depth}
+	c := &compiler{s: s, ctx: ctx, q: s.store.DB}
 	where, params, err := c.filter(args.Filter)
 	if err != nil {
 		return nil, err
@@ -31,11 +35,12 @@ func queryTracks(ctx context.Context, s *Server, args *queryArgs) ([]string, err
 	if err != nil {
 		return nil, err
 	}
-	rows, err := s.store.DB.QueryContext(ctx, `
+	with, withParams := c.with()
+	rows, err := s.store.DB.QueryContext(ctx, with+`
 		SELECT t.id, coalesce(t.size, 0), coalesce(t.duration, 0)
 		FROM track t LEFT JOIN album a ON a.id = t.album_id
 		WHERE `+where+`
-		ORDER BY `+order, append(params, orderParams...)...)
+		ORDER BY `+order, append(append(withParams, params...), orderParams...)...)
 	if err != nil {
 		return nil, err
 	}
@@ -53,8 +58,7 @@ func queryTracks(ctx context.Context, s *Server, args *queryArgs) ([]string, err
 		// track with no audio or no known length counts as nothing.
 		bytes += size
 		seconds += duration
-		if args.maxTracks != nil && int64(len(ids)) >= *args.maxTracks ||
-			args.LimitBytes != nil && bytes > *args.LimitBytes ||
+		if args.LimitBytes != nil && bytes > *args.LimitBytes ||
 			args.LimitSeconds != nil && seconds > *args.LimitSeconds {
 			break
 		}
@@ -63,37 +67,143 @@ func queryTracks(ctx context.Context, s *Server, args *queryArgs) ([]string, err
 	return ids, rows.Err()
 }
 
-// smartPlaylistIDs evaluates a stored smart playlist: its filter, sort
-// and caps, run as a Track/query would run them.
-func (s *Server) smartPlaylistIDs(ctx context.Context, q store.Queryer, id string, depth int) ([]string, error) {
-	_, sq, err := store.LoadSmartPlaylist(ctx, q, id)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, errInvalidArguments("no smart playlist %q", id)
-	}
-	if err != nil {
-		return nil, err
-	}
-	args := &queryArgs{LimitBytes: sq.LimitBytes, LimitSeconds: sq.LimitSeconds, maxTracks: sq.Limit, depth: depth}
-	if sq.Filter != nil {
-		args.Filter = json.RawMessage(*sq.Filter)
-	}
-	if err := json.Unmarshal([]byte(sq.Sort), &args.Sort); err != nil {
-		return nil, err
-	}
-	return queryTracks(ctx, s, args)
-}
-
 // A compiler turns a filter into SQL over track t and album a.  It
 // records the playlists the filter names, which SmartPlaylist/set keeps;
-// with validate set it checks that they exist instead of evaluating
+// with validate set it checks that they exist instead of compiling
 // them, and the SQL it returns is not meant to run.
 type compiler struct {
 	s        *Server
 	ctx      context.Context
 	q        store.Queryer
-	depth    int
 	validate bool
 	refs     []store.Ref
+
+	// The smart playlists the filter names, each compiled once however
+	// often it is named; see reference.  A capped one is a common table
+	// expression, listed here in an order that defines each one after
+	// those it names.
+	ctes    []cte
+	byID    map[string]membership
+	pending map[string]bool // being compiled, so naming it again is a loop
+	depth   int
+}
+
+type cte struct {
+	name   string
+	sql    string
+	params []any
+}
+
+// A membership is the SQL that is true of a track in a smart playlist.
+type membership struct {
+	sql    string
+	params []any
+}
+
+// with returns the WITH clause defining the filter's capped smart
+// playlists, and its parameters, or nothing when it names none.  Each
+// is materialized, so a rule named twice is evaluated once.
+func (c *compiler) with() (string, []any) {
+	if len(c.ctes) == 0 {
+		return "", nil
+	}
+	var defs []string
+	var params []any
+	for _, e := range c.ctes {
+		defs = append(defs, e.name+" AS MATERIALIZED ("+e.sql+")")
+		params = append(params, e.params...)
+	}
+	return "WITH " + strings.Join(defs, ",\n") + "\n", params
+}
+
+// reference compiles membership in the smart playlist with the given
+// id, caps included.  A rule with no cap is its filter, inlined where
+// it is named: cheaper than a set of ids, even named several times,
+// since a predicate costs nothing to set up.  A capped one must be a
+// set, the first so many of its matches in its sort order, so it
+// becomes a common table expression that keeps those within every cap
+// by running counts over that order, and membership is an IN of it.
+// -- claude, 2026-11-02
+func (c *compiler) reference(id string) (string, []any, error) {
+	if m, ok := c.byID[id]; ok {
+		return m.sql, m.params, nil
+	}
+	if c.pending[id] {
+		return "", nil, errInvalidArguments("smart playlists reference one another in a loop")
+	}
+	if c.depth >= maxSmartDepth {
+		return "", nil, errInvalidArguments("smart playlists nest too deeply")
+	}
+	_, sq, err := store.LoadSmartPlaylist(c.ctx, c.q, id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil, errInvalidArguments("no smart playlist %q", id)
+	}
+	if err != nil {
+		return "", nil, err
+	}
+
+	if c.byID == nil {
+		c.byID = map[string]membership{}
+		c.pending = map[string]bool{}
+	}
+	c.pending[id] = true
+	c.depth++
+	var filter json.RawMessage
+	if sq.Filter != nil {
+		filter = json.RawMessage(*sq.Filter)
+	}
+	where, params, err := c.filter(filter)
+	c.depth--
+	delete(c.pending, id)
+	if err != nil {
+		return "", nil, err
+	}
+
+	if sq.Limit == nil && sq.LimitBytes == nil && sq.LimitSeconds == nil {
+		m := membership{sql: "(" + where + ")", params: params}
+		c.byID[id] = m
+		return m.sql, m.params, nil
+	}
+
+	var sort []comparator
+	if err := json.Unmarshal([]byte(sq.Sort), &sort); err != nil {
+		return "", nil, err
+	}
+	order, orderParams, err := compileTrackSort(sort)
+	if err != nil {
+		return "", nil, err
+	}
+	params = append(params, orderParams...)
+	var caps []string
+	{
+		for _, cap := range []struct {
+			column string
+			limit  *int64
+		}{{"n", sq.Limit}, {"bytes", sq.LimitBytes}, {"seconds", sq.LimitSeconds}} {
+			if cap.limit != nil {
+				caps = append(caps, cap.column+" <= ?")
+				params = append(params, *cap.limit)
+			}
+		}
+		// The running totals include the current row, so a row is kept
+		// only if it fits; the totals never shrink, so once one passes
+		// its cap every later row fails too, as the cut in queryTracks
+		// does it. -- claude, 2026-11-02
+	}
+	body := `SELECT id FROM (
+		SELECT t.id AS id, row_number() OVER w AS n,
+		  sum(coalesce(t.size, 0)) OVER w AS bytes,
+		  sum(coalesce(t.duration, 0)) OVER w AS seconds
+		FROM track t LEFT JOIN album a ON a.id = t.album_id
+		WHERE ` + where + `
+		WINDOW w AS (ORDER BY ` + order + ` ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
+	) WHERE ` + strings.Join(caps, " AND ")
+
+	name := fmt.Sprintf("s%d", len(c.ctes)+1)
+	c.ctes = append(c.ctes, cte{name: name, sql: body, params: params})
+	m := membership{sql: "t.id IN (SELECT id FROM " + name + ")"}
+	c.byID[id] = m
+	return m.sql, nil, nil
 }
 
 // filter compiles a FilterOperator or FilterCondition.
@@ -277,21 +387,7 @@ func (c *compiler) condition(name string, raw json.RawMessage) (string, []any, e
 			}
 			return "1", nil, nil
 		}
-		if c.depth >= maxSmartDepth {
-			return "", nil, errInvalidArguments("smart playlists nest too deeply")
-		}
-		ids, err := c.s.smartPlaylistIDs(c.ctx, c.q, v, c.depth+1)
-		if err != nil {
-			return "", nil, err
-		}
-		// The referenced playlist's whole result, caps included, goes in
-		// as one JSON array: an id list can be longer than SQLite lets a
-		// statement have parameters. -- claude, 2026-11-01
-		list, err := json.Marshal(ids)
-		if err != nil {
-			return "", nil, err
-		}
-		return "t.id IN (SELECT value FROM json_each(?))", []any{string(list)}, nil
+		return c.reference(v)
 	}
 	return "", nil, errorOf("unsupportedFilter", "no filter condition %q", name)
 }

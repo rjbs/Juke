@@ -179,3 +179,33 @@ func TestTrackQueryRandomAndCaps(t *testing.T) {
 	})
 	checkSmartTracks(t, f, id, "Lost Track", "Smells Like Nirvana")
 }
+
+func TestSmartPlaylistReferences(t *testing.T) {
+	f := newFixture(t, Config{})
+	deep := map[string]any{"albumTitle": "Off the Deep End"}
+	in := func(id string) map[string]any { return map[string]any{"inSmartPlaylist": id} }
+
+	// A referenced rule's caps apply, in its own sort order, and a cap
+	// cuts the list rather than skipping what doesn't fit: descending by
+	// title, Trigger Happy (170 s) fits, Smells Like Nirvana (218 s)
+	// doesn't, and Lost Track (no length) is past the cut.
+	byBytes, _ := f.smartCreate(map[string]any{"title": "Deep end by bytes", "filter": deep, "sort": by("title", true), "limitBytes": 30})
+	checkSmartTracks(t, f, byBytes, "Lost Track", "Smells Like Nirvana")
+	bySeconds, _ := f.smartCreate(map[string]any{"title": "Deep end by seconds", "filter": deep, "sort": by("title", false), "limitSeconds": 300})
+	checkSmartTracks(t, f, bySeconds, "Trigger Happy")
+
+	// A rule named more than once, directly and through another, is
+	// compiled once and agrees with itself.
+	rated, _ := f.smartCreate(map[string]any{"title": "Rated deep end", "filter": map[string]any{"operator": "AND", "conditions": []any{in(byBytes), map[string]any{"hasRating": true}}}})
+	both, _ := f.smartCreate(map[string]any{"title": "Both", "filter": map[string]any{"operator": "OR", "conditions": []any{in(byBytes), in(rated), in(bySeconds)}}})
+	checkSmartTracks(t, f, both, "Lost Track", "Smells Like Nirvana", "Trigger Happy")
+	checkQuery(t, f, map[string]any{"operator": "AND", "conditions": []any{in(both), in(byBytes), map[string]any{"operator": "NOT", "conditions": []any{in(bySeconds)}}}}, nil,
+		"Lost Track", "Smells Like Nirvana")
+
+	// A random sort inside a capped rule orders by its seed, as the
+	// query's own would.
+	random := []map[string]any{{"property": "random", "seed": "one"}}
+	first := f.call("Track/query", map[string]any{"sort": random, "limit": 1})["ids"].([]any)[0]
+	one, _ := f.smartCreate(map[string]any{"title": "One at random", "sort": random, "limit": 1})
+	checkEqual(t, "one at random", f.call("Track/query", map[string]any{"filter": in(one)})["ids"], []any{first})
+}
