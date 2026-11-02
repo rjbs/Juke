@@ -71,8 +71,11 @@ td.date { color: var(--muted); white-space: nowrap; font-variant-numeric: tabula
 tr.gap td { color: var(--faint); }
 tr.gap .title::after { content: " · missing"; font-size: 12px; }
 tr.playing td { color: var(--accent); }
+tr.group td { padding-top: 18px; border-bottom: none; font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+tr.group:hover td { background: none; }
 .play { border: none; background: none; padding: 0 4px; color: var(--muted); }
 .play:hover { color: var(--accent); background: none; }
+.no-audio { padding: 0 4px; color: var(--faint); }
 .stars { white-space: nowrap; cursor: pointer; color: var(--faint); user-select: none; letter-spacing: 1px; }
 .stars span { display: inline-block; width: 1em; text-align: center; }
 .stars .on { color: var(--star); }
@@ -269,7 +272,16 @@ function stars(t) {
 // is the number of the first row, when the list is one page of a longer
 // one.
 function trackTable(list, cols = {}) {
-  const playable = list.filter(t => t.blobId);
+  return groupedTrackTable([{ tracks: list }], cols);
+}
+
+// groupedTrackTable shows titled groups of tracks, such as an album's
+// discs, as one table, so their columns line up; a group's title is a
+// row across it, and numbering starts over in each group.  Playing from
+// a track plays on through the groups that follow.
+function groupedTrackTable(groups, cols = {}) {
+  const playable = groups.flatMap(g => g.tracks).filter(t => t.blobId);
+  const columns = 6 + !!cols.number + !!cols.album + !!cols.added;
   return h("table", {},
     h("thead", {}, h("tr", {},
       cols.number && h("th", { class: "num" }, "#"),
@@ -282,14 +294,18 @@ function trackTable(list, cols = {}) {
       h("th", { class: "hide-narrow" }, "Last played"),
       cols.added && h("th", { class: "hide-narrow" }, "Added"),
     )),
-    h("tbody", {}, list.map((t, i) => {
+    groups.map(g => h("tbody", {},
+      g.title && h("tr", { class: "group" }, h("td", { colspan: columns }, g.title)),
+      g.tracks.map((t, i) => {
       const album = t.albumId && albums.get(t.albumId);
       return h("tr", { class: [t.blobId ? "" : "gap", player.current() === t.id ? "playing" : ""].join(" "), "data-track": t.id },
         cols.number && h("td", { class: "num" }, (cols.start || 0) + i + 1),
-        h("td", {}, t.blobId && h("button", {
-          class: "play", title: "Play from here",
-          onclick: () => player.play(playable.map(p => p.id), playable.indexOf(t)),
-        }, "▶")),
+        h("td", {}, t.blobId
+          ? h("button", {
+            class: "play", title: "Play from here",
+            onclick: () => player.play(playable.map(p => p.id), playable.indexOf(t)),
+          }, "▶")
+          : h("span", { class: "no-audio", title: "No audio" }, "⊘")),
         h("td", { class: "title" }, t.title),
         h("td", {}, orNone(t.artist, "no artist")),
         cols.album && h("td", {}, album
@@ -300,7 +316,7 @@ function trackTable(list, cols = {}) {
         h("td", { class: "date last-played hide-narrow" }, day(t.lastPlayed)),
         cols.added && h("td", { class: "date hide-narrow" }, day(t.dateAdded)),
       );
-    })),
+      }))),
   );
 }
 
@@ -366,10 +382,10 @@ async function renderAlbum(id) {
       a.artist || "Compilation", " · ",
       `${all.length} tracks`, gaps ? `, ${gaps} missing` : "", " · ",
       h("button", { onclick: () => player.play(playable.map(t => t.id), 0), disabled: !playable.length || null }, "Play album")),
-    a.discs.map((d, i) => [
-      a.discs.length > 1 && h("h3", {}, d.title || `Disc ${i + 1}`),
-      trackTable(d.trackIds.map(t => tracks.get(t)), { number: true }),
-    ]),
+    groupedTrackTable(a.discs.map((d, i) => ({
+      title: a.discs.length > 1 ? d.title || `Disc ${i + 1}` : null,
+      tracks: d.trackIds.map(t => tracks.get(t)),
+    })), { number: true }),
   );
 }
 
