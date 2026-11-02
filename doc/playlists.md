@@ -22,9 +22,9 @@ build.
   selection orders tracks by a hash of the track id and a seed stored on
   the playlist, so the selection is stable and changes only where inputs
   change; reshuffling is an edit that sets a new seed.
-- **Time-relative rules** like "played in the last 30 days" are evaluated
-  against the current day, and the date is part of the cache key, so such
-  a playlist changes at most once a day.
+- **Time-relative rules** like "played in the last 30 days" are a plain
+  comparison against the moment of evaluation, measured in seconds.  There
+  is no day boundary, so there is no question of whose midnight.
 - **No cycles.**  A rule may draw on another playlist, so playlists form a
   graph.  `Playlist/set` rejects a change that would close a loop, so
   evaluation can always run in dependency order.

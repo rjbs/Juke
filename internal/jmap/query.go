@@ -168,11 +168,7 @@ func (s *Server) compileCondition(name string, raw json.RawMessage) (string, []a
 		if !ok || v < 0 || v != float64(int64(v)) {
 			return bad("a non-negative integer")
 		}
-		// "Within N days" counts from the start of today, UTC, so the
-		// answer changes once a day rather than every second; see
-		// doc/playlists.md. -- claude, 2026-10-24
-		today := s.cfg.Now().UTC().Truncate(24 * time.Hour)
-		since := today.AddDate(0, 0, -int(v)).Format(utcDateLayout)
+		since := s.cfg.Now().UTC().Add(-time.Duration(v) * 24 * time.Hour).Format(utcDateLayout)
 		return "t.last_played >= ?", []any{since}, nil
 	case "inPlaylist":
 		v, ok := str()

@@ -118,7 +118,7 @@ defaults to.
 | `playCountAtMost` | `UnsignedInt` | play count is at most the value |
 | `lastPlayedBefore` | `UTCDate` | last play was before the value |
 | `lastPlayedAfter` | `UTCDate` | last play was at or after the value |
-| `lastPlayedWithinDays` | `UnsignedInt` | last play was within that many days of today |
+| `lastPlayedWithinDays` | `UnsignedInt` | last play was within that many days, to the second, of now |
 | `inPlaylist` | `Id` | track is in that playlist |
 | `hasAudio` | `Boolean` | `blobId` is set, or is null |
 

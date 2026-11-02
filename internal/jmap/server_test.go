@@ -45,6 +45,7 @@ func TestTrackQueryFilters(t *testing.T) {
 	checkQuery(t, f, map[string]any{"lastPlayedBefore": "2014-01-01T00:00:00Z"}, nil, "Lost Track")
 	checkQuery(t, f, map[string]any{"lastPlayedAfter": "2014-06-14T00:00:00Z"}, nil, "Brave Sir Robin")
 	checkQuery(t, f, map[string]any{"lastPlayedWithinDays": 7}, nil, "Smells Like Nirvana", "Brave Sir Robin")
+	checkQuery(t, f, map[string]any{"lastPlayedWithinDays": 5}, nil, "Brave Sir Robin")
 	checkQuery(t, f, map[string]any{"hasAudio": false}, nil, "Lost Track")
 	checkQuery(t, f, map[string]any{"inPlaylist": f.ids["Brave Sir Robin"]}, nil)
 
