@@ -72,12 +72,15 @@ struct SmartPlaylistView: View {
 
   /// How many tracks the rule matches: all of them, or the first page
   /// of more than the server answers at once, or nothing yet, for a
-  /// rule that hasn't run since the library was opened.
+  /// rule that hasn't run since the library was opened.  A rule with a
+  /// limit of its own is never cut by the server: its total counts
+  /// everything the filter matched before the limit, so only a rule
+  /// without one can have been cut.  -- claude, 2026-11-02
   private func summary(of playlist: SmartPlaylist, showing count: Int) -> String {
     guard let result = library.smartResults[playlist.id] else {
       return "Waiting for the server to run this playlist's rule."
     }
-    if let total = result.total, total > result.trackIds.count {
+    if playlist.limit == nil, let total = result.total, total > result.trackIds.count {
       return "The first \(count.formatted()) of \(total.formatted()) tracks"
     }
     return "\(count.formatted()) tracks"

@@ -43,10 +43,10 @@ func syncAndPlay() async throws {
   try await checkPlayable(library, track, atLeast: 1)
 }
 
-// eventually waits up to five seconds for a condition.
+// eventually waits, by default up to five seconds, for a condition.
 @MainActor
-func eventually(_ what: String, _ condition: () async throws -> Bool) async throws {
-  for _ in 0..<100 {
+func eventually(_ what: String, within seconds: Double = 5, _ condition: () async throws -> Bool) async throws {
+  for _ in 0..<Int(seconds * 20) {
     if try await condition() { return }
     try await Task.sleep(for: .milliseconds(50))
   }
@@ -233,7 +233,9 @@ func playlistEditing() async throws {
   try await library.moveTracks(at: [2], to: 0, in: playlist)
   try await library.removeTracks(at: [3], from: playlist)
   try await library.rename(playlist, to: title + " renamed")
-  #expect(playlist.trackIds == [t[2], t[0], t[1]].map(\.id))
+  // Each edit reaches the index through the change stream, a moment
+  // after the write returns.
+  try await eventually("the edits in the index") { playlist.trackIds == [t[2], t[0], t[1]].map(\.id) }
   try await eventually("edits sent") { try await library.engine.object(key: key)?.pending == nil }
   try await checkServerPlaylist(id, title: title + " renamed", tracks: [t[2], t[0], t[1]])
 
@@ -317,8 +319,14 @@ func smartPlaylists() async throws {
   let titles = library.tracks(of: playlist).map { $0.title.lowercased() }
   #expect(titles == titles.sorted(), "not in title order: \(titles)")
 
+  // The rule changes the moment its first result has landed, which is
+  // when a pass may still be in flight with the old rule; and a second
+  // library, opened after the change, sees only the new rule.
   _ = try await jmap("SmartPlaylist/set", ["update": [id: ["limit": 2]]])
   try await eventually("the cap applied") { library.tracks(of: playlist).count == 2 }
+  let other = try await openLibrary()
+  defer { other.stop() }
+  try await eventually("the cap in the other library") { other.tracks(of: playlist).count == 2 }
 
   library.offline.keep(playlist, true)
   #expect(library.offline.isKept(playlist))
@@ -336,5 +344,7 @@ func smartPlaylists() async throws {
 
   _ = try await jmap("SmartPlaylist/set", ["destroy": [id]])
   try await eventually("gone from the index") { !library.smartPlaylists.contains { $0.id == id } }
-  #expect(try await library.engine.subscriptions().allSatisfy { $0.id != playlist.subscriptionId })
+  try await eventually("its subscription dropped") {
+    try await library.engine.subscriptions().allSatisfy { $0.id != playlist.subscriptionId }
+  }
 }
