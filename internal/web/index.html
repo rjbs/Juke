@@ -239,7 +239,8 @@ function audioURL(t) {
 // ---- Rating ----
 
 // stars is a five-star rating control.  Clicking the left half of a star
-// gives a half star; clicking the current rating clears it.
+// gives a half star, except the first, since ratings start at one;
+// clicking the current rating clears it.
 function stars(t) {
   const el = h("span", { class: "stars", title: t.rating ? `${t.rating} stars` : "unrated" });
   const paint = r => el.replaceChildren(...[1, 2, 3, 4, 5].map(n =>
@@ -250,7 +251,7 @@ function stars(t) {
     if (!star) return;
     const n = [...el.children].indexOf(star) + 1;
     const box = star.getBoundingClientRect();
-    let r = ev.clientX < box.left + box.width / 2 ? n - 0.5 : n;
+    let r = Math.max(1, ev.clientX < box.left + box.width / 2 ? n - 0.5 : n);
     if (r === t.rating) r = null;
     const old = t.rating;
     paint(r || 0);
