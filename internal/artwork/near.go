@@ -146,9 +146,10 @@ func distinct(ids []string) []string {
 }
 
 // hashImages hashes every stored image that has no hash yet, reading
-// each from its file, and returns how many it hashed.  An image whose
-// file is gone or unreadable is left unhashed, a picture of its own.
-func (r *run) hashImages() (int, error) {
+// each from its file, and returns how many it hashed and how many it
+// couldn't.  An image whose file is gone or that no decoder reads is
+// left unhashed, a picture of its own, and the report counts it.
+func (r *run) hashImages() (hashed, unhashable int, err error) {
 	var todo []string
 	for id, info := range r.images {
 		if !info.hashed {
@@ -156,28 +157,29 @@ func (r *run) hashImages() (int, error) {
 		}
 	}
 	sort.Strings(todo)
-	n := 0
 	for _, id := range todo {
 		data, err := readFile(Path(r.library, id))
 		if err != nil {
-			return n, err
+			return hashed, unhashable, err
 		}
 		if data == nil {
+			unhashable++
 			continue
 		}
 		hash, err := hashOf(data)
 		if err != nil {
+			unhashable++
 			continue
 		}
 		if _, err := r.db.ExecContext(r.ctx, `UPDATE artwork SET dhash = ? WHERE id = ?`, int64(hash), id); err != nil {
-			return n, err
+			return hashed, unhashable, err
 		}
 		info := r.images[id]
 		info.hash, info.hashed = hash, true
 		r.images[id] = info
-		n++
+		hashed++
 	}
-	return n, nil
+	return hashed, unhashable, nil
 }
 
 // readFile reads a file, or returns nil if it isn't there.

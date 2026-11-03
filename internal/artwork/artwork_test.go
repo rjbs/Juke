@@ -507,8 +507,22 @@ func TestNearIdentical(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r.Hashed != 3 || r.Changed != 0 || r.Collapsed != 1 {
+	if r.Hashed != 3 || r.Unhashable != 0 || r.Changed != 0 || r.Collapsed != 1 {
 		t.Errorf("after unhashing: %+v, want 3 hashed, nothing changed, 1 collapsed", *r)
+	}
+	// An image no decoder reads is counted, not hidden.
+	if _, err := f.db.ExecContext(ctx, `UPDATE artwork SET dhash = NULL`); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(Path(f.library, idOf('b')), []byte("not a picture"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r, err = Run(ctx, f.db, f.library)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Hashed != 2 || r.Unhashable != 1 {
+		t.Errorf("with a junk file: %+v, want 2 hashed, 1 unhashable", *r)
 	}
 }
 

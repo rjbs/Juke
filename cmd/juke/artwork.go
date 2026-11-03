@@ -38,6 +38,7 @@ func runArtwork(ctx context.Context, args []string) error {
 	fmt.Printf("tracks with their own: %d\n", r.Overrides)
 	fmt.Printf("  one picture, encoded several ways: %d\n", r.Collapsed)
 	fmt.Printf("images hashed:         %d\n", r.Hashed)
+	fmt.Printf("  unhashable:          %d\n", r.Unhashable)
 	fmt.Printf("albums+tracks changed: %d\n", r.Changed)
 	fmt.Printf("  chosen by hand, left alone: %d\n", r.Kept)
 	return nil

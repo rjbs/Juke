@@ -54,6 +54,7 @@ type Report struct {
 	Changed    int // albums and tracks whose art changed this run
 	Kept       int // albums and tracks whose art was chosen by hand and left alone
 	Hashed     int // images hashed this run, for telling near-identical ones
+	Unhashable int // images no decoder reads or no file holds, each a picture of its own
 	Collapsed  int // albums whose winning picture is carried as more than one image
 }
 
@@ -106,7 +107,7 @@ func Run(ctx context.Context, db *sql.DB, library string) (*Report, error) {
 	if err != nil {
 		return nil, err
 	}
-	if r.report.Hashed, err = r.hashImages(); err != nil {
+	if r.report.Hashed, r.report.Unhashable, err = r.hashImages(); err != nil {
 		return nil, err
 	}
 	if err := r.assign(tracks, folder); err != nil {
