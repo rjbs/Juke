@@ -22,8 +22,7 @@ const FIELDS = [
   { key: "playCount",  label: "Play count",     kind: "number", atLeast: "playCountAtLeast", atMost: "playCountAtMost", step: 1, min: 0, unit: "plays" },
   { key: "duration",   label: "Length",         kind: "duration", atLeast: "durationAtLeast", atMost: "durationAtMost" },
   { key: "lastPlayed", label: "Last played",    kind: "date" },
-  { key: "playlist",   label: "Playlist",       kind: "ref", is: "inPlaylist" },
-  { key: "smart",      label: "Smart playlist", kind: "ref", is: "inSmartPlaylist" },
+  { key: "playlist",   label: "Playlist",       kind: "ref" },
   { key: "audio",      label: "Audio",          kind: "audio" },
 ];
 const FIELD = Object.fromEntries(FIELDS.map(f => [f.key, f]));
@@ -33,12 +32,12 @@ const OPS = {
   anyOf: "is any of", noneOf: "is none of", set: "is set", unset: "is not set",
   atLeast: "is at least", atMost: "is at most",
   before: "was before", after: "was on or after", within: "was within the last", notWithin: "was not within the last",
-  in: "is in", notIn: "is not in", has: "is present", hasNot: "is missing",
+  inAny: "is in any of", inAll: "is in all of", inNone: "is in none of", has: "is present", hasNot: "is missing",
 };
 
 // The negated operators match a track whose value is missing too, as
 // the server defines NOT; the row says so.
-const NEGATED = { isNot: "is", notContains: "contains", noneOf: "anyOf", notWithin: "within", notIn: "in" };
+const NEGATED = { isNot: "is", notContains: "contains", noneOf: "anyOf", notWithin: "within", inNone: "inAny" };
 const NEGATION = Object.fromEntries(Object.entries(NEGATED).map(([n, p]) => [p, n]));
 
 function opsFor(f) {
@@ -47,7 +46,7 @@ function opsFor(f) {
     case "number": return ["atLeast", "atMost", "is", ...(f.has ? ["set", "unset"] : [])];
     case "duration": return ["atLeast", "atMost"];
     case "date": return ["within", "notWithin", "before", "after"];
-    case "ref": return ["in", "notIn"];
+    case "ref": return ["inAny", "inAll", "inNone"];
     case "audio": return ["has", "hasNot"];
   }
 }
@@ -60,8 +59,9 @@ function distinct(values) {
 
 // A node is a group, {kind: "group", op: all|any|none, items}, or a row,
 // {kind: "row", field, op, value}.  A row's value is a string, a number
-// (seconds for a length, days or a YYYY-MM-DD date for last played), an
-// id for a reference, or a list of strings for any-of and none-of.
+// (seconds for a length, days or a YYYY-MM-DD date for last played), or
+// a list: of strings for any-of and none-of, of playlist ids of either
+// kind for the playlist field, whose one picker lists both.
 function group(op, items = []) { return { kind: "group", op, items }; }
 function row(field, op, value = "") { return { kind: "row", field, op, value }; }
 function newRow() { return row("genre", "is"); }
@@ -97,18 +97,29 @@ function compileRow(r) {
     case "after": return { lastPlayedAfter: `${need()}T00:00:00Z` };
     case "within": return { lastPlayedWithinDays: Number(need()) };
     case "notWithin": return not({ lastPlayedWithinDays: Number(need()) });
-    case "in": return { [f.is]: need() };
-    case "notIn": return not({ [f.is]: need() });
+    case "inAny": case "inAll": {
+      const conditions = need().map(inList);
+      return conditions.length === 1 ? conditions[0] : { operator: r.op === "inAny" ? "OR" : "AND", conditions };
+    }
+    case "inNone": return { operator: "NOT", conditions: need().map(inList) };
     case "has": return { hasAudio: true };
     case "hasNot": return { hasAudio: false };
   }
   throw new Error(`no operator ${r.op}`);
 }
 
+// inList is the condition for membership of one playlist, of whichever
+// kind the id names.
+function inList(id) {
+  const pl = editing.lists.find(p => p.id === id);
+  if (!pl) throw new Error(`No playlist ${id}.`);
+  return { [pl.smart ? "inSmartPlaylist" : "inPlaylist"]: id };
+}
+
 // COND maps each condition name the server knows to the row it makes.
 const COND = {};
 for (const f of FIELDS) {
-  if (f.is) COND[f.is] = v => row(f.key, f.kind === "ref" ? "in" : "is", v);
+  if (f.is) COND[f.is] = v => row(f.key, "is", v);
   if (f.contains) COND[f.contains] = v => row(f.key, "contains", v);
   if (f.has) COND[f.has] = v => row(f.key, v ? "set" : "unset");
   if (f.atLeast) COND[f.atLeast] = v => row(f.key, "atLeast", v);
@@ -118,6 +129,7 @@ COND.lastPlayedBefore = v => row("lastPlayed", "before", v.slice(0, 10));
 COND.lastPlayedAfter = v => row("lastPlayed", "after", v.slice(0, 10));
 COND.lastPlayedWithinDays = v => row("lastPlayed", "within", v);
 COND.hasAudio = v => row("audio", v ? "has" : "hasNot");
+COND.inPlaylist = COND.inSmartPlaylist = v => row("playlist", "inAny", [v]);
 
 // parse reads a stored filter into a tree whose root is a group.
 function parse(filter) {
@@ -135,9 +147,13 @@ function parseNode(f) {
       return { ...items[0], op: NEGATION[items[0].op] };
     }
     // Several "is" rows on one string field, any or none of them, are
-    // one row with a list.
-    if (op !== "all" && items.length && items.every(i => i.kind === "row" && i.op === "is" && i.field === items[0].field && FIELD[i.field].kind === "string")) {
+    // one row with a list; so are playlist memberships, all of them too.
+    const alike = test => items.length && items.every(i => i.kind === "row" && test(i));
+    if (op !== "all" && alike(i => i.op === "is" && i.field === items[0].field && FIELD[i.field].kind === "string")) {
       return row(items[0].field, op === "any" ? "anyOf" : "noneOf", items.map(i => i.value));
+    }
+    if (alike(i => i.field === "playlist" && i.op === "inAny" && i.value.length === 1)) {
+      return row("playlist", { all: "inAll", any: "inAny", none: "inNone" }[op], items.map(i => i.value[0]));
     }
     return group(op, items);
   }
@@ -224,8 +240,7 @@ async function open(pl, { id = pl?.id ?? null, title = pl?.title ?? "" } = {}) {
     sort: (pl?.sort ?? []).map(c => ({ ...c })),
     limit: pl?.limit ?? null, limitBytes: pl?.limitBytes ?? null, limitSeconds: pl?.limitSeconds ?? null,
     pos: 0, preview: null, error: null,
-    playlists: p.list.sort(byTitle),
-    smarts: s.list.filter(x => x.id !== id).sort(byTitle),
+    lists: [...p.list, ...s.list.filter(x => x.id !== id).map(x => ({ ...x, smart: true }))].sort(byTitle),
   };
   editing.original = id ? serialized() : null;
   if (location.hash !== editing.hash) location.hash = editing.hash;
@@ -289,12 +304,12 @@ function rowView(r, g) {
   const op = h("select", { onchange: ev => {
     const was = r.op;
     r.op = ev.target.value;
-    const listy = o => o === "anyOf" || o === "noneOf";
+    const listy = o => ["anyOf", "noneOf", "inAny", "inAll", "inNone"].includes(o);
     if (listy(r.op) !== listy(was)) r.value = listy(r.op) ? (r.value ? [r.value] : []) : (r.value[0] ?? "");
     changed();
   } }, opsFor(f).map(o => h("option", { value: o, selected: o === r.op || null }, OPS[o])));
   const el = h("div", { class: "row" }, field, op, valueView(r, f),
-    NEGATED[r.op] ? h("span", { class: "hint", title: "The server's NOT: a track with no value here can't match the condition, so it matches its negation." }, `also tracks with no ${f.label.toLowerCase()}`) : null,
+    NEGATED[r.op] && f.kind !== "ref" ? h("span", { class: "hint", title: "The server's NOT: a track with no value here can't match the condition, so it matches its negation." }, `also tracks with no ${f.label.toLowerCase()}`) : null,
     h("button", { class: "x", title: "Remove this condition", onclick: () => { g.items.splice(g.items.indexOf(r), 1); changed(); } }, "×"));
   return el;
 }
@@ -304,12 +319,7 @@ function valueView(r, f) {
   switch (r.op) {
     case "set": case "unset": case "has": case "hasNot": return null;
     case "anyOf": case "noneOf": return chipsView(r, f);
-    case "in": case "notIn": {
-      const list = f.key === "smart" ? editing.smarts : editing.playlists;
-      return h("select", { onchange: ev => { r.value = ev.target.value; changed(false); } },
-        h("option", { value: "", selected: !r.value || null }, "choose…"),
-        list.map(p => h("option", { value: p.id, selected: p.id === r.value || null }, p.title)));
-    }
+    case "inAny": case "inAll": case "inNone": return chipsView(r, f, editing.lists);
     case "before": case "after": return h("input", { type: "date", value: r.value, onchange: typed });
     case "within": case "notWithin": return h("span", {}, h("input", { type: "number", min: 1, step: 1, value: r.value, size: 5, oninput: typed }), " days");
   }
@@ -336,25 +346,30 @@ function unclock(text) {
   return Number(m[1] || 0) * 60 + Number(m[2]);
 }
 
-// chipsView is the list of values of an any-of or none-of row; a value
-// is added by Enter or a comma, and removed by its ×.  The row redraws
-// itself so the input keeps focus.
-function chipsView(r, f) {
+// chipsView is the list of values of a row that takes several: typed,
+// and added by Enter or a comma, or, given the choices, picked from a
+// select of those not yet in the list.  A chip's × removes it.  The
+// list redraws itself, so the input keeps focus.
+function chipsView(r, f, choices) {
   const values = Array.isArray(r.value) ? r.value : [];
-  const listId = f.suggest ? `suggest-${f.key}` : null;
   let el;
-  const redraw = () => { r.value = values; const n = chipsView(r, f); el.replaceWith(n); n.querySelector("input").focus(); changed(false); };
+  const redraw = () => { r.value = values; const n = chipsView(r, f, choices); el.replaceWith(n); n.querySelector("input, select").focus(); changed(false); };
   const add = text => { const v = text.trim(); if (v && !values.includes(v)) { values.push(v); redraw(); } };
-  const input = h("input", { type: "text", list: listId, placeholder: values.length ? "" : "value, value, …",
-    onkeydown: ev => {
-      if (ev.key === "Enter" || ev.key === ",") { ev.preventDefault(); add(ev.target.value); }
-      if (ev.key === "Backspace" && !ev.target.value && values.length) { values.pop(); redraw(); }
-    },
-    onchange: ev => add(ev.target.value),
-    onblur: ev => { if (ev.target.value.trim()) add(ev.target.value); } });
+  const adder = choices
+    ? h("select", { onchange: ev => add(ev.target.value) },
+      h("option", { value: "" }, values.length ? "add…" : "choose…"),
+      choices.filter(c => !values.includes(c.id)).map(c => h("option", { value: c.id }, (c.smart ? "⚙ " : "") + c.title)))
+    : h("input", { type: "text", list: f.suggest ? `suggest-${f.key}` : null, placeholder: values.length ? "" : "value, value, …",
+      onkeydown: ev => {
+        if (ev.key === "Enter" || ev.key === ",") { ev.preventDefault(); add(ev.target.value); }
+        if (ev.key === "Backspace" && !ev.target.value && values.length) { values.pop(); redraw(); }
+      },
+      onchange: ev => add(ev.target.value),
+      onblur: ev => { if (ev.target.value.trim()) add(ev.target.value); } });
+  const label = v => { const c = choices?.find(c => c.id === v); return c ? [c.smart && gear(), c.title] : v; };
   el = h("span", { class: "chips" },
-    values.map(v => h("span", { class: "chip" }, v, h("button", { title: "Remove", onclick: () => { values.splice(values.indexOf(v), 1); redraw(); } }, "×"))),
-    input);
+    values.map(v => h("span", { class: "chip" }, label(v), h("button", { title: "Remove", onclick: () => { values.splice(values.indexOf(v), 1); redraw(); } }, "×"))),
+    adder);
   return el;
 }
 
