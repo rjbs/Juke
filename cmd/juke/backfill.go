@@ -12,14 +12,19 @@ import (
 
 // runBackfill fills in properties that older imports didn't record:
 // genre from the tags the import stored, duration from the audio under
-// the library, and either from the catalog for what those don't say.
-// The server notices the change on its next poll.
+// the library, either from the catalog for what those don't say, and
+// track numbers from filenames where nothing else gave one.  The server
+// notices the change on its next poll.
 func runBackfill(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("backfill", flag.ExitOnError)
 	dbPath := fs.String("db", "", "the Juke database")
 	library := fs.String("library", "", "the library tree that track paths are relative to")
 	catalogPath := fs.String("catalog", "", "the recovery's catalog database, for what the files don't say")
+	journal := fs.String("journal", "", "the originals move's journal, for the names moved files had (default: the database's name plus .originals-journal)")
 	parse(fs, args, "db", "library")
+	if *journal == "" {
+		*journal = *dbPath + ".originals-journal"
+	}
 
 	s, err := store.Open(*dbPath)
 	if err != nil {
@@ -55,5 +60,14 @@ func runBackfill(ctx context.Context, args []string) error {
 	if catalog != nil {
 		fmt.Printf("catalog disagrees:     %d\n", d.CatalogDisagrees)
 	}
+
+	n, err := backfill.Numbers(ctx, s.DB, catalog, *journal)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("numbered from files:   %d\n", n.Placed)
+	fmt.Printf("  on albums:           %d\n", n.Albums)
+	fmt.Printf("  spot taken:          %d\n", n.Taken)
+	fmt.Printf("  no number anywhere:  %d\n", n.Unnamed)
 	return nil
 }

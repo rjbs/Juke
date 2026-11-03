@@ -35,7 +35,12 @@ which is what the first real import uses.
 A database imported before a property existed has it empty.  `backfill`
 fills what it can: genre from the tags the import stored, duration by
 measuring each file under the library, and either from the catalog when
-one is given, for what the tags and files don't say.  Every track it
+one is given, for what the tags and files don't say.  It also moves a
+track that nothing numbered, which the import put after its album's
+numbered tracks, to the number its filename starts with, when that
+spot is free (#6); for a file the originals move has renamed, the
+move's journal (`--journal`, default the database's name plus
+`.originals-journal`) still has the name.  Every track it
 changes gets one new modseq so clients refetch them once; see
 [import](import.md).  It is safe to run again, and to run while the
 server is up, which notices the change on its next poll.  With a

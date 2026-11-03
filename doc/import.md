@@ -66,7 +66,9 @@ its results.
 - **`Unknown Album` directories** hold tracks with no album.  They become
   tracks with a null `albumId`, not an album called "Unknown Album".
 - **Order** within an album comes from the disc and track number tags,
-  falling back to the filename.  Disc numbers become entries in `discs`.
+  then the catalog, then the number the filename starts with, as iTunes
+  wrote "NN Title" from the number it knew (#6).  Disc numbers become
+  entries in `discs`.
 - **A track number is kept as its position,** so a number no file or gap
   has is a missing track.  A track with no number, or whose number an
   earlier track took, goes after the disc's highest number.  A disc also
