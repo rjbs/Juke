@@ -25,6 +25,12 @@ plus a streaming cache, built in two phases with downloads first.
 - **Backups:** set do-not-back-up on all audio files.
 - **Playback integration:** lock-screen and remote controls come from the
   audio session and `MPNowPlayingInfoCenter`.
+- **Album art** is a blob like audio: `artworkBlobId` on Album, and on
+  Track only where the track's own picture differs, resolved track
+  first.  It comes through the same blob store, so a kept album keeps
+  its art, and is decoded at the size it's drawn and kept in memory.
+  The playing track's art goes to the now-playing info; see
+  [artwork](artwork.md).
 - **Sync loop:** Track `/changes` first, then playlists, then the smart
   playlists' queries; apply blobId changes by refetching.  See
   [playlists](playlists.md) for why that order matters.
