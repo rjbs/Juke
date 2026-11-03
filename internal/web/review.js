@@ -1,0 +1,321 @@
+"use strict";
+
+// The review tab: the albums with something wrong, and a page for each
+// where it can be put right.  Everything here asks the server under the
+// review capability, which is what gives an album its issues and the
+// pictures it could have; see doc/types.md.  An album's page edits a
+// copy and saves it whole, in one request.
+const review = (() => {
+
+const ISSUES = [
+  ["noArt", "No art", "Tracks with audio, but no image."],
+  ["artOverrides", "Mixed art", "Some tracks show a picture other than the album's."],
+  ["artTie", "Art on a tie", "The rule picked the album's image on a tie."],
+  ["folderArt", "Folder art differs", "The image file beside the tracks differs from pictures they carry."],
+  ["unnumbered", "Numbered from nowhere", "A track was placed after the rest because nothing numbered it."],
+  ["gaps", "Missing tracks", "Tracks with no audio."],
+];
+const ISSUE = Object.fromEntries(ISSUES.map(([k, label, why]) => [k, { label, why }]));
+
+const NUMBER_FROM = {
+  tags: "tags", catalog: "catalog", file: "filename", user: "set by hand", none: "nowhere",
+};
+
+function call(...calls) { return jmapUsing([CAP_CORE, CAP_JUKE, CAP_REVIEW], ...calls); }
+
+function issueTags(issues) {
+  return issues.map(i => h("span", { class: "tag", title: ISSUE[i]?.why }, ISSUE[i]?.label || i));
+}
+
+// ---- The queue ----
+
+function listParams() {
+  const p = new URLSearchParams(location.hash.split("?")[1] || "");
+  return { issue: p.get("issue") || "", pos: Number(p.get("pos")) || 0 };
+}
+
+function goList(p) {
+  const out = new URLSearchParams();
+  if (p.issue) out.set("issue", p.issue);
+  if (p.pos) out.set("pos", p.pos);
+  location.hash = "review" + (out.toString() ? "?" + out : "");
+}
+
+async function list() {
+  const p = listParams();
+  const filter = p.issue ? { issue: p.issue } : { hasIssues: true };
+  const [q, g] = await call(
+    ["Album/query", { filter, sort: [{ property: "title" }], position: p.pos, limit: PAGE, calculateTotal: true }],
+    ["Album/get", { ids: ["#", 0, "Album/query", "/ids"], properties: ["title", "artist", "issues"] }],
+  );
+  const which = h("select", { onchange: ev => goList({ issue: ev.target.value, pos: 0 }) },
+    h("option", { value: "", selected: !p.issue || null }, "Any issue"),
+    ISSUES.map(([k, label]) => h("option", { value: k, selected: p.issue === k || null }, label)));
+  show(
+    h("h2", {}, "Albums to review"),
+    h("div", { class: "controls" }, which, h("span", { class: "sub" }, `${q.total} albums`)),
+    h("table", {},
+      h("thead", {}, h("tr", {}, h("th", {}, "Artist"), h("th", {}, "Title"), h("th", {}, "Issues"))),
+      h("tbody", {}, g.list.map(a => h("tr", {},
+        h("td", {}, orNone(a.artist, "compilation")),
+        h("td", {}, h("a", { href: `#review/${a.id}` }, a.title)),
+        h("td", {}, issueTags(a.issues)))))),
+    pager(p.pos, q.total, pos => goList({ ...p, pos }), "albums"),
+  );
+}
+
+// ---- One album ----
+
+// What's being edited: the album and its tracks as the server has them,
+// and the art, each track's own art, and the disc order as they are on
+// the page.  Null between albums.
+let editing = null;
+let dragging = null;
+
+// leaving is asked by the router before it shows another view.  A page
+// with unsaved changes asks first, and on no puts its own hash back,
+// which brings the router here again with nothing to ask.
+function leaving() {
+  if (!editing || location.hash === editing.hash) return true;
+  if (!isDirty() || confirm("Leave without saving this album's changes?")) {
+    editing = null;
+    return true;
+  }
+  location.hash = editing.hash;
+  return false;
+}
+
+window.addEventListener("beforeunload", ev => { if (editing && isDirty()) ev.preventDefault(); });
+
+async function album(id) {
+  if (!editing || editing.id !== id) {
+    const [g] = await call(["Album/get", { ids: [id] }]);
+    const a = g.list[0];
+    if (!a) return show(h("p", { class: "error" }, `No album ${id}.`));
+    const ids = a.discs.flatMap(d => d.trackIds);
+    const ts = new Map();
+    for (let i = 0; i < ids.length; i += maxGet) {
+      const [t] = await call(["Track/get", { ids: ids.slice(i, i + maxGet) }]);
+      t.list.forEach(t => { ts.set(t.id, t); tracks.set(t.id, t); });
+    }
+    editing = {
+      id, hash: `#review/${id}`, album: a, tracks: ts,
+      discs: a.discs.map(d => [...d.trackIds]),
+      artwork: a.artworkBlobId,
+      trackArt: new Map(ids.map(t => [t, ts.get(t).artworkBlobId])),
+    };
+  }
+  render();
+}
+
+function discsChanged() {
+  const e = editing;
+  return JSON.stringify(e.discs) !== JSON.stringify(e.album.discs.map(d => d.trackIds));
+}
+
+function isDirty() {
+  const e = editing;
+  return e.artwork !== e.album.artworkBlobId
+    || [...e.trackArt].some(([id, art]) => art !== e.tracks.get(id).artworkBlobId)
+    || discsChanged();
+}
+
+function revert() {
+  const e = editing;
+  e.artwork = e.album.artworkBlobId;
+  e.discs = e.album.discs.map(d => [...d.trackIds]);
+  for (const id of e.trackArt.keys()) e.trackArt.set(id, e.tracks.get(id).artworkBlobId);
+}
+
+// candidates are the album's, numbered, with the art it has now added
+// in front if it came from somewhere else.
+function candidates() {
+  const a = editing.album;
+  const out = a.artworkCandidates.map((c, i) => ({ ...c, n: i + 1 }));
+  if (a.artworkBlobId && !out.some(c => c.blobId === a.artworkBlobId)) {
+    out.unshift({ blobId: a.artworkBlobId, type: a.artworkType, trackIds: [], elsewhere: true, n: 0 });
+  }
+  return out;
+}
+
+function candidateName(c) {
+  return c.elsewhere ? "Chosen before" : c.folder ? `Picture ${c.n}, the file beside the tracks` : `Picture ${c.n}`;
+}
+
+function render() {
+  const e = editing, a = e.album;
+  const cs = candidates();
+  show(
+    h("h2", {}, a.title),
+    h("div", { class: "sub" },
+      a.artist || "Compilation", " · ", issueTags(a.issues), " · ",
+      h("a", { href: `#album/${a.id}` }, "Open in Albums")),
+    h("h3", {}, "Art"),
+    cs.length
+      ? h("div", { class: "cards" }, cs.map(card), noArtCard())
+      : h("p", { class: "none" }, "No pictures in the files, or beside them."),
+    h("h3", {}, "Tracks"),
+    h("p", { class: "sub" }, "Drag a track to put it where it belongs; the numbers follow."),
+    trackTable(cs),
+    saveBar(),
+  );
+}
+
+// choose makes an image the album's.  As on the server, that clears
+// every track's own art: the choice is for the whole album.
+function choose(blobId) {
+  editing.artwork = blobId;
+  for (const id of editing.trackArt.keys()) editing.trackArt.set(id, null);
+  render();
+}
+
+function card(c) {
+  const chosen = editing.artwork === c.blobId;
+  const names = c.trackIds.map(t => editing.tracks.get(t)?.title).filter(Boolean);
+  return h("div", { class: "card" + (chosen ? " chosen" : "") },
+    h("img", { src: imageURL(c.blobId, c.type), alt: "" }),
+    h("div", { class: "label" },
+      h("div", {}, h("b", {}, candidateName(c))),
+      names.length
+        ? h("div", { title: names.join("\n") }, `In ${names.length} file${names.length === 1 ? "" : "s"}: `, names.join(", "))
+        : c.folder ? null : h("div", {}, "In no file here")),
+    h("button", { disabled: chosen || null, onclick: () => choose(c.blobId) }, chosen ? "The album's art" : "Use for the album"));
+}
+
+function noArtCard() {
+  const chosen = editing.artwork == null;
+  return h("div", { class: "card" + (chosen ? " chosen" : "") },
+    h("div", { class: "blank" }, "∅"),
+    h("div", { class: "label" }, h("div", {}, h("b", {}, "No art"))),
+    h("button", { disabled: chosen || null, onclick: () => choose(null) }, chosen ? "The album has none" : "Use none"));
+}
+
+function numberTag(source) {
+  if (!source) return "";
+  return h("span", { class: "tag" + (source === "none" ? " bad" : "") }, NUMBER_FROM[source] || source);
+}
+
+function trackTable(cs) {
+  const e = editing;
+  const multi = e.discs.length > 1;
+  const playable = e.discs.flat().map(id => e.tracks.get(id)).filter(t => t.blobId);
+  return h("table", {},
+    h("thead", {}, h("tr", {},
+      h("th"), h("th", { class: "num" }, "#"), h("th"), h("th", {}, "Title"),
+      h("th", {}, "Number from"), h("th", {}, "In its file"), h("th", {}, "Shows"))),
+    e.discs.map((ids, di) => h("tbody", {},
+      multi && h("tr", { class: "group" }, h("td", { colspan: 7 }, e.album.discs[di]?.title || `Disc ${di + 1}`)),
+      ids.map((id, i) => row(e.tracks.get(id), di, i, playable, cs)))));
+}
+
+function row(t, di, i, playable, cs) {
+  const carried = cs.find(c => c.trackIds.includes(t.id));
+  const tr = h("tr", { class: t.blobId ? "" : "gap", "data-track": t.id, draggable: "true" },
+    h("td", {}, h("span", { class: "handle", title: "Drag to reorder" }, "☰")),
+    h("td", { class: "num" }, i + 1),
+    h("td", {}, t.blobId
+      ? h("button", { class: "play", title: "Play from here", onclick: () => player.play(playable.map(p => p.id), playable.indexOf(t)) }, "▶")
+      : h("span", { class: "no-audio", title: "No audio" }, "⊘")),
+    h("td", { class: "title" }, t.title),
+    h("td", {}, numberTag(t.numberSource)),
+    h("td", {}, carried ? h("img", { class: "thumb", src: imageURL(carried.blobId, carried.type), title: candidateName(carried) }) : ""),
+    h("td", {}, ownArt(t, cs)),
+  );
+  tr.addEventListener("dragstart", ev => { dragging = t.id; ev.dataTransfer.effectAllowed = "move"; });
+  tr.addEventListener("dragover", ev => {
+    if (!dragging || dragging === t.id) return;
+    ev.preventDefault();
+    const box = tr.getBoundingClientRect();
+    const after = ev.clientY > box.top + box.height / 2;
+    tr.classList.toggle("drop-before", !after);
+    tr.classList.toggle("drop-after", after);
+  });
+  tr.addEventListener("dragleave", () => tr.classList.remove("drop-before", "drop-after"));
+  tr.addEventListener("drop", ev => {
+    ev.preventDefault();
+    const after = tr.classList.contains("drop-after");
+    tr.classList.remove("drop-before", "drop-after");
+    if (dragging) move(dragging, di, i + (after ? 1 : 0));
+    dragging = null;
+  });
+  tr.addEventListener("dragend", () => { dragging = null; });
+  return tr;
+}
+
+// ownArt is the choice of what a track shows: its album's art, or one
+// of the pictures.
+function ownArt(t, cs) {
+  const own = editing.trackArt.get(t.id);
+  if (!cs.length && !own) return "";
+  const options = cs.filter(c => !c.elsewhere).map(c =>
+    h("option", { value: c.blobId, selected: own === c.blobId || null }, `Picture ${c.n}`));
+  if (own && !cs.some(c => c.blobId === own && !c.elsewhere)) {
+    options.unshift(h("option", { value: own, selected: true }, "Its own, chosen before"));
+  }
+  return h("select", { onchange: ev => { editing.trackArt.set(t.id, ev.target.value || null); render(); } },
+    h("option", { value: "", selected: !own || null }, "The album's art"),
+    options);
+}
+
+// move puts a track at index of disc di, taking it from wherever it was.
+function move(id, di, index) {
+  const discs = editing.discs;
+  for (const d of discs) {
+    const at = d.indexOf(id);
+    if (at < 0) continue;
+    d.splice(at, 1);
+    if (d === discs[di] && at < index) index--;
+  }
+  discs[di].splice(index, 0, id);
+  render();
+}
+
+function saveBar() {
+  const dirty = isDirty();
+  return h("div", { class: "savebar" },
+    h("button", { disabled: !dirty || null, onclick: save }, "Save changes"),
+    h("button", { disabled: !dirty || null, onclick: () => { revert(); render(); } }, "Revert"),
+    h("span", { class: dirty ? "dirty" : "sub" }, dirty ? "Unsaved changes" : "Nothing to save"));
+}
+
+// save sends the album's changes as one request: the album's art and
+// discs in one Album/set, then each track's own art in one Track/set,
+// since choosing album art clears the tracks' own on the server as it
+// did on the page.  Then the album is fetched afresh, and the copy the
+// Albums tab holds is brought up to date.
+async function save() {
+  const e = editing, a = e.album;
+  const update = {};
+  const artChanged = e.artwork !== a.artworkBlobId;
+  if (artChanged) update.artworkBlobId = e.artwork;
+  if (discsChanged()) update.discs = e.discs.map((ids, di) => ({ trackIds: ids, title: a.discs[di]?.title ?? null }));
+  const trackUpdates = {};
+  for (const [id, art] of e.trackArt) {
+    const onServer = artChanged ? null : e.tracks.get(id).artworkBlobId;
+    if (art !== onServer) trackUpdates[id] = { artworkBlobId: art };
+  }
+  const calls = [];
+  if (Object.keys(update).length) calls.push(["Album/set", { update: { [a.id]: update } }]);
+  if (Object.keys(trackUpdates).length) calls.push(["Track/set", { update: trackUpdates }]);
+  if (!calls.length) return;
+  status("saving…");
+  try {
+    for (const r of await call(...calls)) {
+      const failed = Object.values(r.notUpdated || {});
+      if (failed.length) throw new Error(failed.map(f => `${f.type}${f.description ? ": " + f.description : ""}`).join("; "));
+    }
+    status("");
+    editing = null;
+    await album(a.id);
+    const fresh = editing.album;
+    if (albums.has(a.id)) {
+      albums.set(a.id, { ...albums.get(a.id), discs: fresh.discs, artworkBlobId: fresh.artworkBlobId, artworkType: fresh.artworkType });
+    }
+  } catch (err) {
+    status("");
+    alert(`Couldn't save: ${err.message}`);
+  }
+}
+
+return { list, album, leaving };
+})();

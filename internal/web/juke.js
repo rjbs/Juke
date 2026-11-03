@@ -2,6 +2,7 @@
 
 const CAP_CORE = "urn:ietf:params:jmap:core";
 const CAP_JUKE = "https://semiotic.systems/jmap/juke";
+const CAP_REVIEW = "https://semiotic.systems/jmap/juke/review";
 
 let session, accountId, maxGet, maxCalls;
 const albums = new Map();       // id -> Album
@@ -43,8 +44,12 @@ function orNone(s, none) { return s ? s : h("span", { class: "none" }, none); }
 // jmap makes one request of several calls, each [method, args]; an
 // argument given as ["#", index, name, path] becomes a result reference
 // to the earlier call at that index, sent as "#" plus the argument name.  It returns the responses' arguments, and
-// throws on any method error.
-async function jmap(...calls) {
+// throws on any method error.  The review tab's calls add its capability
+// with jmapUsing; the rest of the page does without, so the albums it
+// loads at the start aren't burdened with review properties.
+function jmap(...calls) { return jmapUsing([CAP_CORE, CAP_JUKE], ...calls); }
+
+async function jmapUsing(using, ...calls) {
   const methodCalls = calls.map(([name, args], i) => {
     const a = { accountId, ...args };
     for (const [k, v] of Object.entries(a)) {
@@ -58,7 +63,7 @@ async function jmap(...calls) {
   const resp = await fetch(session.apiUrl, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ using: [CAP_CORE, CAP_JUKE], methodCalls }),
+    body: JSON.stringify({ using, methodCalls }),
   });
   const body = await resp.json();
   if (!resp.ok) throw new Error(`${resp.status}: ${body.detail || body.type || JSON.stringify(body)}`);
@@ -103,12 +108,15 @@ async function updateTrack(id, patch) {
   Object.assign(tracks.get(id), patch);
 }
 
-function audioURL(t) {
+function audioURL(t) { return blobURL(t.blobId, t.title || "track", ""); }
+function imageURL(blobId, type) { return blobURL(blobId, "art", type || ""); }
+
+function blobURL(blobId, name, type) {
   return session.downloadUrl
     .replace("{accountId}", encodeURIComponent(accountId))
-    .replace("{blobId}", encodeURIComponent(t.blobId))
-    .replace("{name}", encodeURIComponent(t.title || "track"))
-    .replace("{type}", "");
+    .replace("{blobId}", encodeURIComponent(blobId))
+    .replace("{name}", encodeURIComponent(name))
+    .replace("{type}", encodeURIComponent(type));
 }
 
 // ---- Rating ----
@@ -275,11 +283,11 @@ const PAGE = 100;
 
 // pager steps through total rows, PAGE at a time, from pos; go is called
 // with the position to move to.
-function pager(pos, total, go) {
+function pager(pos, total, go, noun = "tracks") {
   const last = Math.min(pos + PAGE, total);
   return h("div", { class: "pager" },
     h("button", { disabled: pos === 0 || null, onclick: () => go(Math.max(0, pos - PAGE)) }, "← Previous"),
-    total ? `${pos + 1}–${last} of ${total}` : "No tracks",
+    total ? `${pos + 1}–${last} of ${total}` : `No ${noun}`,
     h("button", { disabled: last >= total || null, onclick: () => go(pos + PAGE) }, "Next →"));
 }
 
@@ -517,6 +525,7 @@ async function route() {
   const [path] = hash.split("?");
   const [view, id] = path.split("/");
   const tab = { album: "albums", playlist: "playlists", smart: "playlists" }[view] || view;
+  if (!review.leaving()) return;
   document.querySelectorAll("nav a").forEach(a => a.classList.toggle("current", a.dataset.tab === tab));
   try {
     switch (view) {
@@ -526,6 +535,7 @@ async function route() {
       case "playlists": await renderPlaylists(); break;
       case "playlist": await renderPlaylist(id); break;
       case "smart": await renderSmart(id); break;
+      case "review": await (id ? review.album(id) : review.list()); break;
       default: show(h("p", { class: "error" }, `Nothing at #${hash}.`));
     }
     player.mark();
