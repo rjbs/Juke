@@ -752,14 +752,19 @@ var trackSetter = &setter{
 		if err := mustExist(ctx, tx, "track", id); err != nil {
 			return nil, err
 		}
+		// Art set by hand, cleared included, is marked as the user's, so the
+		// artwork run leaves it alone and the review page counts the track
+		// as decided.
 		for i, c := range cols {
-			if c.column != "artwork_id" || c.value == nil {
+			if c.column != "artwork_id" {
 				continue
 			}
-			if found, err := artworkExists(ctx, tx, c.value.(string)); err != nil {
-				return nil, err
-			} else if !found {
-				return nil, invalidProperties("artworkBlobId must name a stored image, or be null", []string{"artworkBlobId"})
+			if c.value != nil {
+				if found, err := artworkExists(ctx, tx, c.value.(string)); err != nil {
+					return nil, err
+				} else if !found {
+					return nil, invalidProperties("artworkBlobId must name a stored image, or be null", []string{"artworkBlobId"})
+				}
 			}
 			cols = append(cols[:i:i], append([]columnValue{{"artwork_source", "user"}}, cols[i:]...)...)
 			break

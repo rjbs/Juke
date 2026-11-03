@@ -115,9 +115,11 @@ filter and the art setting below are refused.  With it:
 | `unnumbered` | A track was numbered from nowhere: nothing gave it a number, or another track had the one it gave, so the import put it after the rest. |
 | `gaps` | Tracks with no audio. |
 
-The art issues are moot once the album's art has been chosen by hand,
-and `unnumbered` once `discs` has been set, since the order is then the
-user's.
+The art issues are moot once the album's art has been chosen by hand;
+`artTie` and `folderArt` also once every track carrying some other
+picture has had its own art set or cleared by hand, since deciding them
+is accepting the album's; and `unnumbered` once `discs` has been set,
+since the order is then the user's.
 
 `Album/query` takes a filter, `{issue: "artTie"}` for one issue or
 `{hasIssues: true}` for any (false for none); the sort is by title as

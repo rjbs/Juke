@@ -115,13 +115,14 @@ function discsChanged() {
 
 function isDirty() {
   const e = editing;
-  return e.artwork !== e.album.artworkBlobId
+  return e.decided || e.artwork !== e.album.artworkBlobId
     || [...e.trackArt].some(([id, art]) => art !== e.tracks.get(id).artworkBlobId)
     || discsChanged();
 }
 
 function revert() {
   const e = editing;
+  e.decided = false;
   e.artwork = e.album.artworkBlobId;
   e.discs = e.album.discs.map(d => [...d.trackIds]);
   for (const id of e.trackArt.keys()) e.trackArt.set(id, e.tracks.get(id).artworkBlobId);
@@ -216,6 +217,7 @@ function render() {
 // image the album already has too, as the way to clear them all.
 function choose(blobId) {
   editing.artwork = blobId;
+  editing.decided = true;
   for (const id of editing.trackArt.keys()) editing.trackArt.set(id, null);
   render();
 }
@@ -337,7 +339,9 @@ function saveBar() {
 async function save() {
   const e = editing, a = e.album;
   const update = {};
-  const artChanged = e.artwork !== a.artworkBlobId;
+  // Choosing the art the album already has still goes to the server:
+  // that marks the album as decided, and clears the tracks' own.
+  const artChanged = e.decided || e.artwork !== a.artworkBlobId;
   if (artChanged) update.artworkBlobId = e.artwork;
   if (discsChanged()) update.discs = e.discs.map((ids, di) => ({ trackIds: ids, title: a.discs[di]?.title ?? null }));
   const trackUpdates = {};

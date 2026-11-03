@@ -110,6 +110,16 @@ func TestReviewChoosesArt(t *testing.T) {
 
 	f.call("Album/set", map[string]any{"update": map[string]any{devo: map[string]any{"artworkBlobId": nil}}})
 	checkEqual(t, "no art, by choice", f.album(devo)["artworkBlobId"], nil)
+
+	// Deciding each track that carries another picture settles a tie, or
+	// folder art, without choosing the album's art outright.
+	g, _, _ := reviewFixture(t)
+	checkEqual(t, "a tie, before", g.album(g.albumOf("Whip It"))["issues"], []any{"artOverrides", "artTie"})
+	g.call("Track/set", map[string]any{"update": map[string]any{g.ids["Jocko Homo"]: map[string]any{"artworkBlobId": nil}}})
+	checkEqual(t, "a tie, every other picture decided", g.album(g.albumOf("Whip It"))["issues"], []any{})
+	checkEqual(t, "folder art, before", g.album(g.albumOf("We Will Rock You"))["issues"], []any{"noArt", "folderArt"})
+	g.call("Track/set", map[string]any{"update": map[string]any{g.ids["Bohemian Rhapsody"]: map[string]any{"artworkBlobId": nil}}})
+	checkEqual(t, "folder art, the one dissenter decided", g.album(g.albumOf("We Will Rock You"))["issues"], []any{"noArt"})
 	checkEqual(t, "which is no issue either", f.album(devo)["issues"], []any{})
 
 	r = f.call("Album/set", map[string]any{"update": map[string]any{devo: map[string]any{"artworkBlobId": "Anope"}}})

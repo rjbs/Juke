@@ -17,7 +17,9 @@ import (
 
 // An albumIssue is one kind of trouble, with the SQL that says whether
 // a row of album has it.  Art issues are moot once the album's art was
-// chosen by hand.
+// chosen by hand; a tie, or folder art the tracks disagree with, is also
+// settled once every track carrying some other picture has had its own
+// art decided by hand, since deciding them is accepting the album's.
 type albumIssue struct {
 	name string
 	sql  string
@@ -25,15 +27,16 @@ type albumIssue struct {
 
 const artByRule = `album.artwork_source IS NOT 'user'`
 
+const undecidedTrack = `EXISTS (SELECT 1 FROM track t WHERE t.album_id = album.id
+		AND t.picture_id IS NOT NULL AND t.picture_id IS NOT album.artwork_id AND t.artwork_source IS NOT 'user')`
+
 var albumIssues = []albumIssue{
 	{"noArt", artByRule + ` AND album.artwork_id IS NULL
 		AND EXISTS (SELECT 1 FROM track t WHERE t.album_id = album.id AND t.path IS NOT NULL)`},
 	{"artOverrides", artByRule + ` AND EXISTS (SELECT 1 FROM track t WHERE t.album_id = album.id
 		AND t.artwork_id IS NOT NULL AND t.artwork_source IS NOT 'user')`},
-	{"artTie", artByRule + ` AND album.art_tie`},
-	{"folderArt", artByRule + ` AND album.folder_artwork_id IS NOT NULL
-		AND EXISTS (SELECT 1 FROM track t WHERE t.album_id = album.id
-		AND t.picture_id IS NOT NULL AND t.picture_id != album.folder_artwork_id)`},
+	{"artTie", artByRule + ` AND album.art_tie AND ` + undecidedTrack},
+	{"folderArt", artByRule + ` AND album.folder_artwork_id IS NOT NULL AND ` + undecidedTrack},
 	{"unnumbered", `EXISTS (SELECT 1 FROM track t WHERE t.album_id = album.id AND t.number_source = 'none')`},
 	{"gaps", `EXISTS (SELECT 1 FROM track t WHERE t.album_id = album.id AND t.path IS NULL)`},
 }
