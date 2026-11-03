@@ -18,6 +18,7 @@ type track struct {
 	duration int64  // 0 for none
 	tags     string // "" for a gap track
 	audio    []byte // the file's bytes, for a track with audio
+	file     string // the file's path under the library; "" for the title
 }
 
 // mp3 makes n frames of 128 kbps MPEG-1 Layer III audio behind a Xing
@@ -61,8 +62,8 @@ func setup(t *testing.T, tracks []track, catalogRows string) (*sql.DB, string, *
 	for _, tr := range tracks {
 		nt := store.NewTrack{Title: tr.title, DateAdded: "2014-01-01T00:00:00Z"}
 		if tr.position > 0 {
-			pos := tr.position
-			nt.AlbumID, nt.Position = &albumID, &pos
+			pos, disc := tr.position, 0
+			nt.AlbumID, nt.DiscIndex, nt.Position = &albumID, &disc, &pos
 		}
 		if tr.genre != "" {
 			nt.Genre = &tr.genre
@@ -72,6 +73,12 @@ func setup(t *testing.T, tracks []track, catalogRows string) (*sql.DB, string, *
 		}
 		if tr.tags != "" {
 			p, f, ct := tr.title+".mp3", "ID3v2.3", "audio/mpeg"
+			if tr.file != "" {
+				p = tr.file
+			}
+			if err := os.MkdirAll(filepath.Dir(filepath.Join(library, p)), 0o755); err != nil {
+				t.Fatal(err)
+			}
 			nt.Path, nt.TagFormat, nt.OriginalTags, nt.ContentType = &p, &f, &tr.tags, &ct
 			if err := os.WriteFile(filepath.Join(library, p), tr.audio, 0o644); err != nil {
 				t.Fatal(err)
