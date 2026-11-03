@@ -29,7 +29,7 @@ func reviewFixture(t *testing.T) (f *fixture, a, b string) {
 			t.Fatal(err)
 		}
 	}
-	exec(`INSERT INTO artwork (id, sha256, mime, size) VALUES (?, 'a', 'image/png', 1), (?, 'b', 'image/jpeg', 1)`, a, b)
+	exec(`INSERT INTO artwork (id, sha256, mime, size, dhash) VALUES (?, 'a', 'image/png', 1, 0), (?, 'b', 'image/jpeg', 1, -1)`, a, b)
 	exec(`UPDATE album SET artwork_id = ?, artwork_source = 'rule', art_tie = 1 WHERE id = ?`, a, f.albumOf("Whip It"))
 	exec(`UPDATE track SET picture_id = ? WHERE id = ?`, a, f.ids["Whip It"])
 	exec(`UPDATE track SET picture_id = ?, artwork_id = ?, artwork_source = 'rule' WHERE id = ?`, b, b, f.ids["Jocko Homo"])
@@ -69,13 +69,26 @@ func TestReviewIssuesAndCandidates(t *testing.T) {
 	checkEqual(t, "the track from nowhere", []any{source("Trigger Happy"), source("Smells Like Nirvana")}, []any{"none", nil})
 
 	checkEqual(t, "candidates by first carrier", f.album(devo)["artworkCandidates"], []any{
-		map[string]any{"blobId": a, "type": "image/png", "trackIds": []any{f.ids["Whip It"]}, "folder": false},
-		map[string]any{"blobId": b, "type": "image/jpeg", "trackIds": []any{f.ids["Jocko Homo"]}, "folder": false},
+		map[string]any{"blobId": a, "type": "image/png", "trackIds": []any{f.ids["Whip It"]}, "folder": false, "group": 1.0},
+		map[string]any{"blobId": b, "type": "image/jpeg", "trackIds": []any{f.ids["Jocko Homo"]}, "folder": false, "group": 2.0},
 	})
 	checkEqual(t, "the folder image comes first", f.album(queen)["artworkCandidates"], []any{
-		map[string]any{"blobId": a, "type": "image/png", "trackIds": []any{}, "folder": true},
-		map[string]any{"blobId": b, "type": "image/jpeg", "trackIds": []any{f.ids["Bohemian Rhapsody"]}, "folder": false},
+		map[string]any{"blobId": a, "type": "image/png", "trackIds": []any{}, "folder": true, "group": 1.0},
+		map[string]any{"blobId": b, "type": "image/jpeg", "trackIds": []any{f.ids["Bohemian Rhapsody"]}, "folder": false, "group": 2.0},
 	})
+	// A third image that hashes like "a" is "a" to the eye: the same group.
+	exec := func(sql string, args ...any) {
+		if _, err := f.store.DB.ExecContext(context.Background(), sql, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	exec(`INSERT INTO artwork (id, sha256, mime, size, dhash) VALUES ('Aaaa2', 'a2', 'image/jpeg', 1, 3)`)
+	exec(`UPDATE track SET picture_id = 'Aaaa2' WHERE id = ?`, f.ids["Jocko Homo"])
+	groups := []any{}
+	for _, c := range f.album(devo)["artworkCandidates"].([]any) {
+		groups = append(groups, c.(map[string]any)["group"])
+	}
+	checkEqual(t, "near hashes share a group", groups, []any{1.0, 1.0})
 	checkEqual(t, "no pictures anywhere", f.album(al)["artworkCandidates"], []any{})
 
 	query := func(filter map[string]any) []string {

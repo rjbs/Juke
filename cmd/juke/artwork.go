@@ -36,6 +36,9 @@ func runArtwork(ctx context.Context, args []string) error {
 	fmt.Printf("  from a folder image: %d\n", r.Folder)
 	fmt.Printf("  settled by a tie:    %d\n", r.Ties)
 	fmt.Printf("tracks with their own: %d\n", r.Overrides)
+	fmt.Printf("  one picture, encoded several ways: %d\n", r.Collapsed)
+	fmt.Printf("images hashed:         %d\n", r.Hashed)
 	fmt.Printf("albums+tracks changed: %d\n", r.Changed)
+	fmt.Printf("  chosen by hand, left alone: %d\n", r.Kept)
 	return nil
 }

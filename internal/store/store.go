@@ -201,6 +201,13 @@ UPDATE track SET artwork_source = 'rule' WHERE artwork_id IS NOT NULL;
 	`
 ALTER TABLE artwork ADD COLUMN uploaded_at TEXT;
 `,
+
+	// A difference hash of each image, for telling one picture encoded
+	// several ways from different pictures; see internal/artwork/near.go.
+	// NULL until the artwork run has hashed it.
+	`
+ALTER TABLE artwork ADD COLUMN dhash INTEGER;
+`,
 }
 
 func dsn(path string, readOnly bool) string {

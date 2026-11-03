@@ -7,8 +7,17 @@ import (
 	"slices"
 	"strings"
 
+	"semiotic.systems/juke/internal/artwork"
 	"semiotic.systems/juke/internal/store"
 )
+
+func hashPtr(h sql.NullInt64) *uint64 {
+	if !h.Valid {
+		return nil
+	}
+	u := uint64(h.Int64)
+	return &u
+}
 
 // The review page's view of an album: what might be wrong with it, and
 // the pictures it could have.  Both are worked out from columns the
@@ -86,11 +95,35 @@ func anyIssue() string {
 
 // A candidate is one image an album could have: the one in a file
 // beside its tracks, or one that some of its tracks' files carry.
+// Group numbers the picture it shows: candidates with the same group
+// look the same to the artwork run, which counts them as one picture
+// (see internal/artwork/near.go), though they are different blobs.
 type candidate struct {
 	BlobID   string   `json:"blobId"`
 	Type     string   `json:"type"`
 	TrackIDs []string `json:"trackIds"`
 	Folder   bool     `json:"folder"`
+	Group    int      `json:"group"`
+
+	hash *uint64
+}
+
+// numberGroups gives an album's candidates their group numbers, in
+// candidate order, by the same nearness the artwork run uses.
+func numberGroups(cs []candidate) {
+	next := 1
+	for i := range cs {
+		for j := range cs[:i] {
+			if cs[j].hash != nil && cs[i].hash != nil && artwork.Near(*cs[j].hash, *cs[i].hash) {
+				cs[i].Group = cs[j].Group
+				break
+			}
+		}
+		if cs[i].Group == 0 {
+			cs[i].Group = next
+			next++
+		}
+	}
 }
 
 // loadCandidates reads every album's candidates, or those of the albums
@@ -111,22 +144,23 @@ func loadCandidates(ctx context.Context, q store.Queryer, ids []string) (map[str
 		return &out[albumID][len(out[albumID])-1]
 	}
 
-	where, args := inClause("id", ids)
+	where, args := inClause("album.id", ids)
 	rows, err := q.QueryContext(ctx, `
-		SELECT album.id, folder_artwork_id, (SELECT mime FROM artwork WHERE id = album.folder_artwork_id)
-		FROM album`+where+` ORDER BY id`, args...)
+		SELECT album.id, folder_artwork_id, w.mime, w.dhash
+		FROM album LEFT JOIN artwork w ON w.id = album.folder_artwork_id`+where+` ORDER BY album.id`, args...)
 	if err != nil {
 		return nil, err
 	}
 	for rows.Next() {
 		var albumID string
 		var folder, mime sql.NullString
-		if err := rows.Scan(&albumID, &folder, &mime); err != nil {
+		var hash sql.NullInt64
+		if err := rows.Scan(&albumID, &folder, &mime, &hash); err != nil {
 			rows.Close()
 			return nil, err
 		}
 		if folder.Valid {
-			add(albumID, candidate{BlobID: folder.String, Type: mime.String, TrackIDs: []string{}, Folder: true})
+			add(albumID, candidate{BlobID: folder.String, Type: mime.String, TrackIDs: []string{}, Folder: true, hash: hashPtr(hash)})
 		}
 	}
 	rows.Close()
@@ -139,21 +173,29 @@ func loadCandidates(ctx context.Context, q store.Queryer, ids []string) (map[str
 		where = " WHERE album_id IS NOT NULL"
 	}
 	rows, err = q.QueryContext(ctx, `
-		SELECT album_id, picture_id, (SELECT mime FROM artwork WHERE id = track.picture_id), id
-		FROM track`+where+` AND picture_id IS NOT NULL ORDER BY album_id, disc_index, position`, args...)
+		SELECT album_id, picture_id, w.mime, w.dhash, track.id
+		FROM track JOIN artwork w ON w.id = track.picture_id`+where+` AND picture_id IS NOT NULL
+		ORDER BY album_id, disc_index, position`, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var albumID, pictureID, mime, trackID string
-		if err := rows.Scan(&albumID, &pictureID, &mime, &trackID); err != nil {
+		var hash sql.NullInt64
+		if err := rows.Scan(&albumID, &pictureID, &mime, &hash, &trackID); err != nil {
 			return nil, err
 		}
-		c := add(albumID, candidate{BlobID: pictureID, Type: mime, TrackIDs: []string{}})
+		c := add(albumID, candidate{BlobID: pictureID, Type: mime, TrackIDs: []string{}, hash: hashPtr(hash)})
 		c.TrackIDs = append(c.TrackIDs, trackID)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for _, cs := range out {
+		numberGroups(cs)
+	}
+	return out, nil
 }
 
 // albumFilter is what Album/query can filter on: albums with any issue,

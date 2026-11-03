@@ -57,8 +57,12 @@ Finds album art in the files' embedded pictures and in image files
 beside them, stores each distinct image once under `artwork/` in the
 library directory, and sets each album's and track's art by the rule
 in [artwork](artwork.md), leaving alone any chosen by hand on the review
-tab.  Like `backfill`, it is safe to run again and while the server is
-up.
+tab.  It also hashes each image it hasn't yet, so that one picture
+encoded several ways counts as one; the first run after that landed
+hashes every image and may clear a track's own art where it was only
+another encoding of its album's.  Like `backfill`, it is safe to run
+again and while the server is up.
+
 
 ## Serving
 

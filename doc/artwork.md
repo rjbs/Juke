@@ -34,6 +34,18 @@ For each album, in order:
    track's as a cover rather than none, and a re-run lands on the same
    answer.
 
+A picture embedded one file at a time was encoded one file at a time,
+so an album often carries the same cover as several different blobs.
+The vote is by picture, not by blob: each stored image has a difference
+hash (nine by eight grey cells, each bit a cell against its neighbour),
+and two images on one album whose hashes differ in four bits or fewer
+are one picture.  The picture's exemplar, the member with the most
+pixels, or the first carried among equals, is the album's image, and a
+track carrying another encoding of it shows the album's.  Images are
+only ever compared within an album, so a false match would need two
+covers on one album that look the same.
+
+
 Then any track whose own front cover differs from its album's image
 keeps its own, as `artworkBlobId` on the Track.  A track on no album
 keeps its own picture the same way.  A track whose picture matches its

@@ -11,7 +11,9 @@ import (
 	"fmt"
 	"image"
 	"image/color"
+	"image/jpeg"
 	"image/png"
+	"math/bits"
 	"os"
 	"path/filepath"
 	"strings"
@@ -24,7 +26,9 @@ import (
 // A library is described in a little language.  Each album is a line of
 // tracks separated by spaces; each track is the letters of the pictures
 // its file carries, in order, or "-" for none, and a lowercase letter is
-// a front cover while an uppercase one is a back cover.  "folder:x"
+// a front cover while an uppercase one is a back cover.  A letter
+// followed by an apostrophe, "a'", is the same picture as "a" encoded
+// another way: other bytes, another id, the same look.  "folder:x"
 // before the tracks puts an image file x beside them.  Albumless tracks
 // go on a line starting "loose:".
 type library struct {
@@ -35,15 +39,58 @@ type library struct {
 // album's image, then "|", then each track's override or "-".
 type want []string
 
-// pngFor makes a distinct little image for each letter.
+// imageFor makes a distinct picture for each letter: nine by eight
+// blocks of grey, shades drawn from the letter, so its difference hash
+// is a pattern of its own and a re-encoding of it hashes the same.
+func imageFor(letter byte) *image.Gray {
+	img := image.NewGray(image.Rect(0, 0, 72, 64))
+	seed := uint32(letter) * 2654435761
+	for by := 0; by < 8; by++ {
+		for bx := 0; bx < 9; bx++ {
+			seed = seed*1103515245 + 12345
+			shade := color.Gray{Y: uint8(seed >> 24)}
+			for y := by * 8; y < by*8+8; y++ {
+				for x := bx * 8; x < bx*8+8; x++ {
+					img.SetGray(x, y, shade)
+				}
+			}
+		}
+	}
+	return img
+}
+
+// pngFor is the letter's picture as a PNG; jpegFor the same picture as
+// a JPEG, which is other bytes.
 func pngFor(letter byte) []byte {
-	img := image.NewRGBA(image.Rect(0, 0, 3, 2))
-	img.Set(0, 0, color.RGBA{letter, 0, 0, 255})
 	var buf bytes.Buffer
-	if err := png.Encode(&buf, img); err != nil {
+	if err := png.Encode(&buf, imageFor(letter)); err != nil {
 		panic(err)
 	}
 	return buf.Bytes()
+}
+
+func jpegFor(letter byte) []byte {
+	var buf bytes.Buffer
+	if err := jpeg.Encode(&buf, imageFor(letter), &jpeg.Options{Quality: 95}); err != nil {
+		panic(err)
+	}
+	return buf.Bytes()
+}
+
+// picturesOf parses a track's letters into its pictures' bytes and
+// media types.
+func picturesOf(letters string) ([][]byte, []string) {
+	var data [][]byte
+	var mimes []string
+	for i := 0; i < len(letters); i++ {
+		if i+1 < len(letters) && letters[i+1] == '\'' {
+			data, mimes = append(data, jpegFor(letters[i])), append(mimes, "image/jpeg")
+			i++
+		} else {
+			data, mimes = append(data, pngFor(letters[i])), append(mimes, "image/png")
+		}
+	}
+	return data, mimes
 }
 
 // mp3With makes an MP3 file that is all ID3v2.3 tag: one APIC frame per
@@ -52,8 +99,9 @@ func pngFor(letter byte) []byte {
 func mp3With(letters string) ([]byte, string) {
 	var frames bytes.Buffer
 	stubs := map[string]any{"TIT2": "Song"}
-	for i, c := range []byte(letters) {
-		data := pngFor(c)
+	pictures, mimes := picturesOf(letters)
+	for i, data := range pictures {
+		c := strings.ReplaceAll(letters, "'", "")[i]
 		picType := byte(3)
 		typeName := "Cover (front)"
 		if c >= 'A' && c <= 'Z' {
@@ -61,7 +109,7 @@ func mp3With(letters string) ([]byte, string) {
 		}
 		var body bytes.Buffer
 		body.WriteByte(0)
-		body.WriteString("image/png\x00")
+		body.WriteString(mimes[i] + "\x00")
 		body.WriteByte(picType)
 		body.WriteString("\x00")
 		body.Write(data)
@@ -75,7 +123,7 @@ func mp3With(letters string) ([]byte, string) {
 		}
 		sum := sha256.Sum256(data)
 		stubs[key] = map[string]any{
-			"binary": true, "mime": "image/png", "pictureType": typeName,
+			"binary": true, "mime": mimes[i], "pictureType": typeName,
 			"size": len(data), "sha256": hex.EncodeToString(sum[:]),
 		}
 	}
@@ -240,7 +288,7 @@ func TestStoredImages(t *testing.T) {
 			t.Fatal(err)
 		}
 		n++
-		if mime != "image/png" || width != 3 || height != 2 {
+		if mime != "image/png" || width != 72 || height != 64 {
 			t.Errorf("image %s: %s %dx%d", id, mime, width, height)
 		}
 		info, err := os.Stat(Path(f.library, id))
@@ -294,6 +342,10 @@ func (f *fixture) letterOf(art sql.NullString) string {
 			sum := sha256.Sum256(pngFor(l))
 			if store.ArtworkID(hex.EncodeToString(sum[:])) == art.String {
 				return string(l)
+			}
+			sum = sha256.Sum256(jpegFor(l))
+			if store.ArtworkID(hex.EncodeToString(sum[:])) == art.String {
+				return string(l) + "'"
 			}
 		}
 	}
@@ -423,5 +475,53 @@ func TestCollect(t *testing.T) {
 		if found != c.want || (statErr == nil) != c.want {
 			t.Errorf("%s: row %v, file %v, want %v", f.letterOf(sql.NullString{String: c.id, Valid: true}), found, statErr == nil, c.want)
 		}
+	}
+}
+
+// One picture encoded several ways is one picture: it votes together,
+// and a track carrying another encoding of the album's shows the album's.
+func TestNearIdentical(t *testing.T) {
+	checkArt(t, "encodings vote together", library{[]string{"a a' b"}}, want{"a | - - b"})
+	checkArt(t, "the first carried is the exemplar", library{[]string{"a' a b"}}, want{"a' | - - b"})
+	checkArt(t, "a tie between pictures is still a tie", library{[]string{"a b'"}}, want{"a | - b'"})
+	checkArt(t, "an album carried two ways", library{[]string{"a a'"}}, want{"a | - -"})
+	checkArt(t, "folder art the files carry another way", library{[]string{"folder:f f' f'"}}, want{"f | - -"})
+	checkArt(t, "loose tracks are not grouped", library{[]string{"loose: a a'"}}, want{"- | a a'"})
+	checkArt(t, "grouping is per album", library{[]string{"a a'", "a' b"}}, want{"a | - -", "a' | - b"})
+
+	f := setup(t, library{[]string{"a a' b"}})
+	ctx := context.Background()
+	r, err := Run(ctx, f.db, f.library)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Collapsed != 1 || r.Hashed != 0 {
+		t.Errorf("report: %+v, want 1 collapsed, none hashed after the fact", *r)
+	}
+	// Images stored before hashing began are hashed on the next run, from
+	// their files, and nothing else changes.
+	if _, err := f.db.ExecContext(ctx, `UPDATE artwork SET dhash = NULL`); err != nil {
+		t.Fatal(err)
+	}
+	r, err = Run(ctx, f.db, f.library)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Hashed != 3 || r.Changed != 0 || r.Collapsed != 1 {
+		t.Errorf("after unhashing: %+v, want 3 hashed, nothing changed, 1 collapsed", *r)
+	}
+}
+
+// The hashes of the fixture's pictures: distinct per letter, alike per
+// encoding, which is what the cases above rest on.
+func TestHashes(t *testing.T) {
+	a, _ := hashOf(pngFor('a'))
+	a2, _ := hashOf(jpegFor('a'))
+	b, _ := hashOf(pngFor('b'))
+	if !near(a, a2) {
+		t.Errorf("a and its JPEG differ in %d bits", bits.OnesCount64(a^a2))
+	}
+	if near(a, b) {
+		t.Errorf("a and b differ in only %d bits", bits.OnesCount64(a^b))
 	}
 }

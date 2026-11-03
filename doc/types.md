@@ -59,7 +59,7 @@ considered and isn't needed.
 | `artworkBlobId` | `Id\|null` | The album's art, an image served as a blob; see [artwork](artwork.md).  Set by the server's rule, or by hand under the review capability, below. |
 | `artworkType` | `String\|null` | Server-set.  The art's media type, such as `image/jpeg`, for the download URL's `type`.  Null with `artworkBlobId`. |
 | `issues` | `String[]` | Server-set, **review only**.  What might be wrong with the album; see below. |
-| `artworkCandidates` | `Candidate[]` | Server-set, **review only**.  The images the album could have: `{blobId, type, trackIds, folder}`, the image file beside its tracks first (`folder` true, no `trackIds`), then each picture its tracks' files carry, with the tracks carrying it, by first carrier in play order. |
+| `artworkCandidates` | `Candidate[]` | Server-set, **review only**.  The images the album could have: `{blobId, type, trackIds, folder, group}`, the image file beside its tracks first (`folder` true, no `trackIds`), then each picture its tracks' files carry, with the tracks carrying it, by first carrier in play order.  Candidates with the same `group` look the same to the server, one picture encoded several ways; see [artwork](artwork.md). |
 
 ### Disc
 

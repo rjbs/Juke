@@ -53,6 +53,8 @@ type Report struct {
 	Overrides  int // tracks with a picture of their own
 	Changed    int // albums and tracks whose art changed this run
 	Kept       int // albums and tracks whose art was chosen by hand and left alone
+	Hashed     int // images hashed this run, for telling near-identical ones
+	Collapsed  int // albums whose winning picture is carried as more than one image
 }
 
 // A picture is one front cover a track's file carries, as its stub
@@ -81,14 +83,15 @@ type run struct {
 	db      *sql.DB
 	library string
 	report  Report
-	ids     map[string]string // image sha -> artwork id, for every stored image
+	ids     map[string]string    // image sha -> artwork id, for every stored image
+	images  map[string]imageInfo // artwork id -> what grouping needs
 }
 
 // Run finds every image, stores the ones not stored yet, and sets each
 // album's and track's art.  Albums and tracks whose art changes get a
 // new modseq, one per type, so clients refetch them once.
 func Run(ctx context.Context, db *sql.DB, library string) (*Report, error) {
-	r := &run{ctx: ctx, db: db, library: library, ids: map[string]string{}}
+	r := &run{ctx: ctx, db: db, library: library, ids: map[string]string{}, images: map[string]imageInfo{}}
 	if err := r.loadImages(); err != nil {
 		return nil, err
 	}
@@ -103,6 +106,9 @@ func Run(ctx context.Context, db *sql.DB, library string) (*Report, error) {
 	if err != nil {
 		return nil, err
 	}
+	if r.report.Hashed, err = r.hashImages(); err != nil {
+		return nil, err
+	}
 	if err := r.assign(tracks, folder); err != nil {
 		return nil, err
 	}
@@ -111,17 +117,20 @@ func Run(ctx context.Context, db *sql.DB, library string) (*Report, error) {
 }
 
 func (r *run) loadImages() error {
-	rows, err := r.db.QueryContext(r.ctx, `SELECT id, sha256 FROM artwork`)
+	rows, err := r.db.QueryContext(r.ctx, `SELECT id, sha256, dhash, coalesce(width * height, 0) FROM artwork`)
 	if err != nil {
 		return err
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var id, sha string
-		if err := rows.Scan(&id, &sha); err != nil {
+		var hash sql.NullInt64
+		var pixels int
+		if err := rows.Scan(&id, &sha, &hash, &pixels); err != nil {
 			return err
 		}
 		r.ids[sha] = id
+		r.images[id] = imageInfo{hash: uint64(hash.Int64), hashed: hash.Valid, pixels: pixels}
 	}
 	return rows.Err()
 }
@@ -282,6 +291,7 @@ func (r *run) store(data []byte, sha string) (string, error) {
 		return "", err
 	}
 	r.ids[sha] = img.ID
+	r.images[img.ID] = imageInfo{hash: img.hash, hashed: true, pixels: img.pixels}
 	return img.ID, nil
 }
 
@@ -290,6 +300,9 @@ type Image struct {
 	ID   string
 	Mime string
 	Size int
+
+	hash   uint64
+	pixels int
 }
 
 // Store keeps an image, writing its file under the library and
@@ -303,18 +316,21 @@ func Store(ctx context.Context, db store.Queryer, library string, data []byte, u
 	sha := hex.EncodeToString(sum[:])
 	id := store.ArtworkID(sha)
 	var mime string
-	var size int
-	err := db.QueryRowContext(ctx, `SELECT mime, size FROM artwork WHERE id = ?`, id).Scan(&mime, &size)
+	var size, pixels int
+	var hash sql.NullInt64
+	err := db.QueryRowContext(ctx, `SELECT mime, size, dhash, coalesce(width * height, 0) FROM artwork WHERE id = ?`, id).Scan(&mime, &size, &hash, &pixels)
 	if err == nil {
-		return Image{ID: id, Mime: mime, Size: size}, nil
+		return Image{ID: id, Mime: mime, Size: size, hash: uint64(hash.Int64), pixels: pixels}, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		return Image{}, err
 	}
-	cfg, _, err := image.DecodeConfig(bytes.NewReader(data))
+	img, _, err := image.Decode(bytes.NewReader(data))
 	if err != nil {
 		return Image{}, fmt.Errorf("not an image the server can read: %w", err)
 	}
+	cfg := img.Bounds().Size()
+	computed := dhash(img)
 	if err := os.MkdirAll(Dir(library), 0o755); err != nil {
 		return Image{}, err
 	}
@@ -335,11 +351,11 @@ func Store(ctx context.Context, db store.Queryer, library string, data []byte, u
 		at = &s
 	}
 	if _, err := db.ExecContext(ctx, `
-		INSERT INTO artwork (id, sha256, mime, size, width, height, uploaded_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		id, sha, mime, len(data), cfg.Width, cfg.Height, at); err != nil {
+		INSERT INTO artwork (id, sha256, mime, size, width, height, uploaded_at, dhash) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		id, sha, mime, len(data), cfg.X, cfg.Y, at, int64(computed)); err != nil {
 		return Image{}, err
 	}
-	return Image{ID: id, Mime: mime, Size: len(data)}, nil
+	return Image{ID: id, Mime: mime, Size: len(data), hash: computed, pixels: cfg.X * cfg.Y}, nil
 }
 
 // Collect removes the images nothing names: no album's art or folder
@@ -468,27 +484,46 @@ func (r *run) own(t *track) string {
 }
 
 // choose picks an album's image from its tracks, which are in play
-// order: the image on the most tracks, or on a tie the first track's,
-// so a re-run lands on the same answer.  It reports whether there was
-// a tie.
-func (r *run) choose(tracks []*track) (string, bool) {
+// order: the picture on the most tracks, counting its encodings
+// together, or on a tie the first track's, so a re-run lands on the
+// same answer; the picture's exemplar is the image.  pictures is the
+// album's grouping, from group.  It reports whether there was a tie,
+// and whether the winner was carried as more than one image.
+func (r *run) choose(tracks []*track, pictures map[string]string) (art string, tie, collapsed bool) {
 	counts := map[string]int{}
+	members := map[string]map[string]bool{}
 	most := 0
 	for _, t := range tracks {
 		if id := r.own(t); id != "" {
-			counts[id]++
-			most = max(most, counts[id])
+			p := pictures[id]
+			counts[p]++
+			if members[p] == nil {
+				members[p] = map[string]bool{}
+			}
+			members[p][id] = true
+			most = max(most, counts[p])
 		}
 	}
 	if most == 0 {
-		return "", false
+		return "", false, false
 	}
 	for _, t := range tracks {
-		if id := r.own(t); counts[id] == most {
-			return id, countOf(counts, most) > 1
+		if id := r.own(t); id != "" && counts[pictures[id]] == most {
+			p := pictures[id]
+			return p, countOf(counts, most) > 1, len(members[p]) > 1
 		}
 	}
-	return "", false
+	return "", false, false
+}
+
+// pictures groups the images an album's tracks carry, and its folder
+// image, into pictures.
+func (r *run) pictures(tracks []*track, folder string) map[string]string {
+	ids := []string{folder}
+	for _, t := range tracks {
+		ids = append(ids, r.own(t))
+	}
+	return r.group(distinct(ids))
 }
 
 func countOf(counts map[string]int, n int) int {
@@ -578,9 +613,13 @@ func (r *run) assign(tracks []*track, folder map[string]string) error {
 	sort.Strings(albumIDs)
 	for _, albumID := range albumIDs {
 		was := albums[albumID]
-		art, tie := folder[albumID], false
+		pictures := r.pictures(byAlbum[albumID], folder[albumID])
+		art, tie, collapsed := folder[albumID], false, false
 		if art == "" {
-			art, tie = r.choose(byAlbum[albumID])
+			art, tie, collapsed = r.choose(byAlbum[albumID], pictures)
+		}
+		if collapsed {
+			r.report.Collapsed++
 		}
 		if was.folder != folder[albumID] || was.tie != tie {
 			if _, err := tx.ExecContext(r.ctx, `UPDATE album SET folder_artwork_id = ?, art_tie = ? WHERE id = ?`,
@@ -604,13 +643,13 @@ func (r *run) assign(tracks []*track, folder map[string]string) error {
 			r.report.Albums++
 		}
 		for _, t := range byAlbum[albumID] {
-			if err := r.override(tx, t, art, setTrack); err != nil {
+			if err := r.override(tx, t, art, pictures, setTrack); err != nil {
 				return err
 			}
 		}
 	}
 	for _, t := range byAlbum[""] {
-		if err := r.override(tx, t, "", setTrack); err != nil {
+		if err := r.override(tx, t, "", nil, setTrack); err != nil {
 			return err
 		}
 	}
@@ -618,9 +657,9 @@ func (r *run) assign(tracks []*track, folder map[string]string) error {
 }
 
 // override records the picture a track's file carries, and sets it as
-// the track's own image where it differs from its album's, unless the
-// track's image was chosen by hand.
-func (r *run) override(tx *sql.Tx, t *track, albumArt string, set func(id, art string) error) error {
+// the track's own image where it is another picture than its album's,
+// by the album's grouping, unless the track's image was chosen by hand.
+func (r *run) override(tx *sql.Tx, t *track, albumArt string, pictures map[string]string, set func(id, art string) error) error {
 	own := r.own(t)
 	if own != t.pictureID {
 		if _, err := tx.ExecContext(r.ctx, `UPDATE track SET picture_id = ? WHERE id = ?`, nullable(own), t.id); err != nil {
@@ -635,7 +674,7 @@ func (r *run) override(tx *sql.Tx, t *track, albumArt string, set func(id, art s
 		return nil
 	}
 	art := own
-	if art == albumArt {
+	if art == albumArt || (pictures != nil && art != "" && pictures[art] == pictures[albumArt]) {
 		art = ""
 	}
 	if art != "" {

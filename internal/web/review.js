@@ -149,6 +149,13 @@ function candidateName(c) {
   return c.folder ? `Picture ${c.n}, the file beside the tracks` : `Picture ${c.n}`;
 }
 
+// lookalike says which earlier candidate this one looks the same as,
+// by the server's hashing, or null.
+function lookalike(c, cs) {
+  const first = cs.find(o => o.group && o.group === c.group);
+  return first && first !== c ? first : null;
+}
+
 // well is where an image file is dropped, or picked, to be uploaded
 // and chosen as the album's art.
 function well() {
@@ -229,6 +236,7 @@ function card(c) {
     h("img", { src: imageURL(c.blobId, c.type), alt: "" }),
     h("div", { class: "label" },
       h("div", {}, h("b", {}, candidateName(c)), chosen ? h("span", { class: "tag" }, "the album's art") : null),
+      lookalike(c, cs) ? h("div", {}, `Looks the same as picture ${lookalike(c, cs).n}, encoded differently`) : null,
       names.length
         ? h("div", { title: names.join("\n") }, `In ${names.length} file${names.length === 1 ? "" : "s"}: `, names.join(", "))
         : c.folder || c.uploaded ? null : h("div", {}, "In no file here")),
