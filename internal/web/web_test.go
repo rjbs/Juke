@@ -30,6 +30,7 @@ func TestEmbeddedPage(t *testing.T) {
 	checkFile(t, Handler(""), "/juke.css", "text/css", ":root")
 	checkFile(t, Handler(""), "/juke.js", "text/javascript", "function route()")
 	checkFile(t, Handler(""), "/review.js", "text/javascript", "")
+	checkFile(t, Handler(""), "/smart.js", "text/javascript", "const smart")
 }
 
 func TestPageFromDir(t *testing.T) {

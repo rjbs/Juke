@@ -9,12 +9,12 @@ import (
 	"os"
 )
 
-//go:embed index.html juke.css juke.js review.js
+//go:embed index.html juke.css juke.js review.js smart.js
 var files embed.FS
 
 // Files are the page's files besides the page itself, which the server
 // routes to the handler by name.
-var Files = []string{"juke.css", "juke.js", "review.js"}
+var Files = []string{"juke.css", "juke.js", "review.js", "smart.js"}
 
 // Handler serves the page and its files.  With a non-empty dir, they are
 // read from dir on every request instead, so they can be edited without

@@ -395,7 +395,9 @@ async function renderPlaylists() {
     ...p.list.map(pl => ({ pl, href: `#playlist/${pl.id}`, count: pl.trackIds.length })),
     ...s.list.map(pl => ({ pl, href: `#smart/${pl.id}`, count: counts.get(pl.id), smart: true })),
   ].sort((a, b) => fold(a.pl.title).localeCompare(fold(b.pl.title)));
-  show(h("table", {},
+  show(
+    h("div", { class: "controls" }, h("a", { href: "#smart/new" }, h("button", {}, "New smart playlist"))),
+    h("table", {},
     h("thead", {}, h("tr", {}, h("th", {}, "Title"), h("th", { class: "num" }, "Tracks"))),
     h("tbody", {}, rows.map(r => h("tr", {},
       h("td", {}, r.smart && gear(), h("a", { href: r.href }, r.pl.title)),
@@ -434,6 +436,8 @@ async function renderSmart(id) {
     h("h2", {}, gear(), pl.title),
     h("div", { class: "sub" }, `${q.total} tracks · `,
       h("button", { onclick: () => player.play(playable.map(t => t.id), 0), disabled: !playable.length || null }, "Play"),
+      " · ", h("button", { onclick: () => smart.edit(pl) }, "Edit rule"),
+      " · ", h("button", { onclick: () => smart.duplicate(pl) }, "Duplicate"),
       " · ", h("button", { onclick: () => showRule(pl) }, "Show rule")),
     pager(pos, q.total, go),
     trackTable(list, { number: true, start: pos, album: true }),
@@ -525,7 +529,7 @@ async function route() {
   const [path] = hash.split("?");
   const [view, id] = path.split("/");
   const tab = { album: "albums", playlist: "playlists", smart: "playlists" }[view] || view;
-  if (!review.leaving()) return;
+  if (!review.leaving() || !smart.leaving()) return;
   document.querySelectorAll("nav a").forEach(a => a.classList.toggle("current", a.dataset.tab === tab));
   try {
     switch (view) {
@@ -534,7 +538,7 @@ async function route() {
       case "tracks": await renderTracks(); break;
       case "playlists": await renderPlaylists(); break;
       case "playlist": await renderPlaylist(id); break;
-      case "smart": await renderSmart(id); break;
+      case "smart": await smart.page(id); break;
       case "review": await (id ? review.album(id) : review.list()); break;
       default: show(h("p", { class: "error" }, `Nothing at #${hash}.`));
     }

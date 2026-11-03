@@ -72,8 +72,18 @@ It listens on `localhost:8737`, where `/` is a web page, built into the
 binary (`internal/web`), that browses albums, tracks and playlists of
 both kinds, plays them, and sets ratings, all through the JMAP API.
 A smart playlist shows the tracks its rule matches now, and the rule
-itself on request; nothing on the page creates or edits one yet.  A track played
-to its end there counts as a play.  `--web-dir internal/web` serves the
+itself on request.  Smart playlists are made and edited there too
+(`internal/web/smart.js`): the rule is a tree of groups ("all", "any" or
+"none" of these) and conditions (a field, an operator, a value), with
+the sort and the caps beneath, and the tracks it matches now beneath
+that, re-run as the rule is edited, so the server's own refusals are the
+validation.  A negated condition says that it also matches tracks with
+no value, as the server's `NOT` does; "is any of" and "is none of" take
+a list of values and compile to one `OR` or `NOT`.  Every stored filter
+reads back into the tree, since `AND`, `OR`, `NOT` and the named
+conditions are all a filter holds.  A playlist can be duplicated as a
+starting point, and deleting one another's rule names is refused, as
+the server says.  A track played to its end there counts as a play.  `--web-dir internal/web` serves the
 page from the source tree instead, so edits show on reload.
 
 Its Review tab lists the albums with something wrong, by issue (see
@@ -163,4 +173,5 @@ outside it, such as an import.
 - `/queryChanges` always answers `cannotCalculateChanges`.
 - Uploads are refused.
 - Metadata flush.
-- Authoring smart playlists anywhere but `bin/recreate-smart-playlists`.
+- Authoring smart playlists in the Apple client; the web page and
+  `bin/recreate-smart-playlists` do it.
