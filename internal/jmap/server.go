@@ -30,6 +30,7 @@ type Config struct {
 	BaseURL string
 
 	MaxSizeRequest    int
+	MaxSizeUpload     int
 	MaxCallsInRequest int
 	MaxObjectsInGet   int
 	MaxObjectsInSet   int
@@ -61,6 +62,9 @@ func New(cfg Config) *Server {
 	}
 	if cfg.MaxSizeRequest == 0 {
 		cfg.MaxSizeRequest = 10 << 20
+	}
+	if cfg.MaxSizeUpload == 0 {
+		cfg.MaxSizeUpload = 20 << 20
 	}
 	if cfg.MaxCallsInRequest == 0 {
 		cfg.MaxCallsInRequest = 64
@@ -95,9 +99,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /jmap/session", s.handleSession)
 	mux.HandleFunc("POST /jmap/api", s.handleAPI)
 	mux.HandleFunc("GET /jmap/download/{accountId}/{blobId}/{name}", s.handleDownload)
-	mux.HandleFunc("POST /jmap/upload/{accountId}/", func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, "uploads are not supported", http.StatusForbidden)
-	})
+	mux.HandleFunc("POST /jmap/upload/{accountId}/", s.handleUpload)
 	mux.HandleFunc("GET /jmap/eventsource", s.handleEventSource)
 	return mux
 }
@@ -123,7 +125,7 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 	session := map[string]any{
 		"capabilities": map[string]any{
 			CapCore: map[string]any{
-				"maxSizeUpload":         0,
+				"maxSizeUpload":         s.cfg.MaxSizeUpload,
 				"maxConcurrentUpload":   1,
 				"maxSizeRequest":        s.cfg.MaxSizeRequest,
 				"maxConcurrentRequests": 4,

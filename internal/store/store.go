@@ -195,6 +195,12 @@ ALTER TABLE track ADD COLUMN number_source TEXT;
 UPDATE album SET artwork_source = 'rule' WHERE artwork_id IS NOT NULL;
 UPDATE track SET artwork_source = 'rule' WHERE artwork_id IS NOT NULL;
 `,
+
+	// When an image was uploaded, for the collector's grace period; NULL
+	// for one read out of a file or found beside one.
+	`
+ALTER TABLE artwork ADD COLUMN uploaded_at TEXT;
+`,
 }
 
 func dsn(path string, readOnly bool) string {

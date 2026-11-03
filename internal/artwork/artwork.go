@@ -24,6 +24,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	_ "image/gif"
 	_ "image/jpeg"
@@ -88,9 +89,6 @@ type run struct {
 // new modseq, one per type, so clients refetch them once.
 func Run(ctx context.Context, db *sql.DB, library string) (*Report, error) {
 	r := &run{ctx: ctx, db: db, library: library, ids: map[string]string{}}
-	if err := os.MkdirAll(Dir(library), 0o755); err != nil {
-		return nil, err
-	}
 	if err := r.loadImages(); err != nil {
 		return nil, err
 	}
@@ -274,36 +272,114 @@ func pictureFromFile(name, sha string) ([]byte, error) {
 	return nil, nil
 }
 
-// store keeps an image, writing its file and recording it, and returns
-// its id.  An image already stored is not written again.
+// store keeps an image the run found, and returns its id.
 func (r *run) store(data []byte, sha string) (string, error) {
 	if id, ok := r.ids[sha]; ok {
 		return id, nil
 	}
-	id := store.ArtworkID(sha)
-	name := Path(r.library, id)
-	if info, err := os.Stat(name); err != nil || info.Size() != int64(len(data)) {
-		tmp := name + ".tmp"
-		if err := os.WriteFile(tmp, data, 0o644); err != nil {
-			return "", err
-		}
-		if err := os.Rename(tmp, name); err != nil {
-			return "", err
-		}
-	}
-	mime := http.DetectContentType(data)
-	var width, height *int
-	if cfg, _, err := image.DecodeConfig(bytes.NewReader(data)); err == nil {
-		width, height = &cfg.Width, &cfg.Height
-	}
-	_, err := r.db.ExecContext(r.ctx, `
-		INSERT INTO artwork (id, sha256, mime, size, width, height) VALUES (?, ?, ?, ?, ?, ?)`,
-		id, sha, mime, len(data), width, height)
+	img, err := Store(r.ctx, r.db, r.library, data, nil)
 	if err != nil {
 		return "", err
 	}
-	r.ids[sha] = id
-	return id, nil
+	r.ids[sha] = img.ID
+	return img.ID, nil
+}
+
+// An Image is a stored image as the artwork table records it.
+type Image struct {
+	ID   string
+	Mime string
+	Size int
+}
+
+// Store keeps an image, writing its file under the library and
+// recording it, and returns it.  The id is the content's, so an image
+// already stored is returned as it is, not written again; uploadedAt,
+// for an image a client sent rather than one found in the library, is
+// kept for the collector's grace period and is not changed for an image
+// already stored.  The data must be an image the server can decode.
+func Store(ctx context.Context, db store.Queryer, library string, data []byte, uploadedAt *time.Time) (Image, error) {
+	sum := sha256.Sum256(data)
+	sha := hex.EncodeToString(sum[:])
+	id := store.ArtworkID(sha)
+	var mime string
+	var size int
+	err := db.QueryRowContext(ctx, `SELECT mime, size FROM artwork WHERE id = ?`, id).Scan(&mime, &size)
+	if err == nil {
+		return Image{ID: id, Mime: mime, Size: size}, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return Image{}, err
+	}
+	cfg, _, err := image.DecodeConfig(bytes.NewReader(data))
+	if err != nil {
+		return Image{}, fmt.Errorf("not an image the server can read: %w", err)
+	}
+	if err := os.MkdirAll(Dir(library), 0o755); err != nil {
+		return Image{}, err
+	}
+	name := Path(library, id)
+	if info, err := os.Stat(name); err != nil || info.Size() != int64(len(data)) {
+		tmp := name + ".tmp"
+		if err := os.WriteFile(tmp, data, 0o644); err != nil {
+			return Image{}, err
+		}
+		if err := os.Rename(tmp, name); err != nil {
+			return Image{}, err
+		}
+	}
+	mime = http.DetectContentType(data)
+	var at *string
+	if uploadedAt != nil {
+		s := uploadedAt.UTC().Format(time.RFC3339)
+		at = &s
+	}
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO artwork (id, sha256, mime, size, width, height, uploaded_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		id, sha, mime, len(data), cfg.Width, cfg.Height, at); err != nil {
+		return Image{}, err
+	}
+	return Image{ID: id, Mime: mime, Size: len(data)}, nil
+}
+
+// Collect removes the images nothing names: no album's art or folder
+// image, no track's art or own picture.  An upload is kept until
+// uploadedBefore, since a client that uploaded may be about to set it,
+// as RFC 8620 allows a server to do; an image the library gave goes as
+// soon as nothing names it.  The file goes with the row.  It returns
+// how many went.
+func Collect(ctx context.Context, db *sql.DB, library string, uploadedBefore time.Time) (int, error) {
+	rows, err := db.QueryContext(ctx, `
+		SELECT id FROM artwork
+		WHERE (uploaded_at IS NULL OR uploaded_at < ?)
+		  AND NOT EXISTS (SELECT 1 FROM album WHERE artwork_id = artwork.id OR folder_artwork_id = artwork.id)
+		  AND NOT EXISTS (SELECT 1 FROM track WHERE artwork_id = artwork.id OR picture_id = artwork.id)
+		ORDER BY id`, uploadedBefore.UTC().Format(time.RFC3339))
+	if err != nil {
+		return 0, err
+	}
+	var dead []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		dead = append(dead, id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	for _, id := range dead {
+		if _, err := db.ExecContext(ctx, `DELETE FROM artwork WHERE id = ?`, id); err != nil {
+			return 0, err
+		}
+		if err := os.Remove(Path(library, id)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return 0, err
+		}
+	}
+	return len(dead), nil
 }
 
 // folderStems are the names, less extension, that an image file beside

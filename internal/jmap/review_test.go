@@ -1,7 +1,14 @@
 package jmap
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"image"
+	"image/png"
+	"io"
+	"net/http"
+	"strings"
 	"testing"
 )
 
@@ -132,4 +139,57 @@ func TestReviewNeedsItsCapability(t *testing.T) {
 	e := r.Args["notUpdated"].(map[string]any)[devo].(map[string]any)
 	checkEqual(t, "choosing album art", e["type"], "invalidProperties")
 	checkSetRefused(t, f, "Whip It", map[string]any{"artworkBlobId": a}, "invalidProperties", "artworkBlobId")
+}
+
+// upload posts bytes to the upload endpoint and returns the status and
+// the decoded response, or the error text.
+func (f *fixture) upload(data []byte) (int, map[string]any, string) {
+	f.t.Helper()
+	resp, err := http.Post(f.srv.URL+"/jmap/upload/music/", "application/octet-stream", bytes.NewReader(data))
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	var out map[string]any
+	if json.Unmarshal(body, &out) != nil {
+		return resp.StatusCode, nil, strings.TrimSpace(string(body))
+	}
+	return resp.StatusCode, out, ""
+}
+
+func pngBytes() []byte {
+	img := image.NewRGBA(image.Rect(0, 0, 4, 3))
+	var buf bytes.Buffer
+	png.Encode(&buf, img)
+	return buf.Bytes()
+}
+
+// An upload is an image, stored as artwork under its content id, which
+// Album/set then takes; anything else is refused.
+func TestUpload(t *testing.T) {
+	f := newFixture(t, Config{MaxSizeUpload: 4096})
+	f.using = []string{CapCore, CapJuke, CapReview}
+	data := pngBytes()
+	status, r, _ := f.upload(data)
+	checkEqual(t, "status", status, http.StatusCreated)
+	checkEqual(t, "response", []any{r["accountId"], r["type"], r["size"]}, []any{"music", "image/png", float64(len(data))})
+	id := r["blobId"].(string)
+	status, again, _ := f.upload(data)
+	checkEqual(t, "the same image again", []any{status, again["blobId"]}, []any{http.StatusCreated, id})
+
+	devo := f.albumOf("Whip It")
+	f.call("Album/set", map[string]any{"update": map[string]any{devo: map[string]any{"artworkBlobId": id}}})
+	album := f.album(devo)
+	checkEqual(t, "set as the album's art", []any{album["artworkBlobId"], album["artworkType"]}, []any{id, "image/png"})
+	checkDownload(t, f, id, "", http.StatusOK, string(data))
+
+	status, _, text := f.upload([]byte("this is a text file, not a picture"))
+	checkEqual(t, "not an image", []any{status, text}, []any{http.StatusUnsupportedMediaType, "only images can be uploaded"})
+	status, _, _ = f.upload(append([]byte("\x89PNG\r\n\x1a\n"), make([]byte, 5000)...))
+	checkEqual(t, "too large", status, http.StatusRequestEntityTooLarge)
+	status, _, _ = f.upload(append([]byte("\x89PNG\r\n\x1a\n"), []byte("but not really a PNG")...))
+	checkEqual(t, "an image that can't be decoded", status, http.StatusUnsupportedMediaType)
+	resp, _ := http.Post(f.srv.URL+"/jmap/upload/nobody/", "image/png", bytes.NewReader(data))
+	checkEqual(t, "another account", resp.StatusCode, http.StatusNotFound)
 }

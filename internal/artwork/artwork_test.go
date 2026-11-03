@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"semiotic.systems/juke/internal/store"
 )
@@ -368,6 +369,59 @@ func TestReviewColumns(t *testing.T) {
 		}
 		if got := f.letterOf(folder); got != want.folder || tie != want.tie || strings.Join(pictures, " ") != want.pictures {
 			t.Errorf("album %d: folder %s, tie %v, pictures %q; want %s, %v, %q", n, got, tie, pictures, want.folder, want.tie, want.pictures)
+		}
+	}
+}
+
+// The collector removes images nothing names, keeping a recent upload
+// for the client that may be about to set it.
+func TestCollect(t *testing.T) {
+	f := setup(t, library{[]string{"a b"}})
+	ctx := context.Background()
+	if _, err := Run(ctx, f.db, f.library); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 11, 2, 12, 0, 0, 0, time.UTC)
+	old := now.Add(-48 * time.Hour)
+	fresh, err := Store(ctx, f.db, f.library, pngFor('x'), &now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stale, err := Store(ctx, f.db, f.library, pngFor('y'), &old)
+	if err != nil {
+		t.Fatal(err)
+	}
+	kept, err := Store(ctx, f.db, f.library, pngFor('z'), &old)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.db.ExecContext(ctx, `UPDATE album SET artwork_id = ? WHERE id = ?`, kept.ID, f.albums[0]); err != nil {
+		t.Fatal(err)
+	}
+	// Track 2's own picture "b" is named by its picture_id, so it stays
+	// though it is also the track's art; make it unnamed by both.
+	if _, err := f.db.ExecContext(ctx, `UPDATE track SET artwork_id = NULL, picture_id = NULL WHERE id = ?`, f.tracks[0][1]); err != nil {
+		t.Fatal(err)
+	}
+
+	n, err := Collect(ctx, f.db, f.library, now.Add(-24*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 2 {
+		t.Errorf("removed %d, want 2: the stale upload and the picture nothing names", n)
+	}
+	for _, c := range []struct {
+		id   string
+		want bool
+	}{{fresh.ID, true}, {stale.ID, false}, {kept.ID, true}, {idOf('a'), true}, {idOf('b'), false}} {
+		var found bool
+		if err := f.db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM artwork WHERE id = ?)`, c.id).Scan(&found); err != nil {
+			t.Fatal(err)
+		}
+		_, statErr := os.Stat(Path(f.library, c.id))
+		if found != c.want || (statErr == nil) != c.want {
+			t.Errorf("%s: row %v, file %v, want %v", f.letterOf(sql.NullString{String: c.id, Valid: true}), found, statErr == nil, c.want)
 		}
 	}
 }

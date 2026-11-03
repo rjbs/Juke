@@ -3,6 +3,8 @@
 //	juke import --library DIR --catalog FILE --out FILE [--include NAME ...]
 //	juke check  --db FILE --library DIR
 //	juke backfill --db FILE --library DIR [--catalog FILE]
+//	juke artwork --db FILE --library DIR
+//	juke gc --db FILE --library DIR [--grace DURATION]
 //	juke measure FILE ...
 //	juke originals --db FILE --library DIR [--dry-run]
 //	juke serve  --db FILE --library DIR [--listen ADDR]
@@ -34,6 +36,8 @@ func main() {
 		err = runBackfill(ctx, os.Args[2:])
 	case "artwork":
 		err = runArtwork(ctx, os.Args[2:])
+	case "gc":
+		err = runGC(ctx, os.Args[2:])
 	case "measure":
 		err = runMeasure(os.Args[2:])
 	case "serve":
@@ -48,7 +52,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: juke import|check|backfill|artwork|measure|originals|serve [options]; juke COMMAND -h for options")
+	fmt.Fprintln(os.Stderr, "usage: juke import|check|backfill|artwork|gc|measure|originals|serve [options]; juke COMMAND -h for options")
 	os.Exit(2)
 }
 
