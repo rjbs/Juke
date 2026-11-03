@@ -4,7 +4,7 @@ const CAP_CORE = "urn:ietf:params:jmap:core";
 const CAP_JUKE = "https://semiotic.systems/jmap/juke";
 const CAP_REVIEW = "https://semiotic.systems/jmap/juke/review";
 
-let session, accountId, maxGet, maxCalls;
+let session, accountId, maxGet;
 const albums = new Map();       // id -> Album
 let albumList = [];             // albums, by artist then title
 const tracks = new Map();       // id -> Track, filled as needed
@@ -373,35 +373,21 @@ async function renderTracks() {
 
 function gear() { return h("span", { class: "gear", title: "Smart playlist" }, "⚙"); }
 
-// smartCounts asks how many tracks each smart playlist matches now, one
-// zero-row query per playlist, as many to a request as the server allows.
-async function smartCounts(list) {
-  const counts = new Map();
-  for (let i = 0; i < list.length; i += maxCalls) {
-    const batch = list.slice(i, i + maxCalls);
-    const rs = await jmap(...batch.map(pl =>
-      ["Track/query", { filter: { inSmartPlaylist: pl.id }, limit: 0, calculateTotal: true }]));
-    batch.forEach((pl, j) => counts.set(pl.id, rs[j].total));
-  }
-  return counts;
-}
-
 // The Playlists tab lists playlists of both kinds together, by title; a
 // smart playlist wears a gear.
 async function renderPlaylists() {
-  const [p, s] = await jmap(["Playlist/get", { ids: null }], ["SmartPlaylist/get", { ids: null }]);
-  const counts = await smartCounts(s.list);
+  const [p, s] = await jmap(["Playlist/get", { ids: null, properties: ["id", "title"] }],
+                            ["SmartPlaylist/get", { ids: null, properties: ["id", "title"] }]);
   const rows = [
-    ...p.list.map(pl => ({ pl, href: `#playlist/${pl.id}`, count: pl.trackIds.length })),
-    ...s.list.map(pl => ({ pl, href: `#smart/${pl.id}`, count: counts.get(pl.id), smart: true })),
+    ...p.list.map(pl => ({ pl, href: `#playlist/${pl.id}` })),
+    ...s.list.map(pl => ({ pl, href: `#smart/${pl.id}`, smart: true })),
   ].sort((a, b) => fold(a.pl.title).localeCompare(fold(b.pl.title)));
   show(
     h("div", { class: "controls" }, h("a", { href: "#smart/new" }, h("button", {}, "New smart playlist"))),
     h("table", {},
-    h("thead", {}, h("tr", {}, h("th", {}, "Title"), h("th", { class: "num" }, "Tracks"))),
+    h("thead", {}, h("tr", {}, h("th", {}, "Title"))),
     h("tbody", {}, rows.map(r => h("tr", {},
-      h("td", {}, r.smart && gear(), h("a", { href: r.href }, r.pl.title)),
-      h("td", { class: "num" }, r.count))))));
+      h("td", {}, r.smart && gear(), h("a", { href: r.href }, r.pl.title)))))));
 }
 
 // showRule opens a dialog showing what a smart playlist stores: the
@@ -553,7 +539,6 @@ async function start() {
     session = await (await fetch("/.well-known/jmap")).json();
     accountId = session.primaryAccounts[CAP_JUKE];
     maxGet = session.capabilities[CAP_CORE].maxObjectsInGet;
-    maxCalls = session.capabilities[CAP_CORE].maxCallsInRequest;
     for (const a of await getAll("Album")) albums.set(a.id, a);
     albumList = [...albums.values()].sort((a, b) =>
       (a.artist == null) - (b.artist == null)
