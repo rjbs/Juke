@@ -62,6 +62,10 @@ public final class Library {
   @ObservationIgnored let engine: SyncEngine<GRDBSyncStore>
   @ObservationIgnored let blobs: BlobStore<GRDBSyncStore>
   @ObservationIgnored let accountId: String
+  /// The server, for the few calls made outside the mirror: running and
+  /// saving a rule being edited.  See Library+Rules.swift.
+  @ObservationIgnored let transport: JMAPClient
+  @ObservationIgnored var session: Session?
   /// What this device keeps available offline.
   @ObservationIgnored public private(set) var offline: Offline!
   /// Album art as images, decoded once per size and kept.
@@ -69,10 +73,11 @@ public final class Library {
   @ObservationIgnored private var ids: [LocalKey: String] = [:]
   @ObservationIgnored private var tasks: [Task<Void, Never>] = []
 
-  init(engine: SyncEngine<GRDBSyncStore>, blobs: BlobStore<GRDBSyncStore>, accountId: String, directory: URL) {
+  init(engine: SyncEngine<GRDBSyncStore>, blobs: BlobStore<GRDBSyncStore>, accountId: String, transport: JMAPClient, directory: URL) {
     self.engine = engine
     self.blobs = blobs
     self.accountId = accountId
+    self.transport = transport
     self.offline = Offline(library: self, file: directory.appending(path: "offline.json"))
     self.images = ArtworkCache(library: self)
   }
@@ -114,7 +119,7 @@ public final class Library {
     // Earlier versions linked audio here under names with extensions;
     // Jinx now names its files that way itself.  -- claude, 2026-10-25
     try? FileManager.default.removeItem(at: directory.appending(path: "playable"))
-    return Library(engine: engine, blobs: blobs, accountId: accountId, directory: directory)
+    return Library(engine: engine, blobs: blobs, accountId: accountId, transport: transport, directory: directory)
   }
 
   private static func account(from transport: JMAPClient, rememberedIn file: URL) async throws -> String {

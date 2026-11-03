@@ -370,3 +370,48 @@ func smartPlaylistPastTheCap() async throws {
   #expect(Set(result.trackIds).count == result.trackIds.count, "a track repeated across pages")
   _ = try await jmap("SmartPlaylist/set", ["destroy": [id]])
 }
+
+// A rule edited in the app is previewed, saved and deleted through the
+// server directly, with the mirror caught up before each call returns;
+// the server's refusals come back as errors: a rule that won't run, and
+// deleting a playlist another rule names.
+@Test(.enabled(if: testServer != nil))
+@MainActor
+func smartPlaylistEditing() async throws {
+  let library = try await openLibrary()
+  defer { library.stop() }
+  let stamp = Int(Date().timeIntervalSince1970)
+
+  var draft = SmartPlaylistDraft(title: "Edited \(stamp)")
+  draft.root.items = [.row(RuleRow(field: .audio, operator: .present))]
+  draft.sort = [RuleSort(property: .title)]
+  draft.limits = [RuleLimit(unit: .tracks, value: 3)]
+  let preview = try await library.preview(draft)
+  #expect(preview.trackIds.count == 3 && preview.total == 3, "\(preview)")
+
+  let id = try await library.save(draft)
+  let saved = try #require(library.smartPlaylists.first { $0.id == id })
+  #expect(saved.limit == 3 && saved.filter == ["hasAudio": true] && saved.title == "Edited \(stamp)")
+  try await eventually("the saved rule's result") { library.smartResults[id]?.trackIds == preview.trackIds }
+
+  var edited = try SmartPlaylistDraft(saved)
+  edited.limits[0].value = 2
+  try await library.save(edited, as: id)
+  #expect(library.smartPlaylists.first { $0.id == id }?.limit == 2)
+
+  var broken = draft
+  var row = RuleRow(field: .playlist, operator: .inAny)
+  row.lists = [RuleList(id: "nope", smart: true)]
+  broken.root.items = [.row(row)]
+  await #expect(throws: ServerRefusal.self) { try await library.preview(broken) }
+
+  var referring = SmartPlaylistDraft(title: "Refers \(stamp)")
+  row.lists = [RuleList(id: id, smart: true)]
+  referring.root.items = [.row(row)]
+  let referringId = try await library.save(referring)
+  await #expect(throws: ServerRefusal.self) { try await library.delete(saved) }
+
+  try await library.delete(try #require(library.smartPlaylists.first { $0.id == referringId }))
+  try await library.delete(saved)
+  #expect(!library.smartPlaylists.contains { $0.id == id || $0.id == referringId })
+}
