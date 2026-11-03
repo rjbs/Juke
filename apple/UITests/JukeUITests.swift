@@ -19,12 +19,39 @@ final class JukeUITests: XCTestCase {
 
   override func setUp() async throws {
     continueAfterFailure = false
+    await destroyLeftoverPlaylists()
     app = XCUIApplication()
     // A launch argument "-key value" lands in UserDefaults' argument
     // domain, which @AppStorage reads.  -- claude, 2026-10-25
     app.launchArguments = ["-serverURL", testServer]
     app.launch()
     XCTAssertTrue(app.navigationBars["Albums"].waitForExistence(timeout: syncTimeout), "the album list never appeared")
+  }
+
+  /// A test that fails partway leaves the playlist it made on the scratch
+  /// server, where the next run finds two in the sidebar.  Whatever a
+  /// test makes is named for it, so the leftovers can be told apart and
+  /// destroyed, of either kind, before the next test launches the app.
+  /// Errors are ignored: with the server down there is nothing to clean,
+  /// and the launch that follows will say so.
+  ///
+  /// This runs before a test rather than after, because an async
+  /// tearDown never returned after an async test had failed and been
+  /// halted.  -- claude, 2026-11-02
+  func destroyLeftoverPlaylists() async {
+    for type in ["Playlist", "SmartPlaylist"] {
+      guard let all = try? await jmap("\(type)/get", ["ids": NSNull()]) else { continue }
+      let leftovers = (all["list"] as? [[String: Any]] ?? [])
+        .filter { ($0["title"] as? String).map(Self.isTestPlaylist) ?? false }
+        .compactMap { $0["id"] as? String }
+      if !leftovers.isEmpty {
+        _ = try? await jmap("\(type)/set", ["destroy": leftovers])
+      }
+    }
+  }
+
+  static func isTestPlaylist(_ title: String) -> Bool {
+    title.hasPrefix("UI Test ") || title.hasPrefix("UI Smart ")
   }
 
   func testPlayFromAlbum() throws {
