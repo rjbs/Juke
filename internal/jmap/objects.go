@@ -44,8 +44,8 @@ func (s *Server) objectTypes() []*objectType {
 			},
 			reviewProperties: []string{"numberSource"},
 			load:             loadTracks,
-			query: queryTracks,
-			page:  queryTracksPage,
+			query:            queryTracks,
+			page:             queryTracksPage,
 		},
 		{
 			name:             store.TypeAlbum,
