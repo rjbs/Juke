@@ -64,13 +64,23 @@ up.
 
     var/juke serve --db var/sample.sqlite --library sample
 
-It listens on `localhost:8737`, where `/` is a review page: a single HTML
-file, built into the binary, that browses albums, tracks and playlists
-of both kinds, plays them, and sets ratings, all through the JMAP API.
+It listens on `localhost:8737`, where `/` is a web page, built into the
+binary (`internal/web`), that browses albums, tracks and playlists of
+both kinds, plays them, and sets ratings, all through the JMAP API.
 A smart playlist shows the tracks its rule matches now, and the rule
 itself on request; nothing on the page creates or edits one yet.  A track played
 to its end there counts as a play.  `--web-dir internal/web` serves the
 page from the source tree instead, so edits show on reload.
+
+Its Review tab lists the albums with something wrong, by issue (see
+[object types](types.md)), and opens each as a page: the pictures the
+album could have, side by side with the tracks carrying each, to choose
+one as the album's or give a track its own; the tracks, to drag into
+order, with where each one's number came from; and a MusicBrainz lookup,
+made from the browser, that matches a release's track list to the
+album's by title or length and puts the album in its order.  The page
+edits a copy and saves it whole, in one request; art and order chosen
+there stay chosen through later runs of `juke artwork` and `backfill`.
 
 The session is at `/.well-known/jmap`, with one account, `music`, under
 the capability `https://semiotic.systems/jmap/juke`, and a second,

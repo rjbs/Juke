@@ -157,6 +157,8 @@ function render() {
     h("h3", {}, "Tracks"),
     h("p", { class: "sub" }, "Drag a track to put it where it belongs; the numbers follow."),
     trackTable(cs),
+    h("h3", {}, "MusicBrainz"),
+    musicBrainz(),
     saveBar(),
   );
 }
@@ -305,8 +307,14 @@ async function save() {
       if (failed.length) throw new Error(failed.map(f => `${f.type}${f.description ? ": " + f.description : ""}`).join("; "));
     }
     status("");
+    const mb = e.mb;
     editing = null;
     await album(a.id);
+    if (mb?.releases) {
+      editing.mb = mb;
+      if (mb.release?.media) editing.mb.matches = matchTracks(mb.release);
+      render();
+    }
     const fresh = editing.album;
     if (albums.has(a.id)) {
       albums.set(a.id, { ...albums.get(a.id), discs: fresh.discs, artworkBlobId: fresh.artworkBlobId, artworkType: fresh.artworkType });
@@ -315,6 +323,147 @@ async function save() {
     status("");
     alert(`Couldn't save: ${err.message}`);
   }
+}
+
+// ---- MusicBrainz ----
+
+// A lookup asks MusicBrainz for releases with the album's title and
+// artist, straight from the browser (its API allows that), then for the
+// chosen release's track list, and matches each of its tracks to one of
+// the album's by title, or failing that by length.  Applying the result
+// puts the album's tracks in the release's order, on its media; tracks
+// it doesn't match stay on their disc, after the rest.  Nothing is saved
+// until Save.
+const MB = "https://musicbrainz.org/ws/2/";
+
+async function mbFetch(path) {
+  const resp = await fetch(MB + path + (path.includes("?") ? "&" : "?") + "fmt=json", { headers: { Accept: "application/json" } });
+  if (!resp.ok) throw new Error(`MusicBrainz: ${resp.status}`);
+  return resp.json();
+}
+
+function mbQuote(s) { return `"${s.replace(/["\\]/g, " ")}"`; }
+
+function same(s) { return (s || "").toLocaleLowerCase().normalize("NFKD").replace(/[^\p{L}\p{N}]+/gu, ""); }
+
+function musicBrainz() {
+  const mb = editing.mb;
+  if (!mb) {
+    return h("p", {}, h("button", { onclick: lookup }, "Look up this album"),
+      h("span", { class: "sub" }, " for the track order of a release that matches."));
+  }
+  if (mb.error) return h("p", { class: "error" }, mb.error);
+  if (!mb.releases) return h("p", { class: "sub" }, "Asking MusicBrainz…");
+  if (!mb.releases.length) return h("p", { class: "none" }, "No release found with that title and artist.");
+  return [
+    h("table", {},
+      h("thead", {}, h("tr", {}, h("th"), h("th", {}, "Release"), h("th", {}, "Artist"), h("th", {}, "Date"), h("th", {}, "Country"), h("th", { class: "num" }, "Tracks"))),
+      h("tbody", {}, mb.releases.map(r => h("tr", { class: mb.release?.id === r.id ? "playing" : "" },
+        h("td", {}, h("button", { onclick: () => pick(r.id) }, mb.release?.id === r.id ? "Chosen" : "Choose")),
+        h("td", {}, h("a", { href: `https://musicbrainz.org/release/${r.id}`, target: "_blank" }, r.title),
+          r.disambiguation ? h("span", { class: "sub" }, ` (${r.disambiguation})`) : null),
+        h("td", {}, (r["artist-credit"] || []).map(c => c.name + (c.joinphrase || "")).join("")),
+        h("td", { class: "date" }, r.date || ""),
+        h("td", {}, r.country || ""),
+        h("td", { class: "num" }, r["track-count"] ?? ""))))),
+    mb.release && !mb.release.media ? h("p", { class: "sub" }, "Fetching the track list…") : null,
+    mb.release?.media ? releaseTracks(mb.release) : null,
+  ];
+}
+
+async function lookup() {
+  const e = editing, a = e.album;
+  e.mb = {};
+  render();
+  try {
+    let query = `release:${mbQuote(a.title)}`;
+    if (a.artist) query += ` AND artist:${mbQuote(a.artist)}`;
+    const r = await mbFetch(`release/?query=${encodeURIComponent(query)}&limit=8`);
+    if (editing !== e) return;
+    e.mb.releases = r.releases || [];
+  } catch (err) {
+    e.mb.error = err.message;
+  }
+  render();
+}
+
+async function pick(id) {
+  const e = editing;
+  e.mb.release = { id };
+  render();
+  try {
+    const r = await mbFetch(`release/${id}?inc=recordings+artist-credits`);
+    if (editing !== e || e.mb.release?.id !== id) return;
+    e.mb.release = r;
+    e.mb.matches = matchTracks(r);
+  } catch (err) {
+    e.mb.error = err.message;
+  }
+  render();
+}
+
+// matchTracks pairs each track of a release with one of the album's:
+// by title first, then by length within three seconds, each album
+// track to at most one.  It returns, per medium, the album track ids in
+// the release's order, or null for a release track nothing matched.
+function matchTracks(release) {
+  const local = editing.discs.flat().map(id => editing.tracks.get(id));
+  const taken = new Set();
+  const claim = pred => {
+    const t = local.find(t => !taken.has(t.id) && pred(t));
+    if (t) taken.add(t.id);
+    return t ? t.id : null;
+  };
+  return (release.media || []).map(m => (m.tracks || []).map(mt => {
+    const title = same(mt.title || mt.recording?.title);
+    const seconds = (mt.length ?? mt.recording?.length) / 1000;
+    return claim(t => same(t.title) === title)
+      || (seconds ? claim(t => t.duration && Math.abs(t.duration - seconds) <= 3) : null);
+  }));
+}
+
+function releaseTracks(release) {
+  const e = editing;
+  const matched = e.mb.matches.flat().filter(Boolean).length;
+  const total = e.mb.matches.flat().length;
+  const order = e.discs.flat();
+  const inOrder = e.mb.matches.flat().filter(Boolean).every((id, i, ids) => i === 0 || order.indexOf(ids[i - 1]) < order.indexOf(id));
+  return [
+    h("p", { class: "sub" },
+      `${matched} of ${total} release tracks matched`, inOrder && matched ? ", and the album already has them in that order" : "", ". ",
+      h("button", { disabled: !matched || null, onclick: applyOrder }, "Put the album in this order")),
+    h("table", {},
+      h("thead", {}, h("tr", {}, h("th", { class: "num" }, "#"), h("th", {}, "Release track"), h("th", { class: "num" }, "Length"), h("th", {}, "Matches"))),
+      release.media.map((m, mi) => h("tbody", {},
+        release.media.length > 1 && h("tr", { class: "group" }, h("td", { colspan: 4 }, m.title || `${m.format || "Medium"} ${mi + 1}`)),
+        (m.tracks || []).map((mt, ti) => {
+          const id = e.mb.matches[mi][ti];
+          const t = id && e.tracks.get(id);
+          const seconds = (mt.length ?? mt.recording?.length) / 1000;
+          return h("tr", {},
+            h("td", { class: "num" }, mt.number || mt.position),
+            h("td", {}, mt.title || mt.recording?.title),
+            h("td", { class: "num" }, seconds ? `${Math.floor(seconds / 60)}:${String(Math.round(seconds % 60)).padStart(2, "0")}` : ""),
+            h("td", {}, t ? t.title : h("span", { class: "none" }, "nothing here")));
+        })))),
+  ];
+}
+
+// applyOrder arranges the discs as the release has its media, matched
+// tracks first in its order, then whatever was on each disc and matched
+// nothing, in the order it was.
+function applyOrder() {
+  const e = editing;
+  const placed = new Set(e.mb.matches.flat().filter(Boolean));
+  const discs = e.mb.matches.map(ids => ids.filter(Boolean));
+  e.discs.forEach((ids, di) => {
+    const rest = ids.filter(id => !placed.has(id));
+    while (discs.length <= di) discs.push([]);
+    discs[Math.min(di, discs.length - 1)].push(...rest);
+  });
+  while (discs.length > 1 && !discs[discs.length - 1].length) discs.pop();
+  e.discs = discs;
+  render();
 }
 
 return { list, album, leaving };
