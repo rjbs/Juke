@@ -103,6 +103,10 @@ struct PlayerBar: View {
   var body: some View {
     if player.current != nil || player.failure != nil {
       HStack(spacing: 16) {
+        if let track = player.current {
+          ArtworkView(library: player.library, blobId: player.library.artworkBlobId(for: track), size: 40, cornerRadius: 4)
+            .onTapGesture { showingNowPlaying = true }
+        }
         // Tapping what's playing opens the whole player.  A gesture, not
         // a Button, so the texts stay separate for accessibility, and for
         // the UI tests that read them.  -- claude, 2026-10-25

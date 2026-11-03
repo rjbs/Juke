@@ -18,16 +18,19 @@ struct AlbumListView: View {
   var body: some View {
     List(shown) { album in
       NavigationLink(value: album.id) {
-        VStack(alignment: .leading) {
-          Text(album.title)
-          HStack(spacing: 4) {
-            if library.offline.isKept(album) {
-              Image(systemName: "arrow.down.circle.fill").accessibilityLabel("Kept offline")
+        HStack(spacing: 12) {
+          ArtworkView(library: library, blobId: album.artworkBlobId, size: 44)
+          VStack(alignment: .leading) {
+            Text(album.title)
+            HStack(spacing: 4) {
+              if library.offline.isKept(album) {
+                Image(systemName: "arrow.down.circle.fill").accessibilityLabel("Kept offline")
+              }
+              Text(album.artist ?? "Compilation")
             }
-            Text(album.artist ?? "Compilation")
+            .font(.caption)
+            .foregroundStyle(.secondary)
           }
-          .font(.caption)
-          .foregroundStyle(.secondary)
         }
       }
     }
@@ -58,15 +61,18 @@ struct AlbumView: View {
     let all = discs.flatMap(\.self)
     List {
       Section {
-        VStack(alignment: .leading, spacing: 4) {
-          Text(album.artist ?? "Compilation").foregroundStyle(.secondary)
-          let missing = all.count(where: { !$0.isPlayable })
-          Text("\(all.count) tracks" + (missing > 0 ? ", \(missing) missing" : ""))
-            .font(.caption)
-            .foregroundStyle(.secondary)
-          OfflineStatus(offline: library.offline, kept: library.offline.isKept(album), tracks: all)
-            .font(.caption)
-            .foregroundStyle(.secondary)
+        HStack(alignment: .top, spacing: 12) {
+          ArtworkView(library: library, blobId: album.artworkBlobId, size: 120, cornerRadius: 8)
+          VStack(alignment: .leading, spacing: 4) {
+            Text(album.artist ?? "Compilation").foregroundStyle(.secondary)
+            let missing = all.count(where: { !$0.isPlayable })
+            Text("\(all.count) tracks" + (missing > 0 ? ", \(missing) missing" : ""))
+              .font(.caption)
+              .foregroundStyle(.secondary)
+            OfflineStatus(offline: library.offline, kept: library.offline.isKept(album), tracks: all)
+              .font(.caption)
+              .foregroundStyle(.secondary)
+          }
         }
       }
       ForEach(Array(discs.enumerated()), id: \.offset) { d, tracks in

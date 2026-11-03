@@ -47,17 +47,20 @@ struct ArtistView: View {
     let albums = artist.albumIds.compactMap { library.albums[$0] }
     List(albums) { album in
       NavigationLink(value: album.id) {
-        VStack(alignment: .leading) {
-          Text(album.title)
-          HStack(spacing: 4) {
-            if library.offline.isKept(album) {
-              Image(systemName: "arrow.down.circle.fill").accessibilityLabel("Kept offline")
+        HStack(spacing: 12) {
+          ArtworkView(library: library, blobId: album.artworkBlobId, size: 44)
+          VStack(alignment: .leading) {
+            Text(album.title)
+            HStack(spacing: 4) {
+              if library.offline.isKept(album) {
+                Image(systemName: "arrow.down.circle.fill").accessibilityLabel("Kept offline")
+              }
+              let count = album.discs.reduce(0) { $0 + $1.trackIds.count }
+              Text(count == 1 ? "1 track" : "\(count) tracks")
             }
-            let count = album.discs.reduce(0) { $0 + $1.trackIds.count }
-            Text(count == 1 ? "1 track" : "\(count) tracks")
+            .font(.caption)
+            .foregroundStyle(.secondary)
           }
-          .font(.caption)
-          .foregroundStyle(.secondary)
         }
       }
     }

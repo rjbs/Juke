@@ -66,16 +66,9 @@ struct NowPlayingView: View {
     #endif
   }
 
-  // Album art is #3; until then, a placeholder holds its place.
   private var artwork: some View {
-    RoundedRectangle(cornerRadius: 12)
-      .fill(.quaternary)
-      .aspectRatio(1, contentMode: .fit)
-      .frame(maxWidth: 260)
-      .overlay {
-        Image(systemName: "music.note").font(.system(size: 64)).foregroundStyle(.secondary)
-      }
-      .accessibilityHidden(true)
+    ArtworkView(library: player.library, blobId: player.current.flatMap { player.library.artworkBlobId(for: $0) },
+                maxWidth: 260, cornerRadius: 12)
   }
 
   private var titles: some View {
