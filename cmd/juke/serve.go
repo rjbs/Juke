@@ -56,7 +56,11 @@ func runServe(ctx context.Context, args []string) error {
 	})
 	mux := http.NewServeMux()
 	mux.Handle("/", srv.Handler())
-	mux.Handle("GET /{$}", web.Handler(*webDir))
+	page := web.Handler(*webDir)
+	mux.Handle("GET /{$}", page)
+	for _, name := range web.Files {
+		mux.Handle("GET /"+name, page)
+	}
 
 	// Each listener runs until it fails, and the first failure ends the
 	// server. -- claude, 2026-11-01

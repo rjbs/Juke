@@ -1,27 +1,32 @@
-// Package web serves Juke's review page: a single HTML file that browses,
-// plays and rates the library through the server's own JMAP API.
+// Package web serves Juke's review page: a page that browses, plays and
+// rates the library through the server's own JMAP API, and a review tab
+// for putting albums right.
 package web
 
 import (
-	_ "embed"
+	"embed"
 	"net/http"
-	"path/filepath"
+	"os"
 )
 
-//go:embed index.html
-var index []byte
+//go:embed index.html juke.css juke.js review.js
+var files embed.FS
 
-// Handler serves the page.  With a non-empty dir, the page is read from
-// dir/index.html on every request instead, so it can be edited without a
-// rebuild.
+// Files are the page's files besides the page itself, which the server
+// routes to the handler by name.
+var Files = []string{"juke.css", "juke.js", "review.js"}
+
+// Handler serves the page and its files.  With a non-empty dir, they are
+// read from dir on every request instead, so they can be edited without
+// a rebuild.
 func Handler(dir string) http.Handler {
+	fsys := http.FS(files)
+	if dir != "" {
+		fsys = http.FS(os.DirFS(dir))
+	}
+	serve := http.FileServer(fsys)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-cache")
-		if dir != "" {
-			http.ServeFile(w, r, filepath.Join(dir, "index.html"))
-			return
-		}
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.Write(index)
+		serve.ServeHTTP(w, r)
 	})
 }
