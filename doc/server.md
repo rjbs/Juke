@@ -77,6 +77,17 @@ useful for testing.
 There is no authentication yet.  Keep it on localhost until that is
 decided for the tailnet.
 
+## Deploying
+
+The server runs on a Linux host on the tailnet under systemd, as the
+`juke` user; `deploy/juke.service` says how it is installed and where
+things live.  An upgrade is `make deploy`: cross-compile, copy the
+binary over, install it and restart the service.  A schema change needs
+nothing more, since the store applies its migrations on the first open
+by a binary that knows them, but take a snapshot of the database first,
+because an older binary refuses a newer schema and there is no way
+back but the snapshot.
+
 ## What is served
 
 - **Track, Album, Playlist and SmartPlaylist** each have `/get`,
