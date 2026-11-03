@@ -279,12 +279,23 @@ final class JukeUITests: XCTestCase {
 
   /// Long-presses the row for a track and picks from its context menu.
   func contextMenu(on track: String, choose item: String, file: StaticString = #filePath, line: UInt = #line) {
-    let row = app.buttons.containing(.staticText, identifier: track).firstMatch
+    let row = trackRow(track)
     XCTAssertTrue(row.waitForExistence(timeout: 10), "no row for \(track)", file: file, line: line)
     row.press(forDuration: 1)
     let choice = app.buttons[item]
     XCTAssertTrue(choice.waitForExistence(timeout: 5), "no \(item) in the menu", file: file, line: line)
     choice.tap()
+  }
+
+  /// A track's row, scrolled to if it's below the fold: a List builds
+  /// its rows lazily, so one far enough down doesn't exist until it's
+  /// near.
+  func trackRow(_ track: String) -> XCUIElement {
+    let row = app.buttons.containing(.staticText, identifier: track).firstMatch
+    for _ in 0..<8 where !row.exists {
+      app.swipeUp()
+    }
+    return row
   }
 
   func checkPlaying(_ track: String, file: StaticString = #filePath, line: UInt = #line) {
@@ -350,7 +361,7 @@ final class JukeUITests: XCTestCase {
   /// player bar shows that track playing.
   func checkPlays(album: String, track: String, file: StaticString = #filePath, line: UInt = #line) throws {
     openAlbum(album, file: file, line: line)
-    let row = app.buttons.containing(.staticText, identifier: track).firstMatch
+    let row = trackRow(track)
     XCTAssertTrue(row.waitForExistence(timeout: 10), "no row for \(track)", file: file, line: line)
     row.tap()
 
