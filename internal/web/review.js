@@ -45,7 +45,7 @@ async function list() {
   const p = listParams();
   const filter = p.issue ? { issue: p.issue } : { hasIssues: true };
   const [q, g] = await call(
-    ["Album/query", { filter, sort: [{ property: "title" }], position: p.pos, limit: PAGE, calculateTotal: true }],
+    ["Album/query", { filter, sort: [{ property: "artist" }, { property: "title" }], position: p.pos, limit: PAGE, calculateTotal: true }],
     ["Album/get", { ids: ["#", 0, "Album/query", "/ids"], properties: ["title", "artist", "issues"] }],
   );
   const which = h("select", { onchange: ev => goList({ issue: ev.target.value, pos: 0 }) },

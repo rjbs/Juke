@@ -98,6 +98,10 @@ func TestReviewIssuesAndCandidates(t *testing.T) {
 	checkEqual(t, "one issue", query(map[string]any{"issue": "artTie"}), []string{devo})
 	checkEqual(t, "any issue", query(map[string]any{"hasIssues": true}), []string{queen, al, devo})
 	checkEqual(t, "no issue", query(map[string]any{"hasIssues": false}), []string{})
+	byArtist := f.call("Album/query", map[string]any{"filter": map[string]any{"hasIssues": true},
+		"sort": []map[string]any{{"property": "artist"}, {"property": "title"}}})
+	checkEqual(t, "by artist, the unnamed last", idList(byArtist["ids"]), []string{queen, al, devo})
+	checkMethodError(t, f, "Album/query", map[string]any{"sort": []map[string]any{{"property": "rating"}}}, "unsupportedSort")
 	r := f.calls("Album/query", map[string]any{"filter": map[string]any{"issue": "badHair"}})[0]
 	checkEqual(t, "an unknown issue", r.Args["type"], "unsupportedFilter")
 }

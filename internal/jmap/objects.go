@@ -676,17 +676,42 @@ func queryByTitle(table string) func(ctx context.Context, s *Server, args *query
 }
 
 // queryAlbums queries albums, filtered by their issues if at all, and
-// sorted like the other title-only types.
+// sorted by title or by artist.
 func queryAlbums(ctx context.Context, s *Server, args *queryArgs) ([]string, error) {
 	where, err := albumWhere(ctx, args.Filter)
 	if err != nil {
 		return nil, err
 	}
-	order, err := titleOrder(args)
+	order, err := albumOrder(args)
 	if err != nil {
 		return nil, err
 	}
 	return queryIDs(ctx, s.store.DB, "SELECT id FROM album"+where+" ORDER BY "+order)
+}
+
+// albumOrder is the ORDER BY for Album/query: by title, or by artist
+// with the unnamed albums last either way, as the web page lists them;
+// by id when no sort is given.
+func albumOrder(args *queryArgs) (string, error) {
+	if len(args.Sort) == 0 {
+		return "id", nil
+	}
+	var parts []string
+	for _, c := range args.Sort {
+		dir := " ASC"
+		if !c.ascending() {
+			dir = " DESC"
+		}
+		switch c.Property {
+		case "title":
+			parts = append(parts, "juke_fold(title)"+dir)
+		case "artist":
+			parts = append(parts, "(artist IS NULL)", "juke_fold(artist)"+dir)
+		default:
+			return "", errorOf("unsupportedSort", "cannot sort on %q", c.Property)
+		}
+	}
+	return strings.Join(parts, ", ") + ", id", nil
 }
 
 // titleOrder is the ORDER BY for a type sorted only by title, or by id

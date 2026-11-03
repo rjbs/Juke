@@ -122,8 +122,9 @@ is accepting the album's; and `unnumbered` once `discs` has been set,
 since the order is then the user's.
 
 `Album/query` takes a filter, `{issue: "artTie"}` for one issue or
-`{hasIssues: true}` for any (false for none); the sort is by title as
-before.
+`{hasIssues: true}` for any (false for none); the sort is by `title`,
+or by `artist`, which puts the albums with none last in either
+direction, as the web page's album list does.
 
 `Album/set` with `artworkBlobId` gives the album that image, which must
 be one the server has stored (any `artworkCandidates` entry, or another
