@@ -75,7 +75,7 @@ A smart playlist shows the tracks its rule matches now, and the rule
 itself on request.  Smart playlists are made and edited there too
 (`internal/web/smart.js`): the rule is a tree of groups ("all", "any" or
 "none" of these) and conditions (a field, an operator, a value), with
-the sort and the caps beneath, and the tracks it matches now beneath
+the sort and any limits beneath, and the tracks it matches now beneath
 that, re-run as the rule is edited, so the server's own refusals are the
 validation.  A negated condition says that it also matches tracks with
 no value, as the server's `NOT` does; "is any of" and "is none of" take

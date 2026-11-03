@@ -180,6 +180,28 @@ const SORTS = [
 
 function seed() { return crypto.randomUUID(); }
 
+// A limit is one "at most N units" row.  The three the server knows are
+// stored as separate properties; the page keeps them as a list so that
+// none is shown until asked for.  Two of one unit save as the smaller.
+const UNITS = [
+  { key: "tracks", property: "limit", scale: 1 },
+  { key: "MB", property: "limitBytes", scale: 1024 * 1024 },
+  { key: "minutes", property: "limitSeconds", scale: 60 },
+];
+
+function limitsOf(pl) {
+  return UNITS.filter(u => pl?.[u.property] != null).map(u => ({ unit: u.key, value: pl[u.property] / u.scale }));
+}
+
+function limitProperties(limits) {
+  const out = {};
+  for (const u of UNITS) {
+    const values = limits.filter(l => l.unit === u.key && l.value > 0).map(l => Math.round(l.value * u.scale));
+    out[u.property] = values.length ? Math.min(...values) : null;
+  }
+  return out;
+}
+
 function comparator(c) {
   const out = { property: c.property };
   if (c.isAscending === false) out.isAscending = false;
@@ -216,7 +238,7 @@ function rule() {
     title: e.title,
     filter: !t.items.length ? null : t.items.length === 1 && t.op !== "none" ? compile(t.items[0]) : compile(t),
     sort: e.sort.map(comparator),
-    limit: e.limit, limitBytes: e.limitBytes, limitSeconds: e.limitSeconds,
+    ...limitProperties(e.limits),
   };
 }
 
@@ -238,7 +260,7 @@ async function open(pl, { id = pl?.id ?? null, title = pl?.title ?? "" } = {}) {
     title,
     tree: pl ? parse(pl.filter) : group("all", [newRow()]),
     sort: (pl?.sort ?? []).map(c => ({ ...c })),
-    limit: pl?.limit ?? null, limitBytes: pl?.limitBytes ?? null, limitSeconds: pl?.limitSeconds ?? null,
+    limits: limitsOf(pl),
     pos: 0, preview: null, error: null,
     lists: [...p.list, ...s.list.filter(x => x.id !== id).map(x => ({ ...x, smart: true }))].sort(byTitle),
   };
@@ -262,8 +284,8 @@ function render() {
       h("div", { class: "rule" }, groupView(e.tree, null)),
       h("h3", {}, "Order"),
       sortView(),
-      h("h3", {}, "Caps"),
-      capsView(),
+      h("h3", {}, "Limits"),
+      limitsView(),
     ),
     h("h3", {}, "Preview"),
     h("div", { class: "preview" }, previewView()),
@@ -390,20 +412,28 @@ function sortView() {
     !e.sort.length && h("div", { class: "hint" }, "No order: tracks come as the server finds them."));
 }
 
-function capsView() {
+function limitsView() {
   const e = editing;
-  const cap = (label, get, set, unit, scale = 1) => h("div", { class: "row" },
-    h("label", {}, label),
-    h("input", { type: "number", min: 0, step: "any", value: get() == null ? "" : get() / scale, oninput: ev => {
-      const n = Number(ev.target.value);
-      set(ev.target.value === "" || !(n > 0) ? null : Math.round(n * scale));
-      changed(false);
-    } }), ` ${unit}`);
+  const add = () => {
+    const unit = UNITS.find(u => !e.limits.some(l => l.unit === u.key)) ?? UNITS[0];
+    e.limits.push({ unit: unit.key, value: null });
+    changed();
+  };
   return h("div", {},
-    cap("At most", () => e.limit, v => { e.limit = v; }, "tracks"),
-    cap("At most", () => e.limitBytes, v => { e.limitBytes = v; }, "MB", 1024 * 1024),
-    cap("At most", () => e.limitSeconds, v => { e.limitSeconds = v; }, "minutes", 60),
-    h("div", { class: "hint" }, "Caps cut the sorted list; a track with no audio or no known length counts as nothing toward MB and minutes."));
+    e.limits.map((l, i) => h("div", { class: "row" },
+      h("label", {}, "At most"),
+      h("input", { type: "number", min: 0, step: "any", value: l.value ?? "", oninput: ev => {
+        const n = Number(ev.target.value);
+        l.value = ev.target.value === "" || !(n > 0) ? null : n;
+        changed(false);
+      } }),
+      h("select", { onchange: ev => { l.unit = ev.target.value; changed(); } },
+        UNITS.map(u => h("option", { value: u.key, selected: l.unit === u.key || null }, u.key))),
+      h("button", { class: "x", title: "Remove", onclick: () => { e.limits.splice(i, 1); changed(); } }, "×"))),
+    h("div", { class: "adders" }, h("button", { onclick: add }, "+ Limit")),
+    e.limits.length
+      ? h("div", { class: "hint" }, "A limit cuts the sorted list; a track with no audio or no known length counts as nothing toward MB and minutes.")
+      : h("div", { class: "hint" }, "No limit: every matching track."));
 }
 
 // ---- Preview ----
@@ -414,16 +444,16 @@ function schedulePreview(delay = 400) {
 }
 
 // runPreview runs the rule as it stands, for the page shown.  A rule
-// with a track cap is paged within it; the other caps the server
+// with a track limit is paged within it; the other limits the server
 // applies itself, with total and position of the capped list.  A
 // stale answer, from before a later edit, is dropped.
 async function runPreview() {
   const e = editing;
   if (!e) return;
   const seq = ++previewSeq;
-  let args;
+  let args, r;
   try {
-    const r = rule();
+    r = rule();
     args = { filter: r.filter, sort: r.sort, position: e.pos, limit: PAGE, calculateTotal: true };
     if (r.limit != null) args.limit = Math.max(0, Math.min(PAGE, r.limit - e.pos));
     if (r.limitBytes != null) args.limitBytes = r.limitBytes;
@@ -438,8 +468,8 @@ async function runPreview() {
     const [q, g] = await jmap(["Track/query", args], ["Track/get", { ids: ["#", 0, "Track/query", "/ids"] }]);
     if (seq !== previewSeq) return;
     g.list.forEach(t => tracks.set(t.id, t));
-    const total = e.limit != null ? Math.min(q.total, e.limit) : q.total;
-    e.preview = { ids: q.ids, total, matched: q.total };
+    const total = r.limit != null ? Math.min(q.total, r.limit) : q.total;
+    e.preview = { ids: q.ids, total, matched: q.total, limit: r.limit };
     e.error = null;
   } catch (err) {
     if (seq !== previewSeq) return;
@@ -458,10 +488,10 @@ function previewView() {
   const e = editing;
   if (e.error) return h("p", { class: "error" }, e.error);
   if (!e.preview) return h("p", { class: "sub" }, "Running the rule…");
-  const { ids, total, matched } = e.preview;
+  const { ids, total, matched, limit } = e.preview;
   const list = ids.map(id => tracks.get(id));
   const go = pos => { e.pos = pos; runPreview(); };
-  const cut = e.limit != null && matched > e.limit ? ` (the first ${e.limit} of ${matched} matching)` : "";
+  const cut = limit != null && matched > limit ? ` (the first ${limit} of ${matched} matching)` : "";
   return [
     h("div", { class: "sub" }, `${total} tracks${cut}`, e.running ? " · running…" : ""),
     pager(e.pos, total, go),
