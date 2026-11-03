@@ -196,7 +196,9 @@ func (t *albumTrack) name(names map[string]string) string {
 }
 
 // numberSource says what gave the track the number it has, or "" when
-// that can't be told: a gap track the catalog doesn't number.
+// that can't be told: a gap track the catalog doesn't number, or any
+// track the tags and filename don't when there is no catalog to ask,
+// since the catalog may have numbered it at import.
 func (t *albumTrack) numberSource(catalogNumbers map[catalogKey]int, names map[string]string) string {
 	catalog := catalogNumbers[catalogKey{title: t.title, album: t.album}]
 	if t.path == "" {
@@ -213,6 +215,9 @@ func (t *albumTrack) numberSource(catalogNumbers map[catalogKey]int, names map[s
 	}
 	if _, n := tags.NumbersFromName(t.name(names)); n == t.position {
 		return "file"
+	}
+	if catalogNumbers == nil {
+		return ""
 	}
 	return "none"
 }

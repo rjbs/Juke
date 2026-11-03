@@ -144,3 +144,16 @@ func TestNumbers(t *testing.T) {
 		map[string]string{"One": "1 tags", "Four": "4 file"},
 		NumbersReport{Placed: 1, Albums: 1, Sourced: 2})
 }
+
+// Without a catalog, a track the tags and filename don't number is left
+// unsaid rather than called numbered from nowhere, since the catalog may
+// have numbered it at import.
+func TestNumberSourceWithoutCatalog(t *testing.T) {
+	plain := &albumTrack{title: "Plain", album: "Record", path: "Record/Plain.mp3", position: 3, raw: map[string]any{}}
+	if got := plain.numberSource(nil, nil); got != "" {
+		t.Errorf("without a catalog: %q, want unsaid", got)
+	}
+	if got := plain.numberSource(map[catalogKey]int{}, nil); got != "none" {
+		t.Errorf("with a catalog that doesn't know it: %q, want none", got)
+	}
+}
