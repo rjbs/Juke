@@ -130,6 +130,9 @@ choice is the whole album's; the tracks whose `artworkBlobId` changed
 appear in the next `Track/changes`.  `Track/set` with `artworkBlobId`
 then gives one track an image of its own again, or null to clear it.
 Art chosen either way is left alone by later runs of `juke artwork`.
+An image from elsewhere is uploaded first, at the session's `uploadUrl`,
+and the blob id that answers is an `artworkBlobId`; see
+[server](server.md).
 
 ## Playlist
 

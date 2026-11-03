@@ -60,6 +60,11 @@ beside each album (`folder_artwork_id`), and whether the choice was a
 tie; those take no new modseq, since no playing client sees them.  See
 [object types](types.md) for the review capability.
 
+An image from outside the library is uploaded, which stores it like any
+other under its content id, and then chosen the same way.  Images
+nothing names any more, uploads nobody set among them, are removed by
+`juke gc`; see [server](server.md).
+
 ## Storage and serving
 
 Each distinct image is stored once, as a file under `artwork/` in the

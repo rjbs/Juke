@@ -78,9 +78,27 @@ album could have, side by side with the tracks carrying each, to choose
 one as the album's or give a track its own; the tracks, to drag into
 order, with where each one's number came from; and a MusicBrainz lookup,
 made from the browser, that matches a release's track list to the
-album's by title or length and puts the album in its order.  The page
-edits a copy and saves it whole, in one request; art and order chosen
-there stay chosen through later runs of `juke artwork` and `backfill`.
+album's by title or length and puts the album in its order.  An image
+dropped on the page, or picked, is uploaded and chosen as the album's.
+The page edits a copy and saves it whole, in one request; art and order
+chosen there stay chosen through later runs of `juke artwork` and
+`backfill`.
+
+## Uploads
+
+The JMAP upload endpoint takes images only, up to `maxSizeUpload` in
+the session (20 MB), and puts each straight into the artwork store: the
+blob id it answers with is the image's content id, so the same picture
+uploaded twice is one image, and the id serves as `artworkBlobId` in
+`Album/set` or `Track/set` at once.  Anything but an image is refused
+with 415.  Audio to import will need a staging area of its own.
+
+    var/juke gc --db var/sample.sqlite --library sample [--grace 24h]
+
+removes the images nothing names: no album's art or folder image, no
+track's art or own picture.  An upload is kept for the grace period, a
+day by default, since the client that sent it may be about to set it.
+Run it by hand now and then; it is safe while the server is up.
 
 The session is at `/.well-known/jmap`, with one account, `music`, under
 the capability `https://semiotic.systems/jmap/juke`, and a second,

@@ -99,7 +99,7 @@ async function album(id) {
       t.list.forEach(t => { ts.set(t.id, t); tracks.set(t.id, t); });
     }
     editing = {
-      id, hash: `#review/${id}`, album: a, tracks: ts,
+      id, hash: `#review/${id}`, album: a, tracks: ts, uploads: [],
       discs: a.discs.map(d => [...d.trackIds]),
       artwork: a.artworkBlobId,
       trackArt: new Map(ids.map(t => [t, ts.get(t).artworkBlobId])),
@@ -127,11 +127,15 @@ function revert() {
   for (const id of e.trackArt.keys()) e.trackArt.set(id, e.tracks.get(id).artworkBlobId);
 }
 
-// candidates are the album's, numbered, with the art it has now added
-// in front if it came from somewhere else.
+// candidates are the album's, numbered, then anything uploaded on this
+// page, with the art it has now added in front if it came from
+// somewhere else.
 function candidates() {
   const a = editing.album;
   const out = a.artworkCandidates.map((c, i) => ({ ...c, n: i + 1 }));
+  for (const u of editing.uploads) {
+    if (!out.some(c => c.blobId === u.blobId)) out.push({ ...u, trackIds: [], uploaded: true, n: out.length + 1 });
+  }
   if (a.artworkBlobId && !out.some(c => c.blobId === a.artworkBlobId)) {
     out.unshift({ blobId: a.artworkBlobId, type: a.artworkType, trackIds: [], elsewhere: true, n: 0 });
   }
@@ -139,7 +143,53 @@ function candidates() {
 }
 
 function candidateName(c) {
-  return c.elsewhere ? "Chosen before" : c.folder ? `Picture ${c.n}, the file beside the tracks` : `Picture ${c.n}`;
+  if (c.elsewhere) return "Chosen before";
+  if (c.uploaded) return `Picture ${c.n}, uploaded`;
+  return c.folder ? `Picture ${c.n}, the file beside the tracks` : `Picture ${c.n}`;
+}
+
+// well is where an image file is dropped, or picked, to be uploaded
+// and chosen as the album's art.
+function well() {
+  const input = h("input", { type: "file", accept: "image/*", onchange: ev => { if (ev.target.files[0]) upload(ev.target.files[0]); } });
+  const el = h("div", { class: "well" },
+    h("div", {}, "Drop an image here to use it, or ", h("label", {}, "choose a file", input)));
+  el.addEventListener("dragover", ev => {
+    if (![...ev.dataTransfer.types].includes("Files")) return;
+    ev.preventDefault();
+    el.classList.add("over");
+  });
+  el.addEventListener("dragleave", () => el.classList.remove("over"));
+  el.addEventListener("drop", ev => {
+    el.classList.remove("over");
+    const file = ev.dataTransfer.files[0];
+    if (!file) return;
+    ev.preventDefault();
+    upload(file);
+  });
+  return el;
+}
+
+// upload sends an image to the server, which stores it as artwork and
+// answers with its id, and chooses it for the album.
+async function upload(file) {
+  const e = editing;
+  status(`uploading ${file.name}…`);
+  try {
+    const resp = await fetch(session.uploadUrl.replace("{accountId}", encodeURIComponent(accountId)), {
+      method: "POST", headers: { "Content-Type": file.type || "application/octet-stream" }, body: file,
+    });
+    const text = await resp.text();
+    if (!resp.ok) throw new Error(text.trim() || `${resp.status}`);
+    const r = JSON.parse(text);
+    if (editing !== e) return;
+    if (!e.uploads.some(u => u.blobId === r.blobId)) e.uploads.push({ blobId: r.blobId, type: r.type });
+    status("");
+    choose(r.blobId);
+  } catch (err) {
+    status("");
+    alert(`Couldn't upload ${file.name}: ${err.message}`);
+  }
 }
 
 function render() {
@@ -151,9 +201,7 @@ function render() {
       a.artist || "Compilation", " · ", issueTags(a.issues), " · ",
       h("a", { href: `#album/${a.id}` }, "Open in Albums")),
     h("h3", {}, "Art"),
-    cs.length
-      ? h("div", { class: "cards" }, cs.map(card), noArtCard())
-      : h("p", { class: "none" }, "No pictures in the files, or beside them."),
+    h("div", { class: "cards" }, cs.map(card), noArtCard(), well()),
     h("h3", {}, "Tracks"),
     h("p", { class: "sub" }, "Drag a track to put it where it belongs; the numbers follow."),
     trackTable(cs),
@@ -180,7 +228,7 @@ function card(c) {
       h("div", {}, h("b", {}, candidateName(c))),
       names.length
         ? h("div", { title: names.join("\n") }, `In ${names.length} file${names.length === 1 ? "" : "s"}: `, names.join(", "))
-        : c.folder ? null : h("div", {}, "In no file here")),
+        : c.folder || c.uploaded ? null : h("div", {}, "In no file here")),
     h("button", { disabled: chosen || null, onclick: () => choose(c.blobId) }, chosen ? "The album's art" : "Use for the album"));
 }
 
@@ -307,9 +355,10 @@ async function save() {
       if (failed.length) throw new Error(failed.map(f => `${f.type}${f.description ? ": " + f.description : ""}`).join("; "));
     }
     status("");
-    const mb = e.mb;
+    const mb = e.mb, uploads = e.uploads;
     editing = null;
     await album(a.id);
+    editing.uploads = uploads;
     if (mb?.releases) {
       editing.mb = mb;
       if (mb.release?.media) editing.mb.matches = matchTracks(mb.release);
