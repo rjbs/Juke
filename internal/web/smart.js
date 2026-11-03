@@ -510,12 +510,20 @@ function saveBar() {
   return h("div", { class: "savebar" },
     h("button", { disabled: !dirty || null, onclick: save }, e.id ? "Save changes" : "Create playlist"),
     e.id && h("button", { onclick: destroy }, "Delete"),
-    h("button", { onclick: () => { editing = null; location.hash = e.back ? `#smart/${e.back}` : "#playlists"; } }, "Cancel"),
+    h("button", { onclick: () => leaveFor(e.back ? `#smart/${e.back}` : "#playlists") }, "Cancel"),
     h("span", { class: dirty ? "dirty" : "sub" }, problem ? problem : dirty ? "Unsaved changes" : "Nothing to save"));
 }
 
 // save creates or updates the playlist and opens it.  The server may
 // answer with a seed it chose, but the page always sends its own.
+// leaveFor closes the editor and shows a hash.  The editor for a stored
+// playlist shares its hash with the playlist's page, so when the hash is
+// already there, setting it would fire nothing; the router is called.
+function leaveFor(hash) {
+  editing = null;
+  if (location.hash === hash) route(); else location.hash = hash;
+}
+
 async function save() {
   const e = editing;
   const props = rule();
@@ -525,9 +533,7 @@ async function save() {
     const failed = Object.values(r.notCreated || {}).concat(Object.values(r.notUpdated || {}));
     if (failed.length) throw new Error(failed.map(f => `${f.type}${f.description ? ": " + f.description : ""}`).join("; "));
     status("");
-    const id = e.id || r.created.s.id;
-    editing = null;
-    if (location.hash === `#smart/${id}`) route(); else location.hash = `#smart/${id}`;
+    leaveFor(`#smart/${e.id || r.created.s.id}`);
   } catch (err) {
     status("");
     alert(`Couldn't save: ${err.message}`);
@@ -541,8 +547,7 @@ async function destroy() {
     const [r] = await jmap(["SmartPlaylist/set", { destroy: [e.id] }]);
     const failed = r.notDestroyed?.[e.id];
     if (failed) throw new Error(`${failed.type}${failed.description ? ": " + failed.description : ""}`);
-    editing = null;
-    location.hash = "#playlists";
+    leaveFor("#playlists");
   } catch (err) {
     alert(`Couldn't delete: ${err.message}`);
   }
