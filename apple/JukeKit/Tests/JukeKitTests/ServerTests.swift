@@ -348,3 +348,25 @@ func smartPlaylists() async throws {
     try await library.engine.subscriptions().allSatisfy { $0.id != playlist.subscriptionId }
   }
 }
+
+// A smart playlist without a limit of its own gets every track its rule
+// matches, however many: the engine pages the query past the server's
+// cap on one answer (5,000 ids).  This proves it only when the test
+// server's library is bigger than the cap; the trial library is.
+@Test(.enabled(if: testServer != nil))
+@MainActor
+func smartPlaylistPastTheCap() async throws {
+  let created = try await jmap("SmartPlaylist/set", ["create": ["s": [
+    "title": "JukeKit paging \(UUID())", "filter": ["hasAudio": true], "sort": [["property": "title"]],
+  ]]])
+  let id = try #require(((created["created"] as? [String: Any])?["s"] as? [String: Any])?["id"] as? String)
+  let library = try await openLibrary()
+  defer { library.stop() }
+  let playable = library.tracks.values.filter(\.isPlayable).count
+  try await eventually("the rule's result", within: 60) { library.smartResults[id] != nil }
+  let result = try #require(library.smartResults[id])
+  #expect(result.total == playable)
+  #expect(result.trackIds.count == playable, "got \(result.trackIds.count) of \(playable)")
+  #expect(Set(result.trackIds).count == result.trackIds.count, "a track repeated across pages")
+  _ = try await jmap("SmartPlaylist/set", ["destroy": [id]])
+}
