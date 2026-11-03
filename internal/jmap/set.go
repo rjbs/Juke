@@ -357,10 +357,12 @@ var playlistSetter = &setter{
 // albumProps is an Album create or patch, decoded.  A false has* or nil
 // field was not given.
 type albumProps struct {
-	title     *string
-	hasArtist bool
-	artist    *string
-	discs     []store.Disc
+	title      *string
+	hasArtist  bool
+	artist     *string
+	discs      []store.Disc
+	hasArtwork bool
+	artwork    *string
 }
 
 func decodeAlbumProps(ctx context.Context, tx *sql.Tx, props map[string]json.RawMessage) (albumProps, error) {
@@ -393,13 +395,30 @@ func decodeAlbumProps(ctx context.Context, tx *sql.Tx, props map[string]json.Raw
 				continue
 			}
 			p.discs = discs
+		case "artworkBlobId":
+			art, ok := nullableStringValue(raw)
+			if ok && !reviewing(ctx) {
+				return p, invalidProperties("artworkBlobId is set only under the review capability", []string{name})
+			}
+			if ok && art != nil {
+				found, err := artworkExists(ctx, tx, *art)
+				if err != nil {
+					return p, err
+				}
+				ok = found
+			}
+			if !ok {
+				bad = append(bad, name)
+				continue
+			}
+			p.hasArtwork, p.artwork = true, art
 		default:
 			bad = append(bad, name)
 		}
 	}
 	if len(bad) > 0 {
 		return p, invalidProperties(
-			"only title, artist and discs may be set; discs must name tracks, each once", bad)
+			"only title, artist, discs and artworkBlobId may be set; discs must name tracks, each once; artworkBlobId must name a stored image", bad)
 	}
 	return p, nil
 }
@@ -474,6 +493,11 @@ var albumSetter = &setter{
 		if err := store.SetDiscs(ctx, tx, id, p.discs); err != nil {
 			return nil, err
 		}
+		if p.hasArtwork {
+			if err := setAlbumArtwork(ctx, tx, id, p.artwork); err != nil {
+				return nil, err
+			}
+		}
 		created["id"] = id
 		return created, nil
 	},
@@ -497,7 +521,12 @@ var albumSetter = &setter{
 			return nil, err
 		}
 		if p.discs != nil {
-			return nil, store.SetDiscs(ctx, tx, id, p.discs)
+			if err := store.SetDiscs(ctx, tx, id, p.discs); err != nil {
+				return nil, err
+			}
+		}
+		if p.hasArtwork {
+			return nil, setAlbumArtwork(ctx, tx, id, p.artwork)
 		}
 		return nil, nil
 	},
@@ -519,4 +548,25 @@ var albumSetter = &setter{
 		}
 		return store.Destroy(ctx, tx, store.TypeAlbum, id)
 	},
+}
+
+// setAlbumArtwork gives an album the image chosen for it by hand, or none,
+// and takes away its tracks' own images: the choice is for the whole
+// album, and later artwork runs leave an album and tracks so marked
+// alone.  A track with an image of its own can be given one again by
+// Track/set.  Only the tracks whose art changes get a new modseq; the
+// marking itself is nothing a client sees.  -- claude, 2026-11-02
+func setAlbumArtwork(ctx context.Context, tx *sql.Tx, id string, art *string) error {
+	if _, err := tx.ExecContext(ctx, `UPDATE album SET artwork_id = ?, artwork_source = 'user' WHERE id = ?`, art, id); err != nil {
+		return err
+	}
+	modseq, err := store.NextModseq(ctx, tx)
+	if err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, `
+		UPDATE track SET artwork_id = NULL, artwork_source = 'user',
+		  modseq = CASE WHEN artwork_id IS NULL THEN modseq ELSE ? END
+		WHERE album_id = ?`, modseq, id)
+	return err
 }

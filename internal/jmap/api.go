@@ -16,7 +16,22 @@ import (
 const (
 	CapCore = "urn:ietf:params:jmap:core"
 	CapJuke = "https://semiotic.systems/jmap/juke"
+
+	// CapReview is for the review page: what might be wrong with an
+	// album, the pictures it could have, and choosing its art.  A client
+	// not using it sees Album as it is without; see doc/types.md.
+	CapReview = "https://semiotic.systems/jmap/juke/review"
 )
+
+// usingKey carries the request's capabilities in a context, for the
+// methods whose behaviour depends on them.
+type usingKey struct{}
+
+// reviewing says whether the request is using the review capability.
+func reviewing(ctx context.Context) bool {
+	using, _ := ctx.Value(usingKey{}).(map[string]bool)
+	return using[CapReview]
+}
 
 // methodError is a JMAP method-level error, returned as an "error"
 // response in place of the method's own.
@@ -127,7 +142,7 @@ func (s *Server) handleAPI(w http.ResponseWriter, r *http.Request) {
 	}
 	using := map[string]bool{}
 	for _, c := range req.Using {
-		if c != CapCore && c != CapJuke {
+		if c != CapCore && c != CapJuke && c != CapReview {
 			requestError(w, "unknownCapability", "unknown capability "+c, nil)
 			return
 		}
@@ -145,8 +160,9 @@ func (s *Server) handleAPI(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := apiResponse{MethodResponses: []invocation{}, CreatedIDs: req.CreatedIDs, SessionState: epoch}
+	ctx := context.WithValue(r.Context(), usingKey{}, using)
 	for _, call := range req.MethodCalls {
-		resp.MethodResponses = append(resp.MethodResponses, s.invoke(r.Context(), call, using, resp.MethodResponses))
+		resp.MethodResponses = append(resp.MethodResponses, s.invoke(ctx, call, using, resp.MethodResponses))
 	}
 
 	w.Header().Set("Content-Type", "application/json")

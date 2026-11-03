@@ -31,6 +31,7 @@ type fixture struct {
 	library string
 	ids     map[string]string
 	titles  map[string]string
+	using   []string // the capabilities calls use; nil for core and juke
 }
 
 type fixtureTrack struct {
@@ -173,6 +174,10 @@ func (f *fixture) post(body string) (int, map[string]any) {
 // arguments map without accountId gets the fixture's account.
 func (f *fixture) calls(calls ...any) []response {
 	f.t.Helper()
+	using := f.using
+	if using == nil {
+		using = []string{CapCore, CapJuke}
+	}
 	var methodCalls []any
 	for i := 0; i < len(calls); i += 2 {
 		args := calls[i+1].(map[string]any)
@@ -182,7 +187,7 @@ func (f *fixture) calls(calls ...any) []response {
 		methodCalls = append(methodCalls, []any{calls[i], args, string(rune('0' + i/2))})
 	}
 	body, _ := json.Marshal(map[string]any{
-		"using":       []string{CapCore, CapJuke},
+		"using":       using,
 		"methodCalls": methodCalls,
 	})
 	status, out := f.post(string(body))

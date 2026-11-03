@@ -132,14 +132,15 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 				"maxObjectsInSet":       s.cfg.MaxObjectsInSet,
 				"collationAlgorithms":   []string{"i;unicode-casemap"},
 			},
-			CapJuke: map[string]any{},
+			CapJuke:   map[string]any{},
+			CapReview: map[string]any{},
 		},
 		"accounts": map[string]any{
 			s.cfg.AccountID: map[string]any{
 				"name":                s.cfg.Username,
 				"isPersonal":          true,
 				"isReadOnly":          false,
-				"accountCapabilities": map[string]any{CapJuke: map[string]any{}},
+				"accountCapabilities": map[string]any{CapJuke: map[string]any{}, CapReview: map[string]any{}},
 			},
 		},
 		"primaryAccounts": map[string]string{CapJuke: s.cfg.AccountID},

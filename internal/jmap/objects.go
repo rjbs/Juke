@@ -20,8 +20,11 @@ type objectType struct {
 	name       string
 	table      string
 	properties []string
-	load       func(ctx context.Context, q store.Queryer, ids []string) (map[string]object, []string, error)
-	query      func(ctx context.Context, s *Server, args *queryArgs) ([]string, error)
+	// reviewProperties are the properties among them that only a request
+	// using the review capability sees.
+	reviewProperties []string
+	load             func(ctx context.Context, q store.Queryer, ids []string) (map[string]object, []string, error)
+	query            func(ctx context.Context, s *Server, args *queryArgs) ([]string, error)
 
 	// page, if set, answers a query for one page in SQL: the ids from
 	// position, at most limit of them, and the total.  It may decline by
@@ -44,11 +47,12 @@ func (s *Server) objectTypes() []*objectType {
 			page:  queryTracksPage,
 		},
 		{
-			name:       store.TypeAlbum,
-			table:      "album",
-			properties: []string{"id", "title", "artist", "discs", "artworkBlobId", "artworkType"},
-			load:       loadAlbums,
-			query:      queryByTitle("album"),
+			name:             store.TypeAlbum,
+			table:            "album",
+			properties:       []string{"id", "title", "artist", "discs", "artworkBlobId", "artworkType", "issues", "artworkCandidates"},
+			reviewProperties: []string{"issues", "artworkCandidates"},
+			load:             loadAlbums,
+			query:            queryAlbums,
 		},
 		{
 			name:       store.TypePlaylist,
@@ -139,9 +143,12 @@ func (s *Server) get(ctx context.Context, t *objectType, raw json.RawMessage) (a
 	}
 
 	props := t.properties
+	if !reviewing(ctx) {
+		props = without(props, t.reviewProperties)
+	}
 	if args.Properties != nil {
 		known := map[string]bool{}
-		for _, p := range t.properties {
+		for _, p := range props {
 			known[p] = true
 		}
 		props = []string{"id"}
@@ -302,7 +309,7 @@ func loadTracks(ctx context.Context, q store.Queryer, ids []string) (map[string]
 func loadAlbums(ctx context.Context, q store.Queryer, ids []string) (map[string]object, []string, error) {
 	where, args := inClause("id", ids)
 	rows, err := q.QueryContext(ctx, `
-		SELECT id, title, artist, artwork_id, (SELECT mime FROM artwork WHERE id = album.artwork_id)
+		SELECT id, title, artist, artwork_id, (SELECT mime FROM artwork WHERE id = album.artwork_id), `+issueColumns(reviewing(ctx))+`
 		FROM album`+where+` ORDER BY id`, args...)
 	if err != nil {
 		return nil, nil, err
@@ -313,19 +320,42 @@ func loadAlbums(ctx context.Context, q store.Queryer, ids []string) (map[string]
 	for rows.Next() {
 		var id, title string
 		var artist, artworkID, artworkType sql.NullString
-		if err := rows.Scan(&id, &title, &artist, &artworkID, &artworkType); err != nil {
+		flags := make([]bool, len(albumIssues))
+		dest := []any{&id, &title, &artist, &artworkID, &artworkType}
+		for i := range flags {
+			dest = append(dest, &flags[i])
+		}
+		if err := rows.Scan(dest...); err != nil {
 			rows.Close()
 			return nil, nil, err
+		}
+		issues := []string{}
+		for i, flag := range flags {
+			if flag {
+				issues = append(issues, albumIssues[i].name)
+			}
 		}
 		out[id] = object{
 			"id": id, "title": title, "artist": nullString(artist),
 			"artworkBlobId": nullString(artworkID), "artworkType": nullString(artworkType),
+			"issues": issues, "artworkCandidates": []candidate{},
 		}
 		order = append(order, id)
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
 		return nil, nil, err
+	}
+	if reviewing(ctx) {
+		candidates, err := loadCandidates(ctx, q, ids)
+		if err != nil {
+			return nil, nil, err
+		}
+		for id, c := range candidates {
+			if obj, ok := out[id]; ok {
+				obj["artworkCandidates"] = c
+			}
+		}
 	}
 
 	where, args = inClause("album_id", ids)
@@ -635,23 +665,46 @@ func queryByTitle(table string) func(ctx context.Context, s *Server, args *query
 		if len(args.Filter) > 0 && string(args.Filter) != "null" {
 			return nil, errorOf("unsupportedFilter", "this type cannot be filtered")
 		}
-		order := "id"
-		if len(args.Sort) > 0 {
-			var parts []string
-			for _, c := range args.Sort {
-				if c.Property != "title" {
-					return nil, errorOf("unsupportedSort", "cannot sort on %q", c.Property)
-				}
-				dir := "ASC"
-				if !c.ascending() {
-					dir = "DESC"
-				}
-				parts = append(parts, "juke_fold(title) "+dir)
-			}
-			order = strings.Join(parts, ", ") + ", id"
+		order, err := titleOrder(args)
+		if err != nil {
+			return nil, err
 		}
 		return queryIDs(ctx, s.store.DB, "SELECT id FROM "+table+" ORDER BY "+order)
 	}
+}
+
+// queryAlbums queries albums, filtered by their issues if at all, and
+// sorted like the other title-only types.
+func queryAlbums(ctx context.Context, s *Server, args *queryArgs) ([]string, error) {
+	where, err := albumWhere(ctx, args.Filter)
+	if err != nil {
+		return nil, err
+	}
+	order, err := titleOrder(args)
+	if err != nil {
+		return nil, err
+	}
+	return queryIDs(ctx, s.store.DB, "SELECT id FROM album"+where+" ORDER BY "+order)
+}
+
+// titleOrder is the ORDER BY for a type sorted only by title, or by id
+// when no sort is given.
+func titleOrder(args *queryArgs) (string, error) {
+	if len(args.Sort) == 0 {
+		return "id", nil
+	}
+	var parts []string
+	for _, c := range args.Sort {
+		if c.Property != "title" {
+			return "", errorOf("unsupportedSort", "cannot sort on %q", c.Property)
+		}
+		dir := "ASC"
+		if !c.ascending() {
+			dir = "DESC"
+		}
+		parts = append(parts, "juke_fold(title) "+dir)
+	}
+	return strings.Join(parts, ", ") + ", id", nil
 }
 
 func queryIDs(ctx context.Context, q store.Queryer, query string, args ...any) ([]string, error) {
@@ -677,7 +730,9 @@ func queryIDs(ctx context.Context, q store.Queryer, query string, args ...any) (
 // comes from its file or its album.  Genre is the one piece of tag data
 // among them: the "No Genre" repair queue needs somewhere to put the
 // answer, and a later metadata flush (#5) carries it to the file.
-var settableTrackProperties = map[string]bool{"rating": true, "playCount": true, "lastPlayed": true, "genre": true}
+// Artwork is the review page choosing a track's own picture, or clearing
+// one; set by hand, it is left alone by later artwork runs.
+var settableTrackProperties = map[string]bool{"rating": true, "playCount": true, "lastPlayed": true, "genre": true, "artworkBlobId": true}
 
 var trackSetter = &setter{
 	typ: store.TypeTrack,
@@ -685,12 +740,27 @@ var trackSetter = &setter{
 		return nil, &methodError{Type: "forbidden", Description: "tracks are created only by import"}
 	},
 	update: func(ctx context.Context, tx *sql.Tx, id string, patch map[string]json.RawMessage) (object, error) {
+		if _, ok := patch["artworkBlobId"]; ok && !reviewing(ctx) {
+			return nil, invalidProperties("artworkBlobId is set only under the review capability", []string{"artworkBlobId"})
+		}
 		cols, invalid := trackPatch(patch)
 		if invalid != nil {
 			return nil, invalid
 		}
 		if err := mustExist(ctx, tx, "track", id); err != nil {
 			return nil, err
+		}
+		for i, c := range cols {
+			if c.column != "artwork_id" || c.value == nil {
+				continue
+			}
+			if found, err := artworkExists(ctx, tx, c.value.(string)); err != nil {
+				return nil, err
+			} else if !found {
+				return nil, invalidProperties("artworkBlobId must name a stored image, or be null", []string{"artworkBlobId"})
+			}
+			cols = append(cols[:i:i], append([]columnValue{{"artwork_source", "user"}}, cols[i:]...)...)
+			break
 		}
 		modseq, err := store.NextModseq(ctx, tx)
 		if err != nil {
@@ -742,7 +812,7 @@ func trackPatch(patch map[string]json.RawMessage) ([]columnValue, *methodError) 
 	if len(bad) > 0 {
 		return nil, &methodError{
 			Type:        "invalidProperties",
-			Description: "only rating, playCount, lastPlayed and genre may be set, to valid values",
+			Description: "only rating, playCount, lastPlayed, genre and artworkBlobId may be set, to valid values",
 			Properties:  bad,
 		}
 	}
@@ -779,6 +849,15 @@ func trackValue(prop string, raw json.RawMessage) (columnValue, bool) {
 			return columnValue{"genre", nil}, true
 		}
 		return columnValue{"genre", str}, true
+	case "artworkBlobId":
+		if isNull {
+			return columnValue{"artwork_id", nil}, true
+		}
+		var str string
+		if json.Unmarshal(raw, &str) != nil || str == "" {
+			return columnValue{}, false
+		}
+		return columnValue{"artwork_id", str}, true
 	case "lastPlayed":
 		if isNull {
 			return columnValue{"last_played", nil}, true
