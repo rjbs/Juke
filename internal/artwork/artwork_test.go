@@ -159,22 +159,7 @@ func setup(t *testing.T, lib library) *fixture {
 func (f *fixture) render(t *testing.T) []string {
 	t.Helper()
 	ctx := context.Background()
-	letters := map[string]string{}
-	for c := byte('a'); c <= 'z'; c++ {
-		sum := sha256.Sum256(pngFor(c))
-		letters[store.ArtworkID(hex.EncodeToString(sum[:]))] = string(c)
-		sum = sha256.Sum256(pngFor(c - 32))
-		letters[store.ArtworkID(hex.EncodeToString(sum[:]))] = string(c - 32)
-	}
-	name := func(art sql.NullString) string {
-		if !art.Valid {
-			return "-"
-		}
-		if l, ok := letters[art.String]; ok {
-			return l
-		}
-		return "?" + art.String
-	}
+	name := f.letterOf
 	var out []string
 	for n, albumID := range f.albums {
 		var line strings.Builder
@@ -295,5 +280,94 @@ func TestModseqs(t *testing.T) {
 	}
 	if modseq("album", f.albums[0]) <= album || modseq("track", f.tracks[0][0]) <= first || modseq("track", f.tracks[0][1]) <= second {
 		t.Error("changed rows kept their modseqs")
+	}
+}
+
+// letterOf names a stored image by the letter it was made from.
+func (f *fixture) letterOf(art sql.NullString) string {
+	if !art.Valid {
+		return "-"
+	}
+	for c := byte('a'); c <= 'z'; c++ {
+		for _, l := range []byte{c, c - 32} {
+			sum := sha256.Sum256(pngFor(l))
+			if store.ArtworkID(hex.EncodeToString(sum[:])) == art.String {
+				return string(l)
+			}
+		}
+	}
+	return "?" + art.String
+}
+
+// idOf is the id the image made from a letter is stored under.
+func idOf(letter byte) string {
+	sum := sha256.Sum256(pngFor(letter))
+	return store.ArtworkID(hex.EncodeToString(sum[:]))
+}
+
+// Art chosen by hand survives a run: the album keeps its image and its
+// tracks keep theirs, overrides cleared included.
+func TestHandChoicesKept(t *testing.T) {
+	f := setup(t, library{[]string{"a b a", "a b a"}})
+	ctx := context.Background()
+	if _, err := Run(ctx, f.db, f.library); err != nil {
+		t.Fatal(err)
+	}
+	// The first album: chosen as "b", overrides cleared.  The second: the
+	// rule's album art, but the first track given "b" by hand.
+	for _, q := range []struct {
+		sql  string
+		args []any
+	}{
+		{`UPDATE album SET artwork_id = ?, artwork_source = 'user' WHERE id = ?`, []any{idOf('b'), f.albums[0]}},
+		{`UPDATE track SET artwork_id = NULL, artwork_source = 'user' WHERE album_id = ?`, []any{f.albums[0]}},
+		{`UPDATE track SET artwork_id = ?, artwork_source = 'user' WHERE id = ?`, []any{idOf('b'), f.tracks[1][0]}},
+	} {
+		if _, err := f.db.ExecContext(ctx, q.sql, q.args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r, err := Run(ctx, f.db, f.library)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := f.render(t)
+	if want := []string{"b | - - -", "a | b b -"}; strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("after a run:\n got: %q\nwant: %q", got, want)
+	}
+	if r.Changed != 0 || r.Kept != 5 || r.Overrides != 2 {
+		t.Errorf("report: %+v, want nothing changed, 5 kept, 2 overrides", *r)
+	}
+}
+
+// The run records what the review page shows: each track's own picture,
+// the image file beside an album, and whether the choice was a tie.
+func TestReviewColumns(t *testing.T) {
+	f := setup(t, library{[]string{"b a", "folder:f a b", "a a"}})
+	ctx := context.Background()
+	if _, err := Run(ctx, f.db, f.library); err != nil {
+		t.Fatal(err)
+	}
+	for n, want := range []struct {
+		folder   string
+		tie      bool
+		pictures string
+	}{{"-", true, "b a"}, {"f", false, "a b"}, {"-", false, "a a"}} {
+		var folder sql.NullString
+		var tie bool
+		if err := f.db.QueryRowContext(ctx, `SELECT folder_artwork_id, art_tie FROM album WHERE id = ?`, f.albums[n]).Scan(&folder, &tie); err != nil {
+			t.Fatal(err)
+		}
+		var pictures []string
+		for _, id := range f.tracks[n] {
+			var p sql.NullString
+			if err := f.db.QueryRowContext(ctx, `SELECT picture_id FROM track WHERE id = ?`, id).Scan(&p); err != nil {
+				t.Fatal(err)
+			}
+			pictures = append(pictures, f.letterOf(p))
+		}
+		if got := f.letterOf(folder); got != want.folder || tie != want.tie || strings.Join(pictures, " ") != want.pictures {
+			t.Errorf("album %d: folder %s, tie %v, pictures %q; want %s, %v, %q", n, got, tie, pictures, want.folder, want.tie, want.pictures)
+		}
 	}
 }

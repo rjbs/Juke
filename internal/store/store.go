@@ -177,6 +177,24 @@ CREATE TABLE artwork (
 ALTER TABLE album ADD COLUMN artwork_id TEXT REFERENCES artwork (id);
 ALTER TABLE track ADD COLUMN artwork_id TEXT REFERENCES artwork (id);
 `,
+
+	// What the review page needs to show an album's troubles and to
+	// keep a fix made there from being undone: whose choice an album's
+	// or track's art is ('rule' or 'user'), the picture each track's own
+	// file carries, the image file beside an album's tracks, whether the
+	// rule's choice was a tie, and where a track's number came from
+	// ('tags', 'catalog', 'file', 'user', or 'none'; NULL where an older
+	// import didn't say).  Art set before this was the rule's.
+	`
+ALTER TABLE album ADD COLUMN artwork_source TEXT;
+ALTER TABLE album ADD COLUMN folder_artwork_id TEXT REFERENCES artwork (id);
+ALTER TABLE album ADD COLUMN art_tie INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE track ADD COLUMN artwork_source TEXT;
+ALTER TABLE track ADD COLUMN picture_id TEXT REFERENCES artwork (id);
+ALTER TABLE track ADD COLUMN number_source TEXT;
+UPDATE album SET artwork_source = 'rule' WHERE artwork_id IS NOT NULL;
+UPDATE track SET artwork_source = 'rule' WHERE artwork_id IS NOT NULL;
+`,
 }
 
 func dsn(path string, readOnly bool) string {

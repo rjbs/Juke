@@ -51,6 +51,7 @@ type Report struct {
 	Ties       int // albums whose tracks disagree with no majority
 	Overrides  int // tracks with a picture of their own
 	Changed    int // albums and tracks whose art changed this run
+	Kept       int // albums and tracks whose art was chosen by hand and left alone
 }
 
 // A picture is one front cover a track's file carries, as its stub
@@ -68,6 +69,8 @@ type track struct {
 	discIndex int
 	position  int
 	artworkID string // as stored before the run
+	source    string // whose choice artworkID is: "rule", "user", or ""
+	pictureID string // the stored picture its file carries, as recorded before the run
 	pictures  []picture
 }
 
@@ -145,7 +148,7 @@ func isFrontCover(pictureType string) bool {
 // record, in album order.
 func (r *run) loadTracks() ([]*track, error) {
 	rows, err := r.db.QueryContext(r.ctx, `
-		SELECT id, album_id, path, disc_index, position, artwork_id, original_tags
+		SELECT id, album_id, path, disc_index, position, artwork_id, artwork_source, picture_id, original_tags
 		FROM track ORDER BY album_id, disc_index, position, id`)
 	if err != nil {
 		return nil, err
@@ -154,12 +157,13 @@ func (r *run) loadTracks() ([]*track, error) {
 	var out []*track
 	for rows.Next() {
 		var t track
-		var albumID, p, artworkID, raw sql.NullString
+		var albumID, p, artworkID, source, pictureID, raw sql.NullString
 		var disc, pos sql.NullInt64
-		if err := rows.Scan(&t.id, &albumID, &p, &disc, &pos, &artworkID, &raw); err != nil {
+		if err := rows.Scan(&t.id, &albumID, &p, &disc, &pos, &artworkID, &source, &pictureID, &raw); err != nil {
 			return nil, err
 		}
 		t.albumID, t.path, t.artworkID = albumID.String, p.String, artworkID.String
+		t.source, t.pictureID = source.String, pictureID.String
 		t.discIndex, t.position = int(disc.Int64), int(pos.Int64)
 		if raw.Valid {
 			t.pictures, err = picturesIn(raw.String)
@@ -421,26 +425,41 @@ func countOf(counts map[string]int, n int) int {
 	return k
 }
 
+// An album's art as stored before the run.
+type albumArt struct {
+	art    string
+	source string // whose choice art is: "rule", "user", or ""
+	folder string // the image file beside its tracks
+	tie    bool
+}
+
 // assign sets every album's image and every track's own, where that
-// differs from its album's, writing only what changed.
+// differs from its album's, writing only what changed.  Art chosen by
+// hand, on the review page, is left alone: the rule applies only where
+// its own earlier choice stands, or none.  Along the way it records
+// what the review page shows: the picture each track's file carries, the
+// image file beside each album, and whether the choice was a tie.
+// Those don't change what clients show, so they take no new modseq.
+// -- claude, 2026-11-02
 func (r *run) assign(tracks []*track, folder map[string]string) error {
 	byAlbum := map[string][]*track{}
 	for _, t := range tracks {
 		byAlbum[t.albumID] = append(byAlbum[t.albumID], t)
 	}
-	albums := map[string]string{}
-	rows, err := r.db.QueryContext(r.ctx, `SELECT id, artwork_id FROM album`)
+	albums := map[string]albumArt{}
+	rows, err := r.db.QueryContext(r.ctx, `SELECT id, artwork_id, artwork_source, folder_artwork_id, art_tie FROM album`)
 	if err != nil {
 		return err
 	}
 	for rows.Next() {
 		var id string
-		var art sql.NullString
-		if err := rows.Scan(&id, &art); err != nil {
+		var art, source, folderArt sql.NullString
+		var tie bool
+		if err := rows.Scan(&id, &art, &source, &folderArt, &tie); err != nil {
 			rows.Close()
 			return err
 		}
-		albums[id] = art.String
+		albums[id] = albumArt{art: art.String, source: source.String, folder: folderArt.String, tie: tie}
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
@@ -459,7 +478,8 @@ func (r *run) assign(tracks []*track, folder map[string]string) error {
 				return err
 			}
 		}
-		_, err := tx.ExecContext(r.ctx, `UPDATE album SET artwork_id = ?, modseq = ? WHERE id = ?`, nullable(art), albumModseq, id)
+		_, err := tx.ExecContext(r.ctx, `UPDATE album SET artwork_id = ?, artwork_source = ?, modseq = ? WHERE id = ?`,
+			nullable(art), nullable(ruleIf(art)), albumModseq, id)
 		r.report.Changed++
 		return err
 	}
@@ -469,44 +489,76 @@ func (r *run) assign(tracks []*track, folder map[string]string) error {
 				return err
 			}
 		}
-		_, err := tx.ExecContext(r.ctx, `UPDATE track SET artwork_id = ?, modseq = ? WHERE id = ?`, nullable(art), trackModseq, id)
+		_, err := tx.ExecContext(r.ctx, `UPDATE track SET artwork_id = ?, artwork_source = ?, modseq = ? WHERE id = ?`,
+			nullable(art), nullable(ruleIf(art)), trackModseq, id)
 		r.report.Changed++
 		return err
 	}
 
-	for _, albumID := range sortedKeys(albums) {
+	albumIDs := make([]string, 0, len(albums))
+	for id := range albums {
+		albumIDs = append(albumIDs, id)
+	}
+	sort.Strings(albumIDs)
+	for _, albumID := range albumIDs {
+		was := albums[albumID]
 		art, tie := folder[albumID], false
 		if art == "" {
 			art, tie = r.choose(byAlbum[albumID])
 		}
-		if art != "" {
-			r.report.Albums++
+		if was.folder != folder[albumID] || was.tie != tie {
+			if _, err := tx.ExecContext(r.ctx, `UPDATE album SET folder_artwork_id = ?, art_tie = ? WHERE id = ?`,
+				nullable(folder[albumID]), tie, albumID); err != nil {
+				return err
+			}
 		}
 		if tie {
 			r.report.Ties++
 		}
-		if art != albums[albumID] {
+		switch {
+		case was.source == "user":
+			art = was.art
+			r.report.Kept++
+		case art != was.art:
 			if err := setAlbum(albumID, art); err != nil {
 				return err
 			}
 		}
+		if art != "" {
+			r.report.Albums++
+		}
 		for _, t := range byAlbum[albumID] {
-			if err := r.override(t, art, setTrack); err != nil {
+			if err := r.override(tx, t, art, setTrack); err != nil {
 				return err
 			}
 		}
 	}
 	for _, t := range byAlbum[""] {
-		if err := r.override(t, "", setTrack); err != nil {
+		if err := r.override(tx, t, "", setTrack); err != nil {
 			return err
 		}
 	}
 	return tx.Commit()
 }
 
-// override sets a track's own image where it differs from its album's.
-func (r *run) override(t *track, albumArt string, set func(id, art string) error) error {
-	art := r.own(t)
+// override records the picture a track's file carries, and sets it as
+// the track's own image where it differs from its album's, unless the
+// track's image was chosen by hand.
+func (r *run) override(tx *sql.Tx, t *track, albumArt string, set func(id, art string) error) error {
+	own := r.own(t)
+	if own != t.pictureID {
+		if _, err := tx.ExecContext(r.ctx, `UPDATE track SET picture_id = ? WHERE id = ?`, nullable(own), t.id); err != nil {
+			return err
+		}
+	}
+	if t.source == "user" {
+		if t.artworkID != "" {
+			r.report.Overrides++
+		}
+		r.report.Kept++
+		return nil
+	}
+	art := own
 	if art == albumArt {
 		art = ""
 	}
@@ -517,6 +569,15 @@ func (r *run) override(t *track, albumArt string, set func(id, art string) error
 		return set(t.id, art)
 	}
 	return nil
+}
+
+// ruleIf is the source to record with art the rule chose: "rule" for an
+// image, "" for none.
+func ruleIf(art string) string {
+	if art == "" {
+		return ""
+	}
+	return "rule"
 }
 
 func nullable(s string) any {
