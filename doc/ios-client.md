@@ -25,9 +25,10 @@ plus a streaming cache, built in two phases with downloads first.
 - **Backups:** set do-not-back-up on all audio files.
 - **Playback integration:** lock-screen and remote controls come from the
   audio session and `MPNowPlayingInfoCenter`.
-- **Album art** is a blob like audio: `artworkBlobId` on Album, and on
-  Track only where the track's own picture differs, resolved track
-  first.  It comes through the same blob store, so a kept album keeps
+- **Album art** is a blob like audio: `artworkBlobId` and `artworkType`
+  on Album, and on Track only where the track's own picture differs,
+  resolved track first; the type fills the download URL and names the
+  cached file.  It comes through the same blob store, so a kept album keeps
   its art, and is decoded at the size it's drawn and kept in memory.
   The playing track's art goes to the now-playing info; see
   [artwork](artwork.md).

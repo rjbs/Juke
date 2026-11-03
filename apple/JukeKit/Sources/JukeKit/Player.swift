@@ -203,15 +203,15 @@ public final class Player {
   /// once it comes.
   private func fetchArtwork(for track: Track) {
     artworkTask?.cancel()
-    guard let blobId = library.artworkBlobId(for: track) else {
+    guard let art = library.artwork(for: track) else {
       artwork = nil
       return
     }
-    if artwork?.blobId == blobId { return }
+    if artwork?.blobId == art.blobId { return }
     artwork = nil
     artworkTask = Task { [weak self] in
-      guard let self, let image = await library.artwork.image(blobId, maxPixels: 1024), !Task.isCancelled else { return }
-      artwork = (blobId, image)
+      guard let self, let image = await library.images.image(art, maxPixels: 1024), !Task.isCancelled else { return }
+      artwork = (art.blobId, image)
       updateNowPlaying()
     }
   }
@@ -360,7 +360,7 @@ public final class Player {
     if let artist = track.artist { info[MPMediaItemPropertyArtist] = artist }
     if let album = track.albumId.flatMap({ library.albums[$0] }) { info[MPMediaItemPropertyAlbumTitle] = album.title }
     if let duration { info[MPMediaItemPropertyPlaybackDuration] = duration }
-    if let artwork, artwork.blobId == library.artworkBlobId(for: track) {
+    if let artwork, artwork.blobId == library.artwork(for: track)?.blobId {
       let image = artwork.image
       let size = CGSize(width: image.width, height: image.height)
       // The system asks for the image on its own queue, so the closure

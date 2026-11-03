@@ -48,7 +48,7 @@ struct ArtistView: View {
     List(albums) { album in
       NavigationLink(value: album.id) {
         HStack(spacing: 12) {
-          ArtworkView(library: library, blobId: album.artworkBlobId, size: 44)
+          ArtworkView(library: library, artwork: album.artwork, size: 44)
           VStack(alignment: .leading) {
             Text(album.title)
             HStack(spacing: 4) {

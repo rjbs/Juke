@@ -67,7 +67,7 @@ struct NowPlayingView: View {
   }
 
   private var artwork: some View {
-    ArtworkView(library: player.library, blobId: player.current.flatMap { player.library.artworkBlobId(for: $0) },
+    ArtworkView(library: player.library, artwork: player.current.flatMap { player.library.artwork(for: $0) },
                 maxWidth: 260, cornerRadius: 12)
   }
 

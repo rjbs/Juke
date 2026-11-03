@@ -108,7 +108,10 @@ public final class Offline {
     for tracks in albums.map({ library.tracks(of: $0).flatMap(\.self) }) + playlists.map({ library.tracks(of: $0) })
       + smartPlaylists.map({ library.tracks(of: $0) }) {
       for track in tracks {
-        if let art = library.artworkBlobId(for: track), seen.insert(art).inserted { order.append(art) }
+        if let art = library.artwork(for: track), seen.insert(art.blobId).inserted {
+          order.append(art.blobId)
+          if let type = art.type { types[art.blobId] = type }
+        }
         guard let blob = track.blobId else { continue }
         if let type = track.blobType { types[blob] = type }
         if seen.insert(blob).inserted { order.append(blob) }

@@ -17,19 +17,19 @@ public final class ArtworkCache {
   }
 
   /// The image if it's decoded already, to draw without waiting.
-  public func cached(_ blobId: String, maxPixels: Int) -> CGImage? {
-    images.object(forKey: key(blobId, maxPixels))
+  public func cached(_ art: Artwork, maxPixels: Int) -> CGImage? {
+    images.object(forKey: key(art.blobId, maxPixels))
   }
 
   /// The image, fetched and decoded if need be, at most `maxPixels` on
   /// a side.  Nil when it can't be had, such as offline with nothing
   /// cached.  Asking twice for one image while it's coming waits once.
-  public func image(_ blobId: String, maxPixels: Int) async -> CGImage? {
-    let k = key(blobId, maxPixels)
+  public func image(_ art: Artwork, maxPixels: Int) async -> CGImage? {
+    let k = key(art.blobId, maxPixels)
     if let image = images.object(forKey: k) { return image }
     if let task = loading[k as String] { return await task.value }
     let task = Task<CGImage?, Never> { [library] in
-      guard let url = try? await library.artworkFile(blobId) else { return nil }
+      guard let url = try? await library.artworkFile(art) else { return nil }
       return await Self.decode(url, maxPixels: maxPixels)
     }
     loading[k as String] = task

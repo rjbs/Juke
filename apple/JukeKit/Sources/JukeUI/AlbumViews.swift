@@ -19,7 +19,7 @@ struct AlbumListView: View {
     List(shown) { album in
       NavigationLink(value: album.id) {
         HStack(spacing: 12) {
-          ArtworkView(library: library, blobId: album.artworkBlobId, size: 44)
+          ArtworkView(library: library, artwork: album.artwork, size: 44)
           VStack(alignment: .leading) {
             Text(album.title)
             HStack(spacing: 4) {
@@ -62,7 +62,7 @@ struct AlbumView: View {
     List {
       Section {
         HStack(alignment: .top, spacing: 12) {
-          ArtworkView(library: library, blobId: album.artworkBlobId, size: 120, cornerRadius: 8)
+          ArtworkView(library: library, artwork: album.artwork, size: 120, cornerRadius: 8)
           VStack(alignment: .leading, spacing: 4) {
             Text(album.artist ?? "Compilation").foregroundStyle(.secondary)
             let missing = all.count(where: { !$0.isPlayable })

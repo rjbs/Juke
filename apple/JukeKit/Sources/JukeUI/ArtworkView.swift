@@ -9,7 +9,7 @@ import SwiftUI
 /// of thumbnails decodes thumbnails, not covers.
 struct ArtworkView: View {
   let library: Library
-  let blobId: String?
+  let artwork: Artwork?
   var size: CGFloat? = nil
   var maxWidth: CGFloat = 260
   var cornerRadius: CGFloat = 6
@@ -19,7 +19,7 @@ struct ArtworkView: View {
   private var maxPixels: Int { Int((size ?? maxWidth) * scale) }
 
   var body: some View {
-    let shown = blobId.flatMap { image ?? library.artwork.cached($0, maxPixels: maxPixels) }
+    let shown = artwork.flatMap { image ?? library.images.cached($0, maxPixels: maxPixels) }
     Group {
       if let shown {
         Color.clear.overlay {
@@ -36,9 +36,9 @@ struct ArtworkView: View {
     .modifier(Square(size: size, maxWidth: maxWidth))
     .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
     .accessibilityHidden(true)
-    .task(id: blobId) {
-      guard let blobId, shown == nil else { return }
-      image = await library.artwork.image(blobId, maxPixels: maxPixels)
+    .task(id: artwork) {
+      guard let artwork, shown == nil else { return }
+      image = await library.images.image(artwork, maxPixels: maxPixels)
     }
   }
 

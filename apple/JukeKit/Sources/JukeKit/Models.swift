@@ -26,8 +26,8 @@ public struct Track: Identifiable, Hashable, Sendable {
   public var lastPlayed: Date?
   public var dateAdded: Date?
   /// The track's own art, only where it differs from its album's; see
-  /// `Library.artworkBlobId(for:)` for the art to show.
-  public var artworkBlobId: String?
+  /// `Library.artwork(for:)` for the art to show.
+  public var artwork: Artwork?
 
   public var isPlayable: Bool { blobId != nil }
 
@@ -48,7 +48,21 @@ public struct Track: Identifiable, Hashable, Sendable {
     self.playCount = v["playCount"]?.intValue ?? 0
     self.lastPlayed = v["lastPlayed"]?.stringValue.flatMap(parseUTCDate)
     self.dateAdded = v["dateAdded"]?.stringValue.flatMap(parseUTCDate)
-    self.artworkBlobId = v["artworkBlobId"]?.stringValue
+    self.artwork = Artwork(v)
+  }
+}
+
+/// An image of album art: a blob, and its media type, which the
+/// download URL's `type` wants and which names the cached file.
+public struct Artwork: Hashable, Sendable {
+  public var blobId: String
+  /// Nil in a mirror synced before the server sent it.
+  public var type: String?
+
+  init?(_ v: JSONValue) {
+    guard let blobId = v["artworkBlobId"]?.stringValue else { return nil }
+    self.blobId = blobId
+    self.type = v["artworkType"]?.stringValue
   }
 }
 
@@ -66,8 +80,8 @@ public struct Album: Identifiable, Hashable, Sendable {
   /// Nil for a compilation.
   public var artist: String?
   public var discs: [Disc]
-  /// The album's art, an image served as a blob.
-  public var artworkBlobId: String?
+  /// The album's art.
+  public var artwork: Artwork?
 
   public var trackIds: [String] { discs.flatMap(\.trackIds) }
 
@@ -82,7 +96,7 @@ public struct Album: Identifiable, Hashable, Sendable {
     self.id = id
     self.title = title
     self.artist = v["artist"]?.stringValue
-    self.artworkBlobId = v["artworkBlobId"]?.stringValue
+    self.artwork = Artwork(v)
     self.discs = discs.map { d in
       Disc(title: d["title"]?.stringValue, trackIds: d["trackIds"]?.arrayValue?.compactMap(\.stringValue) ?? [])
     }

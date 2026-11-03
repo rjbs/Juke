@@ -65,7 +65,7 @@ public final class Library {
   /// What this device keeps available offline.
   @ObservationIgnored public private(set) var offline: Offline!
   /// Album art as images, decoded once per size and kept.
-  @ObservationIgnored public private(set) var artwork: ArtworkCache!
+  @ObservationIgnored public private(set) var images: ArtworkCache!
   @ObservationIgnored private var ids: [LocalKey: String] = [:]
   @ObservationIgnored private var tasks: [Task<Void, Never>] = []
 
@@ -74,7 +74,7 @@ public final class Library {
     self.blobs = blobs
     self.accountId = accountId
     self.offline = Offline(library: self, file: directory.appending(path: "offline.json"))
-    self.artwork = ArtworkCache(library: self)
+    self.images = ArtworkCache(library: self)
   }
 
   /// Opens the library for the server at `server`, keeping its mirror and
@@ -344,15 +344,15 @@ public final class Library {
 
   /// The art to show for a track: its own, where its file's picture
   /// differs from its album's, else its album's.
-  public func artworkBlobId(for track: Track) -> String? {
-    track.artworkBlobId ?? track.albumId.flatMap { albums[$0] }?.artworkBlobId
+  public func artwork(for track: Track) -> Artwork? {
+    track.artwork ?? track.albumId.flatMap { albums[$0] }?.artwork
   }
 
   /// An image as a local file, downloading it into the cache if it isn't
-  /// there.  No type is passed, so the file has no extension; ImageIO
-  /// reads the bytes for what they are.
-  func artworkFile(_ blobId: String) async throws -> URL {
-    try await blobs.download(blobId)
+  /// there.  Its type names the cached file, as a track's does; ImageIO
+  /// reads the bytes for what they are either way.
+  func artworkFile(_ art: Artwork) async throws -> URL {
+    try await blobs.download(art.blobId, contentType: art.type)
   }
 
   // MARK: - Index
