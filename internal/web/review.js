@@ -209,7 +209,7 @@ function render() {
       a.artist || "Compilation", " · ", issueTags(a.issues), " · ",
       h("a", { href: `#album/${a.id}` }, "Open in Albums")),
     h("h3", {}, "Art"),
-    h("div", { class: "cards" }, cs.map(card), noArtCard(), well()),
+    h("div", { class: "cards" }, cs.map(c => card(c, cs)), noArtCard(), well()),
     h("h3", {}, "Tracks"),
     h("p", { class: "sub" }, "Drag a track to put it where it belongs; the numbers follow."),
     trackTable(cs),
@@ -229,14 +229,15 @@ function choose(blobId) {
   render();
 }
 
-function card(c) {
+function card(c, cs) {
   const chosen = editing.artwork === c.blobId;
+  const alike = lookalike(c, cs);
   const names = c.trackIds.map(t => editing.tracks.get(t)?.title).filter(Boolean);
   return h("div", { class: "card" + (chosen ? " chosen" : "") },
     h("img", { src: imageURL(c.blobId, c.type), alt: "" }),
     h("div", { class: "label" },
       h("div", {}, h("b", {}, candidateName(c)), chosen ? h("span", { class: "tag" }, "the album's art") : null),
-      lookalike(c, cs) ? h("div", {}, `Looks the same as picture ${lookalike(c, cs).n}, encoded differently`) : null,
+      alike ? h("div", {}, `Looks the same as picture ${alike.n}, encoded differently`) : null,
       names.length
         ? h("div", { title: names.join("\n") }, `In ${names.length} file${names.length === 1 ? "" : "s"}: `, names.join(", "))
         : c.folder || c.uploaded ? null : h("div", {}, "In no file here")),
