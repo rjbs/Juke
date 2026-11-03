@@ -3,6 +3,11 @@ import Foundation
 import MediaPlayer
 import Observation
 import os
+#if canImport(UIKit)
+import UIKit
+#else
+import AppKit
+#endif
 
 /// Plays a queue of tracks.  Each track's audio comes through the
 /// library's blob cache: the whole file is fetched before it plays, and
@@ -28,7 +33,7 @@ public final class Player {
   public var isShuffled: Bool { playQueue.isShuffled }
   public var repeatMode: PlayQueue.Repeat { playQueue.repeatMode }
 
-  @ObservationIgnored let library: Library
+  @ObservationIgnored public let library: Library
   @ObservationIgnored let player = AVPlayer()
   @ObservationIgnored private var loadTask: Task<Void, Never>?
   @ObservationIgnored private var endObserver: (any NSObjectProtocol)?
@@ -42,6 +47,10 @@ public final class Player {
   public static let queuedByHand = "Queued"
 
   @ObservationIgnored private var statusObserver: NSKeyValueObservation?
+  /// The current track's art for the lock screen and Control Center, and
+  /// which image it is, so a stale one is never shown for a new track.
+  @ObservationIgnored private var artwork: (blobId: String, image: CGImage)?
+  @ObservationIgnored private var artworkTask: Task<Void, Never>?
   @ObservationIgnored private var timeObserver: Any?
   /// Seeks asked for but not yet done.  Until they are, the player still
   /// reports the old time, which shouldn't drag `elapsed` back after a
@@ -168,8 +177,9 @@ public final class Player {
     failure = nil
     isLoading = true
     player.pause()
-    updateNowPlaying()
     let track = playQueue.entries[i].track
+    fetchArtwork(for: track)
+    updateNowPlaying()
     let following = playQueue.following(skipping: true).map { playQueue.entries[$0].track }
     loadTask = Task { [weak self] in
       guard let self else { return }
@@ -186,6 +196,23 @@ public final class Player {
         isPlaying = false
         failure = "Couldn't load “\(track.title)”: \(error.localizedDescription)"
       }
+    }
+  }
+
+  /// Fetches a track's art for the now-playing info, which is set again
+  /// once it comes.
+  private func fetchArtwork(for track: Track) {
+    artworkTask?.cancel()
+    guard let blobId = library.artworkBlobId(for: track) else {
+      artwork = nil
+      return
+    }
+    if artwork?.blobId == blobId { return }
+    artwork = nil
+    artworkTask = Task { [weak self] in
+      guard let self, let image = await library.artwork.image(blobId, maxPixels: 1024), !Task.isCancelled else { return }
+      artwork = (blobId, image)
+      updateNowPlaying()
     }
   }
 
@@ -333,6 +360,20 @@ public final class Player {
     if let artist = track.artist { info[MPMediaItemPropertyArtist] = artist }
     if let album = track.albumId.flatMap({ library.albums[$0] }) { info[MPMediaItemPropertyAlbumTitle] = album.title }
     if let duration { info[MPMediaItemPropertyPlaybackDuration] = duration }
+    if let artwork, artwork.blobId == library.artworkBlobId(for: track) {
+      let image = artwork.image
+      let size = CGSize(width: image.width, height: image.height)
+      // The system asks for the image on its own queue, so the closure
+      // must not be main-actor isolated, which a closure made here is
+      // unless it's @Sendable.  -- claude, 2026-11-02
+      info[MPMediaItemPropertyArtwork] = MPMediaItemArtwork(boundsSize: size) { @Sendable _ in
+        #if canImport(UIKit)
+        UIImage(cgImage: image)
+        #else
+        NSImage(cgImage: image, size: size)
+        #endif
+      }
+    }
     info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = player.currentTime().seconds
     info[MPNowPlayingInfoPropertyPlaybackRate] = isPlaying ? 1.0 : 0.0
     center.nowPlayingInfo = info

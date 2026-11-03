@@ -64,6 +64,8 @@ public final class Library {
   @ObservationIgnored let accountId: String
   /// What this device keeps available offline.
   @ObservationIgnored public private(set) var offline: Offline!
+  /// Album art as images, decoded once per size and kept.
+  @ObservationIgnored public private(set) var artwork: ArtworkCache!
   @ObservationIgnored private var ids: [LocalKey: String] = [:]
   @ObservationIgnored private var tasks: [Task<Void, Never>] = []
 
@@ -72,6 +74,7 @@ public final class Library {
     self.blobs = blobs
     self.accountId = accountId
     self.offline = Offline(library: self, file: directory.appending(path: "offline.json"))
+    self.artwork = ArtworkCache(library: self)
   }
 
   /// Opens the library for the server at `server`, keeping its mirror and
@@ -95,8 +98,8 @@ public final class Library {
       configuration: SyncConfiguration(
         accountId: accountId,
         types: [
-          TypeDescriptor(name: "Track", capability: jukeCapability, blobProperties: ["blobId"]),
-          TypeDescriptor(name: "Album", capability: jukeCapability, syncAfter: ["Track"]),
+          TypeDescriptor(name: "Track", capability: jukeCapability, blobProperties: ["blobId", "artworkBlobId"]),
+          TypeDescriptor(name: "Album", capability: jukeCapability, syncAfter: ["Track"], blobProperties: ["artworkBlobId"]),
           TypeDescriptor(name: "Playlist", capability: jukeCapability, syncAfter: ["Track"]),
           TypeDescriptor(name: "SmartPlaylist", capability: jukeCapability, syncAfter: ["Track", "Playlist"]),
         ]
@@ -335,6 +338,21 @@ public final class Library {
     defer { try? file.close() }
     let head = try file.read(upToCount: 12) ?? Data()
     return try await blobs.download(blobId, contentType: audioType(of: head) ?? "audio/mpeg")
+  }
+
+  // MARK: - Artwork
+
+  /// The art to show for a track: its own, where its file's picture
+  /// differs from its album's, else its album's.
+  public func artworkBlobId(for track: Track) -> String? {
+    track.artworkBlobId ?? track.albumId.flatMap { albums[$0] }?.artworkBlobId
+  }
+
+  /// An image as a local file, downloading it into the cache if it isn't
+  /// there.  No type is passed, so the file has no extension; ImageIO
+  /// reads the bytes for what they are.
+  func artworkFile(_ blobId: String) async throws -> URL {
+    try await blobs.download(blobId)
   }
 
   // MARK: - Index

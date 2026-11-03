@@ -25,6 +25,9 @@ public struct Track: Identifiable, Hashable, Sendable {
   public var playCount: Int
   public var lastPlayed: Date?
   public var dateAdded: Date?
+  /// The track's own art, only where it differs from its album's; see
+  /// `Library.artworkBlobId(for:)` for the art to show.
+  public var artworkBlobId: String?
 
   public var isPlayable: Bool { blobId != nil }
 
@@ -45,6 +48,7 @@ public struct Track: Identifiable, Hashable, Sendable {
     self.playCount = v["playCount"]?.intValue ?? 0
     self.lastPlayed = v["lastPlayed"]?.stringValue.flatMap(parseUTCDate)
     self.dateAdded = v["dateAdded"]?.stringValue.flatMap(parseUTCDate)
+    self.artworkBlobId = v["artworkBlobId"]?.stringValue
   }
 }
 
@@ -62,6 +66,8 @@ public struct Album: Identifiable, Hashable, Sendable {
   /// Nil for a compilation.
   public var artist: String?
   public var discs: [Disc]
+  /// The album's art, an image served as a blob.
+  public var artworkBlobId: String?
 
   public var trackIds: [String] { discs.flatMap(\.trackIds) }
 
@@ -76,6 +82,7 @@ public struct Album: Identifiable, Hashable, Sendable {
     self.id = id
     self.title = title
     self.artist = v["artist"]?.stringValue
+    self.artworkBlobId = v["artworkBlobId"]?.stringValue
     self.discs = discs.map { d in
       Disc(title: d["title"]?.stringValue, trackIds: d["trackIds"]?.arrayValue?.compactMap(\.stringValue) ?? [])
     }

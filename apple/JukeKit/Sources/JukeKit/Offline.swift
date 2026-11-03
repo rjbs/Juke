@@ -2,8 +2,8 @@ import Foundation
 import Observation
 
 /// What this device keeps available offline: albums and playlists of
-/// both kinds, whose tracks' audio is downloaded and pinned out of the
-/// cache's reach.
+/// both kinds, whose tracks' audio and art are downloaded and pinned out
+/// of the cache's reach.
 ///
 /// The choice is the device's own and never reaches the server.  It is
 /// kept as album and playlist ids; the audio wanted follows from them
@@ -18,7 +18,7 @@ public final class Offline {
   public private(set) var playlistIds: Set<String> = []
   public private(set) var smartPlaylistIds: Set<String> = []
 
-  /// Audio wanted on the device, and how much of it is here.
+  /// Files wanted on the device, audio and art, and how many are here.
   public private(set) var wanted = 0
   public private(set) var present = 0
   /// The last download failure, cleared by the next success.
@@ -108,6 +108,7 @@ public final class Offline {
     for tracks in albums.map({ library.tracks(of: $0).flatMap(\.self) }) + playlists.map({ library.tracks(of: $0) })
       + smartPlaylists.map({ library.tracks(of: $0) }) {
       for track in tracks {
+        if let art = library.artworkBlobId(for: track), seen.insert(art).inserted { order.append(art) }
         guard let blob = track.blobId else { continue }
         if let type = track.blobType { types[blob] = type }
         if seen.insert(blob).inserted { order.append(blob) }
@@ -133,7 +134,7 @@ public final class Offline {
     }
   }
 
-  /// Fetches wanted audio one file at a time until all of it is here,
+  /// Fetches wanted files one at a time until all of them are here,
   /// waiting and retrying after a failure.
   private func work() async {
     defer { worker = nil }
