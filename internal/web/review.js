@@ -211,8 +211,9 @@ function render() {
   );
 }
 
-// choose makes an image the album's.  As on the server, that clears
-// every track's own art: the choice is for the whole album.
+// choose makes an image the album's, for every track.  As on the
+// server, that clears every track's own art, so it is offered on the
+// image the album already has too, as the way to clear them all.
 function choose(blobId) {
   editing.artwork = blobId;
   for (const id of editing.trackArt.keys()) editing.trackArt.set(id, null);
@@ -225,19 +226,19 @@ function card(c) {
   return h("div", { class: "card" + (chosen ? " chosen" : "") },
     h("img", { src: imageURL(c.blobId, c.type), alt: "" }),
     h("div", { class: "label" },
-      h("div", {}, h("b", {}, candidateName(c))),
+      h("div", {}, h("b", {}, candidateName(c)), chosen ? " · the album's art" : null),
       names.length
         ? h("div", { title: names.join("\n") }, `In ${names.length} file${names.length === 1 ? "" : "s"}: `, names.join(", "))
         : c.folder || c.uploaded ? null : h("div", {}, "In no file here")),
-    h("button", { disabled: chosen || null, onclick: () => choose(c.blobId) }, chosen ? "The album's art" : "Use for the album"));
+    h("button", { title: "Make this the album's art, and show it for every track", onclick: () => choose(c.blobId) }, "Always use this"));
 }
 
 function noArtCard() {
   const chosen = editing.artwork == null;
   return h("div", { class: "card" + (chosen ? " chosen" : "") },
     h("div", { class: "blank" }, "∅"),
-    h("div", { class: "label" }, h("div", {}, h("b", {}, "No art"))),
-    h("button", { disabled: chosen || null, onclick: () => choose(null) }, chosen ? "The album has none" : "Use none"));
+    h("div", { class: "label" }, h("div", {}, h("b", {}, "No art"), chosen ? " · the album has none" : null)),
+    h("button", { title: "Give the album no art, and show none for any track", onclick: () => choose(null) }, "Always use none"));
 }
 
 function numberTag(source) {
