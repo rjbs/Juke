@@ -17,6 +17,7 @@ public struct Track: Identifiable, Hashable, Sendable {
   public var title: String
   public var artist: String?
   public var albumId: String?
+  public var genre: String?
   public var rating: Double?
   public var blobId: String?
   /// The audio's media type.  Nil in a mirror synced before the server
@@ -42,6 +43,7 @@ public struct Track: Identifiable, Hashable, Sendable {
     self.title = title
     self.artist = v["artist"]?.stringValue
     self.albumId = v["albumId"]?.stringValue
+    self.genre = v["genre"]?.stringValue
     self.rating = v["rating"]?.doubleValue
     self.blobId = v["blobId"]?.stringValue
     self.blobType = v["blobType"]?.stringValue
@@ -131,8 +133,9 @@ public struct Playlist: Identifiable, Hashable, Sendable {
 
 /// A smart playlist: a saved search, as doc/playlists.md describes.  It
 /// has no track list of its own; the library runs its rule as a Jinx
-/// query subscription and keeps what the server answers.  Rules are
-/// read here, never written.
+/// query subscription and keeps what the server answers.  A rule is
+/// edited as a `SmartPlaylistDraft` and saved through the server
+/// directly; see Library+Rules.swift.
 public struct SmartPlaylist: Identifiable, Hashable, Sendable {
   public var key: LocalKey
   public var id: String
@@ -158,6 +161,21 @@ public struct SmartPlaylist: Identifiable, Hashable, Sendable {
     self.limit = v["limit"]?.intValue
     self.limitBytes = v["limitBytes"]?.intValue
     self.limitSeconds = v["limitSeconds"]?.intValue
+  }
+
+  /// Whether this is the playlist that `properties`, as sent to
+  /// `SmartPlaylist/set`, describe: how a save tells the mirror has
+  /// caught up with it.
+  func matches(_ properties: JSONValue) -> Bool {
+    let mine: JSONValue = .object([
+      "title": .string(title),
+      "filter": filter ?? .null,
+      "sort": .array(sort),
+      "limit": limit.map { .number(Double($0)) } ?? .null,
+      "limitBytes": limitBytes.map { .number(Double($0)) } ?? .null,
+      "limitSeconds": limitSeconds.map { .number(Double($0)) } ?? .null,
+    ])
+    return mine.isJMAPEquivalent(to: properties)
   }
 
   static let subscriptionPrefix = "smart:"
