@@ -24,8 +24,16 @@ public enum SmartPlaylistEditing: Identifiable, Hashable {
 @MainActor @Observable
 final class SmartPlaylistEditorHost {
   var editing: SmartPlaylistEditing?
+  /// The content size of the window the editor was opened from, so the
+  /// sheet can be sized to fit inside it.
+  var windowSize: CGSize?
 
-  func edit(_ subject: SmartPlaylistEditing) { editing = subject }
+  func edit(_ subject: SmartPlaylistEditing) {
+    #if os(macOS)
+    windowSize = NSApp.keyWindow?.contentView?.frame.size
+    #endif
+    editing = subject
+  }
 }
 
 /// The editor's state: the draft, what the server last said it matches,
@@ -183,11 +191,24 @@ final class SmartPlaylistEditorModel {
 struct SmartPlaylistEditor: View {
   @State private var model: SmartPlaylistEditorModel
   let saved: (String) -> Void
+  /// The content size of the window the sheet is shown in, if known.
+  let window: CGSize?
   @Environment(\.dismiss) private var dismiss
 
-  init(library: Library, editing: SmartPlaylistEditing, saved: @escaping (String) -> Void) {
+  init(library: Library, editing: SmartPlaylistEditing, window: CGSize? = nil, saved: @escaping (String) -> Void) {
     _model = State(initialValue: SmartPlaylistEditorModel(library: library, editing: editing))
+    self.window = window
     self.saved = saved
+  }
+
+  /// The size to ask for on macOS: roomy, but inside the window it is
+  /// shown over, which a sheet would otherwise hang out of.
+  private var sheetSize: CGSize {
+    let window = window ?? CGSize(width: 1200, height: 900)
+    return CGSize(
+      width: min(840, max(640, window.width - 80)),
+      height: min(780, max(420, window.height - 60))
+    )
   }
 
   var body: some View {
@@ -231,7 +252,7 @@ struct SmartPlaylistEditor: View {
       }
     }
     #if os(macOS)
-    .frame(minWidth: 760, idealWidth: 840, minHeight: 640, idealHeight: 780)
+    .frame(minWidth: 640, idealWidth: sheetSize.width, minHeight: 420, idealHeight: sheetSize.height)
     #endif
   }
 

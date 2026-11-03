@@ -78,7 +78,7 @@ struct LibraryView: View {
         }
       }
       .sheet(item: Bindable(editor).editing) { editing in
-        SmartPlaylistEditor(library: library, editing: editing) { selection = .smartPlaylist($0) }
+        SmartPlaylistEditor(library: library, editing: editing, window: editor.windowSize) { selection = .smartPlaylist($0) }
       }
       .safeAreaInset(edge: .bottom) {
         VStack(alignment: .leading, spacing: 4) {
