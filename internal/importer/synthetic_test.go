@@ -127,6 +127,7 @@ func syntheticImport(t *testing.T) (*sql.DB, *Report) {
 	write("Undamaged/Some DJ/Mixtape/02 Filler.mp3", id3(map[string]string{"TIT2": "Filler", "TPE1": "Various", "TPE2": "Various Artists", "TALB": "Mixtape", "TRCK": "2"}))
 	write("Undamaged/Holes/Holey/01 First.mp3", id3(map[string]string{"TIT2": "First", "TPE1": "Holes", "TALB": "Holey", "TRCK": "1/5"}))
 	write("Undamaged/Holes/Holey/04 Fourth.mp3", id3(map[string]string{"TIT2": "Fourth", "TPE1": "Holes", "TALB": "Holey", "TRCK": "4/5"}))
+	write("Undamaged/Holes/Holey/03 Third.mp3", id3(map[string]string{"TIT2": "Third", "TPE1": "Holes", "TALB": "Holey"}))
 	write("Undamaged/Holes/Twice/01 Early.mp3", id3(map[string]string{"TIT2": "Early", "TPE1": "Holes", "TALB": "Twice", "TRCK": "1"}))
 	write("Undamaged/Holes/Twice/01 Late.mp3", id3(map[string]string{"TIT2": "Late", "TPE1": "Holes", "TALB": "Twice", "TRCK": "1"}))
 	write("Undamaged/Loner/Unknown Album/Stray.mp3", id3(map[string]string{"TIT2": "Stray"}))
@@ -200,7 +201,7 @@ func TestSyntheticImport(t *testing.T) {
 	if len(r.TitledFromName) != 4 {
 		t.Errorf("titled from filename %q, want the four untagged files", r.TitledFromName)
 	}
-	if r.Tracks != 19 || r.GapTracks != 1 || r.Albums != 9 || r.AlbumlessTrack != 2 || r.SkippedFiles != 1 || r.Playlists != 1 {
+	if r.Tracks != 20 || r.GapTracks != 1 || r.Albums != 9 || r.AlbumlessTrack != 2 || r.SkippedFiles != 1 || r.Playlists != 1 {
 		t.Errorf("report = %+v", r)
 	}
 
@@ -224,6 +225,9 @@ func TestSyntheticImport(t *testing.T) {
 	// twice goes to the first, and the second goes after the last.
 	checkTrack(t, db, "First", "Holey", 1, 0, 0, mtimeOf(t, db, "First"), true)
 	checkTrack(t, db, "Fourth", "Holey", 4, 0, 0, mtimeOf(t, db, "Fourth"), true)
+	// A titled file with no number in its tags or the catalog takes the
+	// one its filename starts with, rather than going after the rest.
+	checkTrack(t, db, "Third", "Holey", 3, 0, 0, mtimeOf(t, db, "Third"), true)
 	checkTrack(t, db, "Early", "Twice", 1, 0, 0, mtimeOf(t, db, "Early"), true)
 	checkTrack(t, db, "Late", "Twice", 2, 0, 0, mtimeOf(t, db, "Late"), true)
 	checkDiscTrackCount(t, db, "Holey", 0, 5)

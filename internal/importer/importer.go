@@ -23,9 +23,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -474,13 +472,6 @@ func (im *run) readFile(ctx context.Context, p, rel, contentType string) (*audio
 
 	if f.title == "" && f.catalog == nil {
 		f.fromName = true
-		disc, track := numbersFromName(f.name)
-		if f.discNumber <= 0 {
-			f.discNumber = disc
-		}
-		if f.trackNumber <= 0 {
-			f.trackNumber = track
-		}
 	}
 	return f, nil
 }
@@ -494,32 +485,6 @@ func dirArtist(dir string) string {
 	default:
 		return artistName(parent)
 	}
-}
-
-// numberPrefix is the "NN " or "D-NN " that iTunes put before a title in
-// a filename.  Three digits at most, so "1999 Prince.mp3" keeps its title.
-var numberPrefix = regexp.MustCompile(`^(?:(\d{1,2})-)?(\d{1,3})[-. ]+`)
-
-// numbersFromName returns the disc and track numbers a filename starts
-// with, zero for either that is absent.
-func numbersFromName(name string) (disc, track int) {
-	m := numberPrefix.FindStringSubmatch(name)
-	if m == nil {
-		return 0, 0
-	}
-	disc, _ = strconv.Atoi(m[1])
-	track, _ = strconv.Atoi(m[2])
-	return disc, track
-}
-
-// titleFromName is a filename less its extension and number prefix, or
-// the whole filename if that leaves nothing.
-func titleFromName(name string) string {
-	stem := strings.TrimSpace(numberPrefix.ReplaceAllString(strings.TrimSuffix(name, path.Ext(name)), ""))
-	if stem == "" {
-		return name
-	}
-	return stem
 }
 
 func queryCatalogTracks(ctx context.Context, st *sql.Stmt, args ...any) ([]catalogTrack, error) {
@@ -609,6 +574,16 @@ func (im *run) importDir(ctx context.Context, dir string, files []*audioFile) er
 		track := f.trackNumber
 		if track <= 0 && f.catalog != nil && f.catalog.TrackNumber.Valid {
 			track = int(f.catalog.TrackNumber.Int64)
+		}
+		// A number from the filename stands in where tags and catalog are
+		// silent, as iTunes wrote "NN Title" from the number it knew.  Only
+		// untitled files took one before (#6).  -- claude, 2026-11-02
+		if track <= 0 {
+			nameDisc, nameTrack := tags.NumbersFromName(f.name)
+			track = nameTrack
+			if disc <= 0 {
+				disc = nameDisc
+			}
 		}
 		count := f.trackCount
 		if count <= 0 && f.catalog != nil {
@@ -850,7 +825,7 @@ func (im *run) insertFile(ctx context.Context, dir string, f *audioFile, fallbac
 	if f.catalog != nil {
 		catName, catArtist, catGenre = f.catalog.Name.String, f.catalog.Artist.String, f.catalog.Genre.String
 	}
-	stem := titleFromName(f.name)
+	stem := tags.TitleFromName(f.name)
 
 	rel := f.rel
 	id, err := store.InsertTrack(ctx, im.tx, store.NewTrack{
