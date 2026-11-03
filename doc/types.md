@@ -29,6 +29,7 @@ A recording on an album, usually with audio.
 | `lastPlayed` | `UTCDate\|null` | |
 | `dateAdded`  | `UTCDate`       | When the track joined the library. |
 | `artworkBlobId` | `Id\|null` | Server-set.  The track's own art, only where it differs from its album's; see [artwork](artwork.md).  Null means show the album's. |
+| `artworkType` | `String\|null` | Server-set.  The media type of the track's own art, such as `image/jpeg`.  Null with `artworkBlobId`. |
 
 **A track with no audio** stands for a gap: a track the 2014 catalog
 knows an album had, whose file is lost.  It keeps the catalog's title,
@@ -55,6 +56,7 @@ considered and isn't needed.
 | `artist` | `String\|null` | Null for a various-artists compilation. |
 | `discs`  | `Disc[]`       | At least one. |
 | `artworkBlobId` | `Id\|null` | Server-set.  The album's art, an image served as a blob; see [artwork](artwork.md). |
+| `artworkType` | `String\|null` | Server-set.  The art's media type, such as `image/jpeg`, for the download URL's `type`.  Null with `artworkBlobId`. |
 
 ### Disc
 

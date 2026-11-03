@@ -492,14 +492,14 @@ func TestArtworkBlobs(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	r := f.call("Album/get", map[string]any{"ids": []string{albumID}, "properties": []string{"artworkBlobId"}})
-	checkEqual(t, "album artworkBlobId", r["list"].([]any)[0].(map[string]any)["artworkBlobId"], id)
-	trackArt := func(title string) any {
-		r := f.call("Track/get", map[string]any{"ids": []string{f.ids[title]}, "properties": []string{"artworkBlobId"}})
-		return r["list"].([]any)[0].(map[string]any)["artworkBlobId"]
+	art := func(typ, id string) []any {
+		r := f.call(typ+"/get", map[string]any{"ids": []string{id}, "properties": []string{"artworkBlobId", "artworkType"}})
+		obj := r["list"].([]any)[0].(map[string]any)
+		return []any{obj["artworkBlobId"], obj["artworkType"]}
 	}
-	checkEqual(t, "track with its own art", trackArt("Brave Sir Robin"), id)
-	checkEqual(t, "track with its album's art", trackArt("Whip It"), nil)
+	checkEqual(t, "album art", art("Album", albumID), []any{id, "image/png"})
+	checkEqual(t, "track with its own art", art("Track", f.ids["Brave Sir Robin"]), []any{id, "image/png"})
+	checkEqual(t, "track with its album's art", art("Track", f.ids["Whip It"]), []any{nil, nil})
 
 	req, _ := http.NewRequest("GET", f.srv.URL+"/jmap/download/music/"+id+"/cover", nil)
 	resp, err := http.DefaultClient.Do(req)

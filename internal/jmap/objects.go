@@ -37,7 +37,7 @@ func (s *Server) objectTypes() []*objectType {
 			table: "track",
 			properties: []string{
 				"id", "title", "artist", "genre", "albumId", "rating", "blobId", "blobType",
-				"size", "duration", "playCount", "lastPlayed", "dateAdded", "artworkBlobId",
+				"size", "duration", "playCount", "lastPlayed", "dateAdded", "artworkBlobId", "artworkType",
 			},
 			load:  loadTracks,
 			query: queryTracks,
@@ -46,7 +46,7 @@ func (s *Server) objectTypes() []*objectType {
 		{
 			name:       store.TypeAlbum,
 			table:      "album",
-			properties: []string{"id", "title", "artist", "discs", "artworkBlobId"},
+			properties: []string{"id", "title", "artist", "discs", "artworkBlobId", "artworkType"},
 			load:       loadAlbums,
 			query:      queryByTitle("album"),
 		},
@@ -248,7 +248,8 @@ func nullString(v sql.NullString) any {
 func loadTracks(ctx context.Context, q store.Queryer, ids []string) (map[string]object, []string, error) {
 	where, args := inClause("id", ids)
 	rows, err := q.QueryContext(ctx, `
-		SELECT id, title, artist, genre, album_id, rating, blob_id, content_type, size, duration, play_count, last_played, date_added, artwork_id
+		SELECT id, title, artist, genre, album_id, rating, blob_id, content_type, size, duration, play_count, last_played, date_added,
+		       artwork_id, (SELECT mime FROM artwork WHERE id = track.artwork_id)
 		FROM track`+where+` ORDER BY id`, args...)
 	if err != nil {
 		return nil, nil, err
@@ -258,11 +259,11 @@ func loadTracks(ctx context.Context, q store.Queryer, ids []string) (map[string]
 	var order []string
 	for rows.Next() {
 		var id, title, dateAdded string
-		var artist, genre, albumID, blobID, blobType, lastPlayed, artworkID sql.NullString
+		var artist, genre, albumID, blobID, blobType, lastPlayed, artworkID, artworkType sql.NullString
 		var rating sql.NullFloat64
 		var size, duration sql.NullInt64
 		var playCount int64
-		if err := rows.Scan(&id, &title, &artist, &genre, &albumID, &rating, &blobID, &blobType, &size, &duration, &playCount, &lastPlayed, &dateAdded, &artworkID); err != nil {
+		if err := rows.Scan(&id, &title, &artist, &genre, &albumID, &rating, &blobID, &blobType, &size, &duration, &playCount, &lastPlayed, &dateAdded, &artworkID, &artworkType); err != nil {
 			return nil, nil, err
 		}
 		obj := object{
@@ -281,6 +282,7 @@ func loadTracks(ctx context.Context, q store.Queryer, ids []string) (map[string]
 			"dateAdded":  dateAdded,
 
 			"artworkBlobId": nullString(artworkID),
+			"artworkType":   nullString(artworkType),
 		}
 		if rating.Valid {
 			obj["rating"] = rating.Float64
@@ -299,7 +301,9 @@ func loadTracks(ctx context.Context, q store.Queryer, ids []string) (map[string]
 
 func loadAlbums(ctx context.Context, q store.Queryer, ids []string) (map[string]object, []string, error) {
 	where, args := inClause("id", ids)
-	rows, err := q.QueryContext(ctx, `SELECT id, title, artist, artwork_id FROM album`+where+` ORDER BY id`, args...)
+	rows, err := q.QueryContext(ctx, `
+		SELECT id, title, artist, artwork_id, (SELECT mime FROM artwork WHERE id = album.artwork_id)
+		FROM album`+where+` ORDER BY id`, args...)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -308,12 +312,15 @@ func loadAlbums(ctx context.Context, q store.Queryer, ids []string) (map[string]
 	var order []string
 	for rows.Next() {
 		var id, title string
-		var artist, artworkID sql.NullString
-		if err := rows.Scan(&id, &title, &artist, &artworkID); err != nil {
+		var artist, artworkID, artworkType sql.NullString
+		if err := rows.Scan(&id, &title, &artist, &artworkID, &artworkType); err != nil {
 			rows.Close()
 			return nil, nil, err
 		}
-		out[id] = object{"id": id, "title": title, "artist": nullString(artist), "artworkBlobId": nullString(artworkID)}
+		out[id] = object{
+			"id": id, "title": title, "artist": nullString(artist),
+			"artworkBlobId": nullString(artworkID), "artworkType": nullString(artworkType),
+		}
 		order = append(order, id)
 	}
 	rows.Close()

@@ -54,7 +54,8 @@ SHA-256 so the same picture from any file is one image.  The `artwork`
 table records each image's media type, size and pixel size.
 
 An image is a blob: its id is the `artworkBlobId` on Album and Track,
-and the JMAP download URL serves it with its media type.  Clients fetch
+with its media type beside it as `artworkType`, which is what a client
+puts in the download URL's `type`, as JMAP has it fill in.  Clients fetch
 and cache it as they do audio, and since the id names the bytes, it is
 cacheable forever.  A track's `artworkBlobId` names its own image only
 when it has one, so a client resolves `track.artworkBlobId ??
