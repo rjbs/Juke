@@ -69,5 +69,6 @@ func runBackfill(ctx context.Context, args []string) error {
 	fmt.Printf("  on albums:           %d\n", n.Albums)
 	fmt.Printf("  spot taken:          %d\n", n.Taken)
 	fmt.Printf("  no number anywhere:  %d\n", n.Unnamed)
+	fmt.Printf("number sources noted:  %d\n", n.Sourced)
 	return nil
 }

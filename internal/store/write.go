@@ -68,6 +68,7 @@ type NewTrack struct {
 	ContentType  *string
 	TagFormat    *string
 	OriginalTags *string
+	NumberSource *string // where Position came from; see doc/import.md
 }
 
 // InsertTrack inserts a track and returns its new id.
@@ -90,12 +91,12 @@ func InsertTrack(ctx context.Context, q Queryer, t NewTrack) (string, error) {
 		  id, title, artist, genre, duration, album_id, disc_index, position,
 		  rating, play_count, last_played, date_added,
 		  blob_id, path, size, content_type, tag_format, original_tags,
-		  created_modseq, modseq
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		  number_source, created_modseq, modseq
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		id, t.Title, t.Artist, t.Genre, t.Duration, t.AlbumID, t.DiscIndex, t.Position,
 		t.Rating, t.PlayCount, t.LastPlayed, t.DateAdded,
 		blobID, t.Path, t.Size, t.ContentType, t.TagFormat, t.OriginalTags,
-		modseq, modseq,
+		t.NumberSource, modseq, modseq,
 	)
 	if err != nil {
 		return "", err
@@ -259,7 +260,7 @@ func SetDiscs(ctx context.Context, q Queryer, albumID string, discs []Disc) erro
 		}
 		for pos, id := range d.TrackIDs {
 			if _, err := q.ExecContext(ctx,
-				`UPDATE track SET album_id = ?, disc_index = ?, position = ? WHERE id = ?`, albumID, di, pos+1, id,
+				`UPDATE track SET album_id = ?, disc_index = ?, position = ?, number_source = 'user' WHERE id = ?`, albumID, di, pos+1, id,
 			); err != nil {
 				return err
 			}

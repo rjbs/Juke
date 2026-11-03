@@ -22,6 +22,7 @@ type NumbersReport struct {
 	Taken   int // tracks whose filename number another track holds
 	Unnamed int // tracks with no number anywhere, filename included
 	Albums  int // albums whose order changed
+	Sourced int // tracks told where their number came from
 }
 
 // Numbers places tracks that were numbered from nowhere.  The import
@@ -36,6 +37,12 @@ type NumbersReport struct {
 // name from its path; the move's journal, if given, still has it.  Every
 // track moved gets the same new modseq, and so does each album changed,
 // since its track order is the album's.
+//
+// It also records where each album track's number came from, for the
+// review page, where an older import didn't: the tags, the catalog or
+// the filename, whichever gives the number the track has, or "none".
+// A gap track's number is the catalog's, if the catalog says so; with no
+// catalog, nothing can be said of one.  No modseq: clients don't see it.
 func Numbers(ctx context.Context, db *sql.DB, catalog *sql.DB, journal string) (*NumbersReport, error) {
 	r := &NumbersReport{}
 	names, err := originalNames(journal)
@@ -69,14 +76,18 @@ func Numbers(ctx context.Context, db *sql.DB, catalog *sql.DB, journal string) (
 		ts := albums[albumID]
 		var movers []placement
 		for _, t := range ts {
+			if t.source == "" {
+				if source := t.numberSource(catalogNumbers, names); source != "" {
+					if _, err := tx.ExecContext(ctx, `UPDATE track SET number_source = ? WHERE id = ?`, source, t.id); err != nil {
+						return nil, err
+					}
+					r.Sourced++
+				}
+			}
 			if t.path == "" || t.numbered(catalogNumbers) {
 				continue
 			}
-			name := names[t.id]
-			if name == "" {
-				name = path.Base(t.path)
-			}
-			_, n := tags.NumbersFromName(name)
+			_, n := tags.NumbersFromName(t.name(names))
 			if n <= 0 {
 				r.Unnamed++
 				continue
@@ -104,7 +115,7 @@ func Numbers(ctx context.Context, db *sql.DB, catalog *sql.DB, journal string) (
 			}
 		}
 		for _, p := range placed {
-			if _, err := tx.ExecContext(ctx, `UPDATE track SET position = ?, modseq = ? WHERE id = ?`, p.number, modseq, p.track.id); err != nil {
+			if _, err := tx.ExecContext(ctx, `UPDATE track SET position = ?, number_source = 'file', modseq = ? WHERE id = ?`, p.number, modseq, p.track.id); err != nil {
 				return nil, err
 			}
 			r.Placed++
@@ -171,7 +182,39 @@ func settle(all []*albumTrack, movers []placement) []placement {
 type albumTrack struct {
 	id, title, album, path string
 	disc, position         int
+	source                 string         // number_source as stored, "" for NULL
 	raw                    map[string]any // the stored tags, or nil
+}
+
+// name is the filename the import saw: the journal's, for a file the
+// originals move renamed, else the path's.
+func (t *albumTrack) name(names map[string]string) string {
+	if name := names[t.id]; name != "" {
+		return name
+	}
+	return path.Base(t.path)
+}
+
+// numberSource says what gave the track the number it has, or "" when
+// that can't be told: a gap track the catalog doesn't number.
+func (t *albumTrack) numberSource(catalogNumbers map[catalogKey]int, names map[string]string) string {
+	catalog := catalogNumbers[catalogKey{title: t.title, album: t.album}]
+	if t.path == "" {
+		if catalog == t.position {
+			return "catalog"
+		}
+		return ""
+	}
+	if t.raw != nil && tags.TrackNumber(t.raw) == t.position {
+		return "tags"
+	}
+	if catalog == t.position {
+		return "catalog"
+	}
+	if _, n := tags.NumbersFromName(t.name(names)); n == t.position {
+		return "file"
+	}
+	return "none"
 }
 
 // numbered says whether the track's tags or the catalog give it a
@@ -189,7 +232,7 @@ func (t *albumTrack) numbered(catalogNumbers map[catalogKey]int) bool {
 // holds a spot too.
 func loadAlbumTracks(ctx context.Context, q store.Queryer) (map[string][]*albumTrack, error) {
 	rows, err := q.QueryContext(ctx, `
-		SELECT t.id, t.title, a.title, t.album_id, t.path, t.disc_index, t.position, t.original_tags
+		SELECT t.id, t.title, a.title, t.album_id, t.path, t.disc_index, t.position, t.number_source, t.original_tags
 		FROM track t JOIN album a ON a.id = t.album_id
 		WHERE t.position IS NOT NULL ORDER BY t.album_id, t.disc_index, t.position`)
 	if err != nil {
@@ -200,11 +243,11 @@ func loadAlbumTracks(ctx context.Context, q store.Queryer) (map[string][]*albumT
 	for rows.Next() {
 		var t albumTrack
 		var albumID string
-		var p, raw sql.NullString
-		if err := rows.Scan(&t.id, &t.title, &t.album, &albumID, &p, &t.disc, &t.position, &raw); err != nil {
+		var p, source, raw sql.NullString
+		if err := rows.Scan(&t.id, &t.title, &t.album, &albumID, &p, &t.disc, &t.position, &source, &raw); err != nil {
 			return nil, err
 		}
-		t.path = p.String
+		t.path, t.source = p.String, source.String
 		if raw.Valid {
 			if err := json.Unmarshal([]byte(raw.String), &t.raw); err != nil {
 				return nil, fmt.Errorf("track %s: original tags: %w", t.id, err)

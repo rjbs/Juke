@@ -2,16 +2,19 @@ package backfill
 
 import (
 	"context"
+	"database/sql"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 )
 
 // checkNumbers runs the numbers backfill over an album of tracks and
-// checks where each ends up, and the report.  A track's file name is
-// where its number may come from; a journal line moves a track's file to
-// the originals store, so only the journal remembers its name.
-func checkNumbers(t *testing.T, name string, tracks []track, catalogRows string, journalFor map[string]string, want map[string]int, wantReport NumbersReport) {
+// checks where each ends up, as "position source", and the report.  A
+// track's file name is where its number may come from; a journal line
+// moves a track's file to the originals store, so only the journal
+// remembers its name.
+func checkNumbers(t *testing.T, name string, tracks []track, catalogRows string, journalFor map[string]string, want map[string]string, wantReport NumbersReport) {
 	t.Helper()
 	db, library, catalog := setup(t, tracks, catalogRows)
 	ctx := context.Background()
@@ -42,14 +45,18 @@ func checkNumbers(t *testing.T, name string, tracks []track, catalogRows string,
 	if *r != wantReport {
 		t.Errorf("%s: report %+v, want %+v", name, *r, wantReport)
 	}
-	for title, pos := range want {
+	for title, w := range want {
+		var pos int
+		var source string
+		fmt.Sscanf(w, "%d %s", &pos, &source)
 		var got int
+		var gotSource sql.NullString
 		var modseq int64
-		if err := db.QueryRow(`SELECT position, modseq FROM track WHERE title = ?`, title).Scan(&got, &modseq); err != nil {
+		if err := db.QueryRow(`SELECT position, number_source, modseq FROM track WHERE title = ?`, title).Scan(&got, &gotSource, &modseq); err != nil {
 			t.Fatal(err)
 		}
-		if got != pos {
-			t.Errorf("%s: %s at %d, want %d", name, title, got, pos)
+		if got != pos || gotSource.String != source {
+			t.Errorf("%s: %s at %d from %q, want %d from %q", name, title, got, gotSource.String, pos, source)
 		}
 		if moved := modseq > before; moved != (pos != positionOf(tracks, title)) {
 			t.Errorf("%s: %s modseq %d, before the run was %d", name, title, modseq, before)
@@ -67,8 +74,8 @@ func checkNumbers(t *testing.T, name string, tracks []track, catalogRows string,
 	if err != nil {
 		t.Fatalf("%s, again: %v", name, err)
 	}
-	if again.Placed != 0 || again.Albums != 0 {
-		t.Errorf("%s: a second run placed %d on %d albums", name, again.Placed, again.Albums)
+	if again.Placed != 0 || again.Albums != 0 || again.Sourced != 0 {
+		t.Errorf("%s: a second run placed %d on %d albums and noted %d sources", name, again.Placed, again.Albums, again.Sourced)
 	}
 }
 
@@ -92,8 +99,8 @@ func TestNumbers(t *testing.T) {
 			{title: "Three", position: 2, tags: unnumbered, file: "Record/03 Three.mp3"},
 			{title: "Five", position: 3, tags: unnumbered, file: "Record/05 Five.mp3"},
 		}, none, nil,
-		map[string]int{"One": 1, "Three": 3, "Five": 5},
-		NumbersReport{Placed: 2, Albums: 1})
+		map[string]string{"One": "1 tags", "Three": "3 file", "Five": "5 file"},
+		NumbersReport{Placed: 2, Albums: 1, Sourced: 3})
 
 	checkNumbers(t, "a taken spot and a bare name stay put",
 		[]track{
@@ -101,16 +108,16 @@ func TestNumbers(t *testing.T) {
 			{title: "Dupe", position: 2, tags: unnumbered, file: "Record/01 Dupe.mp3"},
 			{title: "Plain", position: 3, tags: unnumbered, file: "Record/Plain.mp3"},
 		}, none, nil,
-		map[string]int{"One": 1, "Dupe": 2, "Plain": 3},
-		NumbersReport{Taken: 1, Unnamed: 1})
+		map[string]string{"One": "1 tags", "Dupe": "2 none", "Plain": "3 none"},
+		NumbersReport{Taken: 1, Unnamed: 1, Sourced: 3})
 
 	checkNumbers(t, "the catalog's number is a number",
 		[]track{
 			{title: "One", position: 1, tags: numbered, file: "Record/01 One.mp3"},
 			{title: "Two", position: 2, tags: unnumbered, file: "Record/09 Two.mp3"},
 		}, `('Two', 'Record', 2, NULL, NULL)`, nil,
-		map[string]int{"One": 1, "Two": 2},
-		NumbersReport{})
+		map[string]string{"One": "1 tags", "Two": "2 catalog"},
+		NumbersReport{Sourced: 2})
 
 	checkNumbers(t, "a gap holds its spot",
 		[]track{
@@ -118,22 +125,22 @@ func TestNumbers(t *testing.T) {
 			{title: "Lost", position: 2},
 			{title: "Two", position: 3, tags: unnumbered, file: "Record/02 Two.mp3"},
 		}, none, nil,
-		map[string]int{"One": 1, "Lost": 2, "Two": 3},
-		NumbersReport{Taken: 1})
+		map[string]string{"One": "1 tags", "Lost": "2 ", "Two": "3 none"},
+		NumbersReport{Taken: 1, Sourced: 2})
 
 	checkNumbers(t, "a spot being left can be taken in the same run",
 		[]track{
 			{title: "Two", position: 1, tags: unnumbered, file: "Record/02 Two.mp3"},
 			{title: "One", position: 2, tags: unnumbered, file: "Record/01 One.mp3"},
 		}, none, nil,
-		map[string]int{"One": 1, "Two": 2},
-		NumbersReport{Placed: 2, Albums: 1})
+		map[string]string{"One": "1 file", "Two": "2 file"},
+		NumbersReport{Placed: 2, Albums: 1, Sourced: 2})
 
 	checkNumbers(t, "a moved file's name comes from the journal",
 		[]track{
 			{title: "One", position: 1, tags: numbered, file: "Record/01 One.mp3"},
 			{title: "Four", position: 2, tags: unnumbered, file: "Record/04 Four.mp3"},
 		}, none, map[string]string{"Four": "Record/04 Four.mp3"},
-		map[string]int{"One": 1, "Four": 4},
-		NumbersReport{Placed: 1, Albums: 1})
+		map[string]string{"One": "1 tags", "Four": "4 file"},
+		NumbersReport{Placed: 1, Albums: 1, Sourced: 2})
 }

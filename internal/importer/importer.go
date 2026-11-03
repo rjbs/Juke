@@ -544,7 +544,7 @@ func (im *run) importDir(ctx context.Context, dir string, files []*audioFile) er
 	if path.Base(dir) == "Unknown Album" {
 		sort.Slice(files, func(i, j int) bool { return files[i].name < files[j].name })
 		for _, f := range files {
-			if _, err := im.insertFile(ctx, dir, f, dirArtist(dir), nil, nil, nil); err != nil {
+			if _, err := im.insertFile(ctx, dir, f, dirArtist(dir), nil, nil, nil, nil); err != nil {
 				return err
 			}
 			im.report.AlbumlessTrack++
@@ -558,12 +558,13 @@ func (im *run) importDir(ctx context.Context, dir string, files []*audioFile) er
 	}
 
 	type entry struct {
-		file  *audioFile
-		gap   *catalogTrack
-		disc  int
-		track int
-		count int
-		name  string
+		file   *audioFile
+		gap    *catalogTrack
+		disc   int
+		track  int
+		count  int
+		name   string
+		source string // what gave track: "tags", "catalog", "file", or ""
 	}
 	var entries []entry
 	for _, f := range files {
@@ -571,16 +572,16 @@ func (im *run) importDir(ctx context.Context, dir string, files []*audioFile) er
 		if disc <= 0 && f.catalog != nil && f.catalog.DiscNumber.Valid {
 			disc = int(f.catalog.DiscNumber.Int64)
 		}
-		track := f.trackNumber
+		track, source := f.trackNumber, "tags"
 		if track <= 0 && f.catalog != nil && f.catalog.TrackNumber.Valid {
-			track = int(f.catalog.TrackNumber.Int64)
+			track, source = int(f.catalog.TrackNumber.Int64), "catalog"
 		}
 		// A number from the filename stands in where tags and catalog are
 		// silent, as iTunes wrote "NN Title" from the number it knew.  Only
 		// untitled files took one before (#6).  -- claude, 2026-11-02
 		if track <= 0 {
 			nameDisc, nameTrack := tags.NumbersFromName(f.name)
-			track = nameTrack
+			track, source = nameTrack, "file"
 			if disc <= 0 {
 				disc = nameDisc
 			}
@@ -589,7 +590,10 @@ func (im *run) importDir(ctx context.Context, dir string, files []*audioFile) er
 		if count <= 0 && f.catalog != nil {
 			count = int(f.catalog.TrackCount.Int64)
 		}
-		entries = append(entries, entry{file: f, disc: max(disc, 1), track: max(track, 0), count: count, name: f.name})
+		if track <= 0 {
+			source = ""
+		}
+		entries = append(entries, entry{file: f, disc: max(disc, 1), track: max(track, 0), count: count, name: f.name, source: source})
 	}
 	for i := range gaps {
 		g := &gaps[i]
@@ -600,6 +604,9 @@ func (im *run) importDir(ctx context.Context, dir string, files []*audioFile) er
 			count: int(g.TrackCount.Int64),
 			name:  g.Name.String,
 		})
+		if g.TrackNumber.Int64 > 0 {
+			entries[len(entries)-1].source = "catalog"
+		}
 	}
 
 	// Numbered tracks first, in number order; then unnumbered ones by
@@ -665,13 +672,19 @@ func (im *run) importDir(ctx context.Context, dir string, files []*audioFile) er
 		di := discIndex[e.disc]
 		pos := positions[di][placed[di]]
 		placed[di]++
+		// A number that didn't stick, because an earlier track had it,
+		// placed the track no better than no number would have.
+		source := "none"
+		if pos == e.track {
+			source = e.source
+		}
 		if e.file != nil {
-			if _, err := im.insertFile(ctx, dir, e.file, albumArtist, &albumID, &di, &pos); err != nil {
+			if _, err := im.insertFile(ctx, dir, e.file, albumArtist, &albumID, &di, &pos, &source); err != nil {
 				return err
 			}
 			continue
 		}
-		if err := im.insertGap(ctx, dir, e.gap, albumID, di, pos); err != nil {
+		if err := im.insertGap(ctx, dir, e.gap, albumID, di, pos, source); err != nil {
 			return err
 		}
 	}
@@ -816,7 +829,7 @@ func listening(c *catalogTrack) (rating *float64, playCount int64, lastPlayed *s
 // insertFile inserts one file's track.  fallbackArtist is the artist for a
 // track that neither its tags nor the catalog name: its album's artist,
 // none on a compilation, or for a track on no album, its directory's.
-func (im *run) insertFile(ctx context.Context, dir string, f *audioFile, fallbackArtist string, albumID *string, disc, pos *int) (string, error) {
+func (im *run) insertFile(ctx context.Context, dir string, f *audioFile, fallbackArtist string, albumID *string, disc, pos *int, numberSource *string) (string, error) {
 	rating, playCount, lastPlayed, dateAdded := listening(f.catalog)
 	if dateAdded == "" {
 		dateAdded = f.mtime.Format("2006-01-02T15:04:05Z")
@@ -845,6 +858,7 @@ func (im *run) insertFile(ctx context.Context, dir string, f *audioFile, fallbac
 		ContentType:  &f.contentType,
 		TagFormat:    f.tagFormat,
 		OriginalTags: f.originalTags,
+		NumberSource: numberSource,
 	})
 	if err != nil {
 		return "", err
@@ -860,21 +874,22 @@ func (im *run) insertFile(ctx context.Context, dir string, f *audioFile, fallbac
 	return id, nil
 }
 
-func (im *run) insertGap(ctx context.Context, dir string, g *catalogTrack, albumID string, disc, pos int) error {
+func (im *run) insertGap(ctx context.Context, dir string, g *catalogTrack, albumID string, disc, pos int, numberSource string) error {
 	rating, playCount, lastPlayed, dateAdded := listening(g)
 	title := firstNonEmpty(g.Name.String, "Untitled")
 	id, err := store.InsertTrack(ctx, im.tx, store.NewTrack{
-		Title:      title,
-		Artist:     nonEmpty(g.Artist.String),
-		Genre:      nonEmpty(g.Genre.String),
-		Duration:   catalogSeconds(g),
-		AlbumID:    &albumID,
-		DiscIndex:  &disc,
-		Position:   &pos,
-		Rating:     rating,
-		PlayCount:  playCount,
-		LastPlayed: lastPlayed,
-		DateAdded:  dateAdded,
+		Title:        title,
+		Artist:       nonEmpty(g.Artist.String),
+		Genre:        nonEmpty(g.Genre.String),
+		Duration:     catalogSeconds(g),
+		AlbumID:      &albumID,
+		DiscIndex:    &disc,
+		Position:     &pos,
+		NumberSource: &numberSource,
+		Rating:       rating,
+		PlayCount:    playCount,
+		LastPlayed:   lastPlayed,
+		DateAdded:    dateAdded,
 	})
 	if err != nil {
 		return err

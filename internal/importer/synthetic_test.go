@@ -234,6 +234,16 @@ func TestSyntheticImport(t *testing.T) {
 	checkDiscTrackCount(t, db, "Album", 0, 3)
 	checkDiscTrackCount(t, db, "Twice", 0, 0)
 
+	// Where each number came from is kept, for the review page: "none"
+	// is a track placed after the rest because nothing numbered it, or
+	// because its number was taken.
+	checkNumberSource(t, db, "First", "tags")
+	checkNumberSource(t, db, "Two", "catalog")
+	checkNumberSource(t, db, "Third", "file")
+	checkNumberSource(t, db, "Hum", "file")
+	checkNumberSource(t, db, "1999 Prince", "none")
+	checkNumberSource(t, db, "Late", "none")
+
 	// A track with no artist tag takes its artist directory's name, but
 	// "Unknown Artist" is no artist, in a tag or a directory.
 	checkTrackArtist(t, db, "Song", "Solo")
@@ -326,6 +336,19 @@ func checkTrackGenre(t *testing.T, db *sql.DB, title, genre string) {
 	}
 	if got.String != genre {
 		t.Errorf("track %q: genre %q, want %q", title, got.String, genre)
+	}
+}
+
+// checkNumberSource checks where one imported track's number came from.
+func checkNumberSource(t *testing.T, db *sql.DB, title, want string) {
+	t.Helper()
+	var got sql.NullString
+	if err := db.QueryRow(`SELECT number_source FROM track WHERE title = ?`, title).Scan(&got); err != nil {
+		t.Errorf("track %q: %v", title, err)
+		return
+	}
+	if got.String != want {
+		t.Errorf("track %q: number source %q, want %q", title, got.String, want)
 	}
 }
 
