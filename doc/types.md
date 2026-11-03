@@ -30,6 +30,7 @@ A recording on an album, usually with audio.
 | `dateAdded`  | `UTCDate`       | When the track joined the library. |
 | `artworkBlobId` | `Id\|null` | Server-set.  The track's own art, only where it differs from its album's; see [artwork](artwork.md).  Null means show the album's. |
 | `artworkType` | `String\|null` | Server-set.  The media type of the track's own art, such as `image/jpeg`.  Null with `artworkBlobId`. |
+| `numberSource` | `String\|null` | Server-set, **review only** (see Album).  What gave the track its number: `tags`, `catalog`, `file`, `user`, or `none` for a track placed after the rest because nothing did; see [import](import.md).  Null where an older import didn't say. |
 
 **A track with no audio** stands for a gap: a track the 2014 catalog
 knows an album had, whose file is lost.  It keeps the catalog's title,

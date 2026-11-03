@@ -40,9 +40,10 @@ func (s *Server) objectTypes() []*objectType {
 			table: "track",
 			properties: []string{
 				"id", "title", "artist", "genre", "albumId", "rating", "blobId", "blobType",
-				"size", "duration", "playCount", "lastPlayed", "dateAdded", "artworkBlobId", "artworkType",
+				"size", "duration", "playCount", "lastPlayed", "dateAdded", "artworkBlobId", "artworkType", "numberSource",
 			},
-			load:  loadTracks,
+			reviewProperties: []string{"numberSource"},
+			load:             loadTracks,
 			query: queryTracks,
 			page:  queryTracksPage,
 		},
@@ -256,7 +257,7 @@ func loadTracks(ctx context.Context, q store.Queryer, ids []string) (map[string]
 	where, args := inClause("id", ids)
 	rows, err := q.QueryContext(ctx, `
 		SELECT id, title, artist, genre, album_id, rating, blob_id, content_type, size, duration, play_count, last_played, date_added,
-		       artwork_id, (SELECT mime FROM artwork WHERE id = track.artwork_id)
+		       artwork_id, (SELECT mime FROM artwork WHERE id = track.artwork_id), number_source
 		FROM track`+where+` ORDER BY id`, args...)
 	if err != nil {
 		return nil, nil, err
@@ -266,11 +267,11 @@ func loadTracks(ctx context.Context, q store.Queryer, ids []string) (map[string]
 	var order []string
 	for rows.Next() {
 		var id, title, dateAdded string
-		var artist, genre, albumID, blobID, blobType, lastPlayed, artworkID, artworkType sql.NullString
+		var artist, genre, albumID, blobID, blobType, lastPlayed, artworkID, artworkType, numberSource sql.NullString
 		var rating sql.NullFloat64
 		var size, duration sql.NullInt64
 		var playCount int64
-		if err := rows.Scan(&id, &title, &artist, &genre, &albumID, &rating, &blobID, &blobType, &size, &duration, &playCount, &lastPlayed, &dateAdded, &artworkID, &artworkType); err != nil {
+		if err := rows.Scan(&id, &title, &artist, &genre, &albumID, &rating, &blobID, &blobType, &size, &duration, &playCount, &lastPlayed, &dateAdded, &artworkID, &artworkType, &numberSource); err != nil {
 			return nil, nil, err
 		}
 		obj := object{
@@ -290,6 +291,7 @@ func loadTracks(ctx context.Context, q store.Queryer, ids []string) (map[string]
 
 			"artworkBlobId": nullString(artworkID),
 			"artworkType":   nullString(artworkType),
+			"numberSource":  nullString(numberSource),
 		}
 		if rating.Valid {
 			obj["rating"] = rating.Float64

@@ -55,6 +55,11 @@ func TestReviewIssuesAndCandidates(t *testing.T) {
 	checkEqual(t, "a tie with an override", f.album(devo)["issues"], []any{"artOverrides", "artTie"})
 	checkEqual(t, "no art, and folder art the tracks disagree with", f.album(queen)["issues"], []any{"noArt", "folderArt"})
 	checkEqual(t, "a gap and a track from nowhere", f.album(al)["issues"], []any{"noArt", "unnumbered", "gaps"})
+	source := func(title string) any {
+		r := f.call("Track/get", map[string]any{"ids": []string{f.ids[title]}, "properties": []string{"numberSource"}})
+		return r["list"].([]any)[0].(map[string]any)["numberSource"]
+	}
+	checkEqual(t, "the track from nowhere", []any{source("Trigger Happy"), source("Smells Like Nirvana")}, []any{"none", nil})
 
 	checkEqual(t, "candidates by first carrier", f.album(devo)["artworkCandidates"], []any{
 		map[string]any{"blobId": a, "type": "image/png", "trackIds": []any{f.ids["Whip It"]}, "folder": false},
@@ -119,6 +124,8 @@ func TestReviewNeedsItsCapability(t *testing.T) {
 	checkEqual(t, "review properties absent", []bool{hasIssues, hasCandidates}, []bool{false, false})
 	r := f.calls("Album/get", map[string]any{"ids": []string{devo}, "properties": []string{"issues"}})[0]
 	checkEqual(t, "asking for one", r.Args["type"], "invalidArguments")
+	r = f.calls("Track/get", map[string]any{"ids": []string{f.ids["Whip It"]}, "properties": []string{"numberSource"}})[0]
+	checkEqual(t, "a track's number source", r.Args["type"], "invalidArguments")
 	r = f.calls("Album/query", map[string]any{"filter": map[string]any{"hasIssues": true}})[0]
 	checkEqual(t, "filtering", r.Args["type"], "unsupportedFilter")
 	r = f.calls("Album/set", map[string]any{"update": map[string]any{devo: map[string]any{"artworkBlobId": a}}})[0]
