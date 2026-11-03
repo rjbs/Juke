@@ -43,8 +43,22 @@ shows its album's.
 Of the library's 3,985 albums as imported, 1,722 have no embedded art,
 1,661 agree on one image, 229 agree where tracks have one at all, and
 373 disagree.  Among the 373, 115 carry two images, 159 a different one
-on every track, and the rest something between.  A tool to look at
-those and set an album's image by hand is a thread for later.
+on every track, and the rest something between.
+
+## Choosing by hand
+
+The review page on the server's web page lists the albums where the rule
+had to guess (a tie, overrides, folder art the tracks disagree with) or
+had nothing to go on, shows the pictures side by side with the tracks
+carrying each, and lets one be chosen as the album's, which clears the
+tracks' own; a track can then be given its own again.  The choice is
+recorded as the user's (`artwork_source`), and the run leaves such an
+album and its tracks alone from then on, choosing only where its own
+earlier choice stands.  The run also records, for the page, which
+picture each track's file carries (`picture_id`), the image file
+beside each album (`folder_artwork_id`), and whether the choice was a
+tie; those take no new modseq, since no playing client sees them.  See
+[object types](types.md) for the review capability.
 
 ## Storage and serving
 

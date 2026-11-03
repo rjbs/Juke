@@ -71,7 +71,10 @@ its results.
   entries in `discs`.
 - **A track number is kept as its position,** so a number no file or gap
   has is a missing track.  A track with no number, or whose number an
-  earlier track took, goes after the disc's highest number.  A disc also
+  earlier track took, goes after the disc's highest number, and is
+  marked as numbered from nowhere (`number_source`: `tags`, `catalog`,
+  `file`, `none`, or `user` once `Album/set` has placed it), which the
+  review page lists.  A disc also
   keeps the total its tracks declare (TRCK's `n/total`, or the catalog's
   track count), so missing tracks at its end can be told too.  Both are
   for album completeness (#40); until the protocol carries them,

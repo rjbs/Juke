@@ -40,8 +40,10 @@ track that nothing numbered, which the import put after its album's
 numbered tracks, to the number its filename starts with, when that
 spot is free (#6); for a file the originals move has renamed, the
 move's journal (`--journal`, default the database's name plus
-`.originals-journal`) still has the name.  Every track it
-changes gets one new modseq so clients refetch them once; see
+`.originals-journal`) still has the name.  It also notes where each
+album track's number came from, where an older import didn't say, for
+the review tab; with the catalog the answer is more complete.  Every
+track it changes gets one new modseq so clients refetch them once; see
 [import](import.md).  It is safe to run again, and to run while the
 server is up, which notices the change on its next poll.  With a
 catalog it also reports how many measured durations disagree with the
@@ -54,8 +56,9 @@ catalog's by more than two seconds, as a check on the measuring.
 Finds album art in the files' embedded pictures and in image files
 beside them, stores each distinct image once under `artwork/` in the
 library directory, and sets each album's and track's art by the rule
-in [artwork](artwork.md).  Like `backfill`, it is safe to run again and
-while the server is up.
+in [artwork](artwork.md), leaving alone any chosen by hand on the review
+tab.  Like `backfill`, it is safe to run again and while the server is
+up.
 
 ## Serving
 
@@ -70,7 +73,9 @@ to its end there counts as a play.  `--web-dir internal/web` serves the
 page from the source tree instead, so edits show on reload.
 
 The session is at `/.well-known/jmap`, with one account, `music`, under
-the capability `https://semiotic.systems/jmap/juke`.  `--max-objects-in-get` lowers the
+the capability `https://semiotic.systems/jmap/juke`, and a second,
+`https://semiotic.systems/jmap/juke/review`, for the web page's review
+tab; see [object types](types.md).  `--max-objects-in-get` lowers the
 per-request object limit, which makes clients page through `/query`;
 useful for testing.
 

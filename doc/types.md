@@ -55,8 +55,10 @@ considered and isn't needed.
 | `title`  | `String`       | One title per album; disc numbers are not part of it. |
 | `artist` | `String\|null` | Null for a various-artists compilation. |
 | `discs`  | `Disc[]`       | At least one. |
-| `artworkBlobId` | `Id\|null` | Server-set.  The album's art, an image served as a blob; see [artwork](artwork.md). |
+| `artworkBlobId` | `Id\|null` | The album's art, an image served as a blob; see [artwork](artwork.md).  Set by the server's rule, or by hand under the review capability, below. |
 | `artworkType` | `String\|null` | Server-set.  The art's media type, such as `image/jpeg`, for the download URL's `type`.  Null with `artworkBlobId`. |
+| `issues` | `String[]` | Server-set, **review only**.  What might be wrong with the album; see below. |
+| `artworkCandidates` | `Candidate[]` | Server-set, **review only**.  The images the album could have: `{blobId, type, trackIds, folder}`, the image file beside its tracks first (`folder` true, no `trackIds`), then each picture its tracks' files carry, with the tracks carrying it, by first carrier in play order. |
 
 ### Disc
 
@@ -84,12 +86,49 @@ next `Track/changes` too.  A track that joins an album leaves the one it
 was on, which changes as well and appears in the next `Album/changes`; a
 track that leaves an album and joins no other is left on no album.
 
-`Album/set` sets `title`, `artist` and `discs`.  As RFC 8620 requires, an
+`Album/set` sets `title`, `artist`, `discs` and, under the review
+capability, `artworkBlobId`.  As RFC 8620 requires, an
 update replaces `discs` whole; a patch can't point into it.  Merging two
 albums is one `Album/set` that updates the album to keep, giving it the
 other's tracks, and destroys the other.  Only an album with no tracks can
 be destroyed; destroying one with tracks fails with the SetError
 `albumNotEmpty`, so a slip can't strand its tracks on no album.
+
+### Review
+
+The review page (see [server](server.md)) asks for more than a client
+that plays music needs, so that is a capability of its own,
+`https://semiotic.systems/jmap/juke/review`, in `using` beside the
+Juke one.  Without it Album is as the table has it less the two review
+properties; asking for one by name is `invalidArguments`, and the
+filter and the art setting below are refused.  With it:
+
+`issues` names the album's troubles, in this order:
+
+| Issue | Meaning |
+|-------|---------|
+| `noArt` | Tracks with audio, but no image. |
+| `artOverrides` | Some tracks carry a picture other than the album's, and show it. |
+| `artTie` | The rule picked the album's image on a tie; see [artwork](artwork.md). |
+| `folderArt` | The image file beside the tracks differs from pictures the tracks carry. |
+| `unnumbered` | A track was numbered from nowhere: nothing gave it a number, or another track had the one it gave, so the import put it after the rest. |
+| `gaps` | Tracks with no audio. |
+
+The art issues are moot once the album's art has been chosen by hand,
+and `unnumbered` once `discs` has been set, since the order is then the
+user's.
+
+`Album/query` takes a filter, `{issue: "artTie"}` for one issue or
+`{hasIssues: true}` for any (false for none); the sort is by title as
+before.
+
+`Album/set` with `artworkBlobId` gives the album that image, which must
+be one the server has stored (any `artworkCandidates` entry, or another
+album's), or null for none, and clears its tracks' own images, so the
+choice is the whole album's; the tracks whose `artworkBlobId` changed
+appear in the next `Track/changes`.  `Track/set` with `artworkBlobId`
+then gives one track an image of its own again, or null to clear it.
+Art chosen either way is left alone by later runs of `juke artwork`.
 
 ## Playlist
 
