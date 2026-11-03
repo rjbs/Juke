@@ -229,6 +229,37 @@ final class JukeUITests: XCTestCase {
     XCTAssertTrue(app.staticTexts["No Such Playlist"].waitForExistence(timeout: 10), "never noticed the destroy")
   }
 
+  /// A smart playlist is made in the editor: titled, its one blank
+  /// condition dropped so the rule matches everything, the preview's
+  /// count read, and the saved playlist opened with the same count;
+  /// then deleted from its menu.
+  func testSmartPlaylistEditor() throws {
+    let title = "UI Smart Edit \(Int(Date().timeIntervalSince1970))"
+    showSidebar()
+    app.buttons["smartPlaylist.new"].tap()
+    let field = app.textFields["smartPlaylist.title"]
+    XCTAssertTrue(field.waitForExistence(timeout: 5), "no editor")
+    field.tap()
+    field.typeText(title)
+    app.buttons["rule.remove"].firstMatch.tap()
+
+    let summary = app.staticTexts["smartPlaylist.previewSummary"]
+    let counted = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label MATCHES %@", "[0-9,]+ tracks"), object: summary)
+    XCTAssertEqual(XCTWaiter().wait(for: [counted], timeout: 15), .completed, "the preview says \(summary.label)")
+    let count = summary.label
+    snapshot("editor")
+
+    app.buttons["smartPlaylist.save"].tap()
+    XCTAssertTrue(app.navigationBars[title].waitForExistence(timeout: 15), "\(title) never opened")
+    XCTAssertTrue(app.staticTexts[count].waitForExistence(timeout: 15), "the playlist doesn't say \(count)")
+    snapshot("saved")
+
+    app.buttons["smartPlaylist.menu"].tap()
+    app.buttons["Delete Smart Playlist…"].tap()
+    app.buttons["Delete Smart Playlist"].tap()
+    XCTAssertTrue(app.staticTexts["No Such Playlist"].waitForExistence(timeout: 10), "never deleted")
+  }
+
   // MARK: - Helpers
 
   /// Sends one method call straight to the server, which is how a test

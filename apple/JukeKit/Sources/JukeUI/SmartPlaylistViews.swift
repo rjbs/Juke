@@ -2,9 +2,10 @@ import JukeKit
 import SwiftUI
 
 /// A smart playlist's tracks: what the server last said its rule
-/// matched, in the rule's order.  The list is read-only; the rule is
-/// authored elsewhere.  Its tracks can be played, added to a plain
-/// playlist, and kept offline.
+/// matched, in the rule's order.  Its tracks can be played, added to a
+/// plain playlist, and kept offline; the rule is edited, copied or
+/// deleted from the toolbar menu, the editing in a sheet the sidebar
+/// owns, so that what it saves can be shown.
 ///
 /// It looks the playlist up by id each time, rather than holding a copy,
 /// so it follows the rule and its result as they change and notices
@@ -13,6 +14,12 @@ struct SmartPlaylistView: View {
   let library: Library
   let player: Player
   let id: String
+  /// Opens the editor on something; the sidebar provides it, so a view
+  /// pushed from the Offline tab has it too.
+  @Environment(SmartPlaylistEditorHost.self) private var editor: SmartPlaylistEditorHost?
+
+  @State private var confirmingDelete = false
+  @State private var deleteFailure: String?
 
   var body: some View {
     if let playlist = library.smartPlaylists.first(where: { $0.id == id }) {
@@ -64,9 +71,27 @@ struct SmartPlaylistView: View {
             player.playShuffledByAlbum(tracks, from: playlist.title)
           }
           .disabled(playable.isEmpty)
+          if let editor {
+            Divider()
+            Button("Edit Rule…", systemImage: "pencil") { editor.edit(.rule(playlist)) }
+            Button("Duplicate…", systemImage: "doc.on.doc") { editor.edit(.copy(playlist)) }
+            Button("Delete Smart Playlist…", systemImage: "trash", role: .destructive) { confirmingDelete = true }
+          }
         }
         .accessibilityIdentifier("smartPlaylist.menu")
       }
+    }
+    .confirmationDialog("Delete “\(playlist.title)”?", isPresented: $confirmingDelete, titleVisibility: .visible) {
+      Button("Delete Smart Playlist", role: .destructive) {
+        Task {
+          do { try await library.delete(playlist) } catch { deleteFailure = error.localizedDescription }
+        }
+      }
+    }
+    .alert("Couldn't Delete", isPresented: Binding(get: { deleteFailure != nil }, set: { if !$0 { deleteFailure = nil } })) {
+      Button("OK") {}
+    } message: {
+      Text(deleteFailure ?? "")
     }
   }
 

@@ -173,5 +173,5 @@ outside it, such as an import.
 - `/queryChanges` always answers `cannotCalculateChanges`.
 - Uploads are refused.
 - Metadata flush.
-- Authoring smart playlists in the Apple client; the web page and
-  `bin/recreate-smart-playlists` do it.
+- Authoring smart playlists offline in the Apple client: its editor
+  previews and saves through the server.

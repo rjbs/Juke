@@ -19,6 +19,8 @@ struct LibraryView: View {
   }
 
   @State private var selection: SidebarItem? = .albums
+  /// The smart playlist editor, shown as a sheet while it has a subject.
+  @State private var editor = SmartPlaylistEditorHost()
 
   var body: some View {
     switch library.phase {
@@ -70,6 +72,13 @@ struct LibraryView: View {
         ToolbarItem {
           NewPlaylistButton(library: library) { selection = .playlist($0) }
         }
+        ToolbarItem {
+          Button("New Smart Playlist", systemImage: "gearshape.2") { editor.edit(.new) }
+            .accessibilityIdentifier("smartPlaylist.new")
+        }
+      }
+      .sheet(item: Bindable(editor).editing) { editing in
+        SmartPlaylistEditor(library: library, editing: editing) { selection = .smartPlaylist($0) }
       }
       .safeAreaInset(edge: .bottom) {
         VStack(alignment: .leading, spacing: 4) {
@@ -105,6 +114,7 @@ struct LibraryView: View {
         }
       }
       .id(selection)
+      .environment(editor)
     }
   }
 

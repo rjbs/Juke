@@ -35,10 +35,23 @@ plus a streaming cache, built in two phases with downloads first.
 - **Sync loop:** Track `/changes` first, then playlists, then the smart
   playlists' queries; apply blobId changes by refetching.  See
   [playlists](playlists.md) for why that order matters.
-- **Smart playlists are read-only in the app.**  Each one's rule is a
-  Jinx query subscription, so its tracks are the server's latest answer
-  while online and the last answer while not.  Keeping one offline
-  pins whatever its result holds, following the result as it changes.
-  The app shows one page of a result, the server's query limit, and
-  says so when the rule matched more; the lists one plays are capped
-  well under that.
+- **Smart playlists.**  Each one's rule is a Jinx query subscription,
+  so its tracks are the server's latest answer while online and the
+  last answer while not.  Keeping one offline pins whatever its result
+  holds, following the result as it changes.  The app shows one page
+  of a result, the server's query limit, and says so when the rule
+  matched more; the lists one plays are capped well under that.
+- **Rules are edited in a sheet** (`SmartPlaylistEditor`), the same
+  tree of groups and conditions, sort and limits as the web page's
+  editor, with the tracks the draft matches now beneath, re-run as it
+  is edited.  The model (`Rules.swift`) reads any stored filter into
+  the tree and compiles it back, so a rule written on either editor
+  opens in the other.  Unlike a plain playlist's edits, which go to
+  the mirror and sync later, a rule is previewed and saved through the
+  server directly (`Library+Rules.swift`): the preview is a query the
+  mirror doesn't keep, and the server's refusals (a rule that won't
+  run, a loop, deleting a playlist another rule names) belong in the
+  editor, not in a sync that reverts later.  A save waits for the
+  mirror to catch up before the editor closes, so the playlist can be
+  shown at once.  So editing needs the server; everything else about
+  smart playlists works offline.
