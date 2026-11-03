@@ -228,7 +228,7 @@ function card(c) {
   return h("div", { class: "card" + (chosen ? " chosen" : "") },
     h("img", { src: imageURL(c.blobId, c.type), alt: "" }),
     h("div", { class: "label" },
-      h("div", {}, h("b", {}, candidateName(c)), chosen ? " · the album's art" : null),
+      h("div", {}, h("b", {}, candidateName(c)), chosen ? h("span", { class: "tag" }, "the album's art") : null),
       names.length
         ? h("div", { title: names.join("\n") }, `In ${names.length} file${names.length === 1 ? "" : "s"}: `, names.join(", "))
         : c.folder || c.uploaded ? null : h("div", {}, "In no file here")),
@@ -239,7 +239,7 @@ function noArtCard() {
   const chosen = editing.artwork == null;
   return h("div", { class: "card" + (chosen ? " chosen" : "") },
     h("div", { class: "blank" }, "∅"),
-    h("div", { class: "label" }, h("div", {}, h("b", {}, "No art"), chosen ? " · the album has none" : null)),
+    h("div", { class: "label" }, h("div", {}, h("b", {}, "No art"), chosen ? h("span", { class: "tag" }, "the album has none") : null)),
     h("button", { title: "Give the album no art, and show none for any track", onclick: () => choose(null) }, "Always use none"));
 }
 
