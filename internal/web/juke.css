@@ -61,7 +61,9 @@ tr:hover td { background: var(--hover); }
 td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 td.date { color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
 .none { color: var(--faint); font-style: italic; }
-.album-head { display: flex; gap: 12px; align-items: center; margin: 20px 0 6px; }
+tr.header td { padding: 24px 8px 8px; border-bottom: none; }
+tr.header:hover td { background: none; }
+.album-head { display: flex; gap: 12px; align-items: center; }
 .album-head img, .album-head .no-art {
   width: 72px; height: 72px; object-fit: contain; flex: none;
   background: var(--hover); border: 1px solid var(--line); border-radius: 4px;

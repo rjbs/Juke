@@ -167,11 +167,11 @@ function trackTable(list, cols = {}) {
 
 // groupedTrackTable shows titled groups of tracks, such as an album's
 // discs, as one table, so their columns line up; a group's title is a
-// row across it, and numbering starts over in each group.  Playing from
-// a track plays on through the groups that follow, or through
-// cols.queue, a longer list of playable track ids the table is part of.
+// row across it, as is its header, a node such as an album's art and
+// name, and numbering starts over in each group.  Playing from a track
+// plays on through the groups that follow.
 function groupedTrackTable(groups, cols = {}) {
-  const queue = cols.queue || groups.flatMap(g => g.tracks).filter(t => t.blobId).map(t => t.id);
+  const playable = groups.flatMap(g => g.tracks).filter(t => t.blobId);
   const columns = 6 + !!cols.number + !!cols.album + !!cols.added;
   return h("table", {},
     h("thead", {}, h("tr", {},
@@ -186,6 +186,7 @@ function groupedTrackTable(groups, cols = {}) {
       cols.added && h("th", { class: "hide-narrow" }, "Added"),
     )),
     groups.map(g => h("tbody", {},
+      g.header && h("tr", { class: "header" }, h("td", { colspan: columns }, g.header)),
       g.title && h("tr", { class: "group" }, h("td", { colspan: columns }, g.title)),
       g.tracks.map((t, i) => {
       const album = t.albumId && albums.get(t.albumId);
@@ -194,7 +195,7 @@ function groupedTrackTable(groups, cols = {}) {
         h("td", {}, t.blobId
           ? h("button", {
             class: "play", title: "Play from here",
-            onclick: () => player.play(queue, queue.indexOf(t.id)),
+            onclick: () => player.play(playable.map(p => p.id), playable.indexOf(t)),
           }, "▶")
           : h("span", { class: "no-audio", title: "No audio" }, "⊘")),
         h("td", { class: "title" }, t.title),
@@ -362,8 +363,9 @@ function renderArtists() {
 }
 
 // renderArtist shows an artist's albums whole, each under a header with
-// its art, in an order kept across visits.  Playing a track plays on
-// through the rest of the albums as shown.
+// its art, in an order kept across visits, as one table so the columns
+// line up from album to album.  Playing a track plays on through the
+// rest of the albums as shown.
 async function renderArtist(name) {
   const artist = artistList.find(a => a.name === name);
   if (!artist) return show(h("p", { class: "error" }, `No artist named ${name}.`));
@@ -372,28 +374,28 @@ async function renderArtist(name) {
   let ordered = [], queue = [];
   const tracksOf = a => a.discs.flatMap(d => d.trackIds.map(t => tracks.get(t)));
   const body = h("div");
+  const albumHeader = a => {
+    const its = tracksOf(a);
+    const first = its.find(t => t.blobId);
+    return h("div", { class: "album-head" },
+      a.artworkBlobId
+        ? h("img", { src: imageURL(a.artworkBlobId, a.artworkType), alt: "", loading: "lazy" })
+        : h("div", { class: "no-art" }, "♪"),
+      h("div", {},
+        h("div", { class: "title" }, h("a", { href: `#album/${a.id}` }, a.title)),
+        h("div", { class: "sub" },
+          a.released ? `${releasedText(a.released)} · ` : "",
+          plural(its.length, "track"), " · ",
+          h("button", { onclick: () => player.play(queue, queue.indexOf(first.id)), disabled: !first || null }, "Play album"))));
+  };
   const fill = () => {
     ordered = albumsInOrder(artist.albums, order);
     queue = ordered.flatMap(tracksOf).filter(t => t.blobId).map(t => t.id);
-    body.replaceChildren(...ordered.map(a => {
-      const its = tracksOf(a);
-      const first = its.find(t => t.blobId);
-      return h("section", { class: "artist-album" },
-        h("div", { class: "album-head" },
-          a.artworkBlobId
-            ? h("img", { src: imageURL(a.artworkBlobId, a.artworkType), alt: "", loading: "lazy" })
-            : h("div", { class: "no-art" }, "♪"),
-          h("div", {},
-            h("div", { class: "title" }, h("a", { href: `#album/${a.id}` }, a.title)),
-            h("div", { class: "sub" },
-              a.released ? `${releasedText(a.released)} · ` : "",
-              `${its.length} tracks`, " · ",
-              h("button", { onclick: () => player.play(queue, queue.indexOf(first.id)), disabled: !first || null }, "Play album")))),
-        groupedTrackTable(a.discs.map((d, i) => ({
-          title: a.discs.length > 1 ? d.title || `Disc ${i + 1}` : null,
-          tracks: d.trackIds.map(t => tracks.get(t)),
-        })), { number: true, queue }));
-    }));
+    body.replaceChildren(groupedTrackTable(ordered.flatMap(a => a.discs.map((d, i) => ({
+      header: i === 0 ? albumHeader(a) : null,
+      title: a.discs.length > 1 ? d.title || `Disc ${i + 1}` : null,
+      tracks: d.trackIds.map(t => tracks.get(t)),
+    }))), { number: true }));
   };
   const select = h("select", { onchange: ev => { order = ev.target.value; localStorage.setItem("artistAlbumOrder", order); fill(); } },
     ALBUM_ORDERS.map(([v, label]) => h("option", { value: v, selected: order === v || null }, label)));
