@@ -130,6 +130,29 @@ final class JukeUITests: XCTestCase {
     snapshot("shuffled")
   }
 
+  // An empty playlist kept offline is available at once, needing no
+  // audio, so this runs with no library behind the server.
+  func testOfflineList() throws {
+    let title = "Offline Test \(Int(Date().timeIntervalSince1970))"
+    createPlaylist(title)
+    app.buttons["Keep Offline"].tap()
+    XCTAssertTrue(app.staticTexts["Available offline"].waitForExistence(timeout: 10), "never kept")
+
+    showSidebar()
+    sidebarRow("Offline").tap()
+    XCTAssertTrue(app.navigationBars["Offline"].waitForExistence(timeout: 5), "no offline list")
+    let row = app.buttons.containing(.staticText, identifier: title).firstMatch
+    XCTAssertTrue(row.waitForExistence(timeout: 5), "the kept playlist isn't listed")
+    snapshot("offline list")
+    row.tap()
+    XCTAssertTrue(app.navigationBars[title].waitForExistence(timeout: 5), "the playlist never opened from the list")
+
+    app.buttons["playlist.menu"].tap()
+    app.buttons["Delete Playlist…"].tap()
+    app.buttons["Delete Playlist"].firstMatch.tap()
+    XCTAssertTrue(app.staticTexts["No Such Playlist"].waitForExistence(timeout: 5), "never deleted")
+  }
+
   func testArtistBrowser() throws {
     showSidebar()
     sidebarRow("Artists").tap()

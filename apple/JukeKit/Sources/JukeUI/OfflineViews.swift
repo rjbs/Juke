@@ -43,10 +43,9 @@ struct OfflineView: View {
   var body: some View {
     let offline = library.offline!
     let albums = library.albumList.filter(offline.isKept)
-    let playlists = library.playlists.filter(offline.isKept)
-    let smartPlaylists = library.smartPlaylists.filter(offline.isKept)
+    let playlists = LibraryView.PlaylistRow.rows(of: library).filter { $0.isKept(offline) }
     List {
-      if albums.isEmpty && playlists.isEmpty && smartPlaylists.isEmpty {
+      if albums.isEmpty && playlists.isEmpty {
         Text("Nothing is kept offline yet.  Use “Keep Offline” on an album or playlist.")
           .foregroundStyle(.secondary)
       }
@@ -64,33 +63,27 @@ struct OfflineView: View {
           }
         }
       }
+      // Playlists of both kinds together by title, as the sidebar has
+      // them, each wearing its kind's symbol.  The symbol is the label's
+      // icon beside both lines, not above the status's own.
       if !playlists.isEmpty {
         Section("Playlists") {
-          ForEach(playlists) { playlist in
+          ForEach(playlists) { row in
             NavigationLink {
-              PlaylistView(library: library, player: player, key: playlist.key)
-            } label: {
-              VStack(alignment: .leading) {
-                Text(playlist.title)
-                OfflineStatus(offline: offline, kept: true, tracks: library.tracks(of: playlist))
-                  .font(.caption)
-                  .foregroundStyle(.secondary)
+              switch row {
+              case .plain(let playlist): PlaylistView(library: library, player: player, key: playlist.key)
+              case .smart(let playlist): SmartPlaylistView(library: library, player: player, id: playlist.id)
               }
-            }
-          }
-        }
-      }
-      if !smartPlaylists.isEmpty {
-        Section("Smart Playlists") {
-          ForEach(smartPlaylists) { playlist in
-            NavigationLink {
-              SmartPlaylistView(library: library, player: player, id: playlist.id)
             } label: {
-              VStack(alignment: .leading) {
-                Label(playlist.title, systemImage: "gearshape")
-                OfflineStatus(offline: offline, kept: true, tracks: library.tracks(of: playlist))
-                  .font(.caption)
-                  .foregroundStyle(.secondary)
+              Label {
+                VStack(alignment: .leading) {
+                  Text(row.title)
+                  OfflineStatus(offline: offline, kept: true, tracks: row.tracks(of: library))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
+              } icon: {
+                Image(systemName: row.icon)
               }
             }
           }

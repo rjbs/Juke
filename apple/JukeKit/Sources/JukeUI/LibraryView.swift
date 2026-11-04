@@ -58,9 +58,9 @@ struct LibraryView: View {
             ForEach(rows) { row in
               switch row {
               case .plain(let p):
-                Label(p.title, systemImage: "music.note.list").tag(SidebarItem.playlist(p.id))
+                Label(p.title, systemImage: row.icon).tag(SidebarItem.playlist(p.id))
               case .smart(let s):
-                Label(s.title, systemImage: "gearshape").tag(SidebarItem.smartPlaylist(s.id))
+                Label(s.title, systemImage: row.icon).tag(SidebarItem.smartPlaylist(s.id))
               }
             }
           }
@@ -148,6 +148,28 @@ struct LibraryView: View {
       switch self {
       case .plain(let p): p.title
       case .smart(let s): s.title
+      }
+    }
+
+    /// The symbol that tells the kinds apart wherever they are listed.
+    var icon: String {
+      switch self {
+      case .plain: "music.note.list"
+      case .smart: "gearshape"
+      }
+    }
+
+    @MainActor func isKept(_ offline: Offline) -> Bool {
+      switch self {
+      case .plain(let p): offline.isKept(p)
+      case .smart(let s): offline.isKept(s)
+      }
+    }
+
+    @MainActor func tracks(of library: Library) -> [Track] {
+      switch self {
+      case .plain(let p): library.tracks(of: p)
+      case .smart(let s): library.tracks(of: s)
       }
     }
 
