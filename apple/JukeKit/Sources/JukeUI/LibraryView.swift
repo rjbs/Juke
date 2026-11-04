@@ -127,20 +127,23 @@ struct LibraryView: View {
       }
     } detail: {
       NavigationStack {
-        switch selection {
-        case .albums, nil:
-          AlbumListView(library: library, player: player)
-        case .artists:
-          ArtistListView(library: library, player: player)
-        case .songs:
-          SongListView(library: library, player: player)
-        case .offline:
-          OfflineView(library: library, player: player)
-        case .playlist(let key):
-          PlaylistView(library: library, player: player, key: key)
-        case .smartPlaylist(let id):
-          SmartPlaylistView(library: library, player: player, id: id)
+        Group {
+          switch selection {
+          case .albums, nil:
+            AlbumListView(library: library, player: player)
+          case .artists:
+            ArtistListView(library: library, player: player)
+          case .songs:
+            SongListView(library: library, player: player)
+          case .offline:
+            OfflineView(library: library, player: player)
+          case .playlist(let key):
+            PlaylistView(library: library, player: player, key: key)
+          case .smartPlaylist(let id):
+            SmartPlaylistView(library: library, player: player, id: id)
+          }
         }
+        .libraryDestinations(library: library, player: player)
       }
       .id(selection)
       .environment(editor)

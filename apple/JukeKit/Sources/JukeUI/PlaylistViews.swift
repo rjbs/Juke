@@ -14,6 +14,15 @@ struct PlaylistView: View {
   @State private var renaming = false
   @State private var newTitle = ""
   @State private var confirmingDelete = false
+  /// Kept per playlist, on this device.
+  @AppStorage private var style: TrackListStyle
+
+  init(library: Library, player: Player, key: Playlist.ID) {
+    self.library = library
+    self.player = player
+    self.key = key
+    _style = AppStorage(wrappedValue: .tracks, "trackListStyle.playlist.\(key)")
+  }
 
   /// A track on the playlist and its position in trackIds.  Only tracks
   /// the index knows are shown, so the two can differ.
@@ -43,26 +52,42 @@ struct PlaylistView: View {
           .font(.caption)
           .foregroundStyle(.secondary)
       }
-      ForEach(Array(entries.enumerated()), id: \.element.id) { i, entry in
-        TrackRow(library: library, player: player, track: entry.track, number: i + 1, showArtist: true,
-                 remove: { edit { try await library.removeTracks(at: [entry.position], from: playlist) } }) {
-          player.play(tracks, at: i, from: playlist.title)
+      switch style {
+      case .tracks:
+        ForEach(Array(entries.enumerated()), id: \.element.id) { i, entry in
+          TrackRow(library: library, player: player, track: entry.track, number: i + 1, showArtist: true, showAlbum: true,
+                   remove: { edit { try await library.removeTracks(at: [entry.position], from: playlist) } }) {
+            player.play(tracks, at: i, from: playlist.title)
+          }
         }
-      }
-      .onDelete { offsets in
-        let positions = offsets.map { entries[$0].position }
-        edit { try await library.removeTracks(at: positions, from: playlist) }
-      }
-      .onMove { offsets, destination in
-        let positions = offsets.map { entries[$0].position }
-        let to = destination < entries.count ? entries[destination].position : playlist.trackIds.count
-        edit { try await library.moveTracks(at: positions, to: to, in: playlist) }
+        .onDelete { offsets in
+          let positions = offsets.map { entries[$0].position }
+          edit { try await library.removeTracks(at: positions, from: playlist) }
+        }
+        .onMove { offsets, destination in
+          let positions = offsets.map { entries[$0].position }
+          let to = destination < entries.count ? entries[destination].position : playlist.trackIds.count
+          edit { try await library.moveTracks(at: positions, to: to, in: playlist) }
+        }
+      case .albums:
+        // Tracks are removed here from the context menu, and not moved:
+        // moving one would split or join the runs under the pointer.
+        // -- claude, 2026-11-04
+        AlbumRunsView(library: library, player: player, entries: entries.enumerated().map { i, entry in
+          AlbumEntry(track: entry.track, index: i) {
+            edit { try await library.removeTracks(at: [entry.position], from: playlist) }
+          }
+        }) {
+          player.play(tracks, at: $0, from: playlist.title)
+        }
       }
     }
     .navigationTitle(playlist.title)
     .toolbar {
       #if os(iOS)
-      ToolbarItem { EditButton() }
+      if style == .tracks { ToolbarItem { EditButton() } }
+      #else
+      ToolbarItem { TrackListStylePicker(style: $style).pickerStyle(.segmented) }
       #endif
       ToolbarItem {
         PlayMenu(player: player, source: playlist.title) { library.tracks(of: playlist) }
@@ -74,6 +99,9 @@ struct PlaylistView: View {
       }
       ToolbarItem {
         Menu("Playlist", systemImage: "ellipsis.circle") {
+          #if os(iOS)
+          TrackListStylePicker(style: $style).pickerStyle(.inline)
+          #endif
           Button("Rename…", systemImage: "pencil") {
             newTitle = playlist.title
             renaming = true

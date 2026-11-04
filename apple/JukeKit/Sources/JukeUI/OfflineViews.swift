@@ -94,10 +94,5 @@ struct OfflineView: View {
       }
     }
     .navigationTitle("Offline")
-    .navigationDestination(for: String.self) { id in
-      if let album = library.albums[id] {
-        AlbumView(library: library, player: player, album: album)
-      }
-    }
   }
 }

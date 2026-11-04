@@ -20,6 +20,15 @@ struct SmartPlaylistView: View {
 
   @State private var confirmingDelete = false
   @State private var deleteFailure: String?
+  /// Kept per playlist, on this device.
+  @AppStorage private var style: TrackListStyle
+
+  init(library: Library, player: Player, id: String) {
+    self.library = library
+    self.player = player
+    self.id = id
+    _style = AppStorage(wrappedValue: .tracks, "trackListStyle.smart.\(id)")
+  }
 
   var body: some View {
     if let playlist = library.smartPlaylists.first(where: { $0.id == id }) {
@@ -44,14 +53,25 @@ struct SmartPlaylistView: View {
             .foregroundStyle(.secondary)
         }
       }
-      ForEach(Array(tracks.enumerated()), id: \.element.id) { i, track in
-        TrackRow(library: library, player: player, track: track, number: i + 1, showArtist: true, showAlbum: true) {
-          player.play(tracks, at: i, from: playlist.title)
+      switch style {
+      case .tracks:
+        ForEach(Array(tracks.enumerated()), id: \.element.id) { i, track in
+          TrackRow(library: library, player: player, track: track, number: i + 1, showArtist: true, showAlbum: true) {
+            player.play(tracks, at: i, from: playlist.title)
+          }
+        }
+      case .albums:
+        AlbumRunsView(library: library, player: player,
+                      entries: tracks.enumerated().map { AlbumEntry(track: $1, index: $0) }) {
+          player.play(tracks, at: $0, from: playlist.title)
         }
       }
     }
     .navigationTitle(playlist.title)
     .toolbar {
+      #if os(macOS)
+      ToolbarItem { TrackListStylePicker(style: $style).pickerStyle(.segmented) }
+      #endif
       ToolbarItem {
         PlayMenu(player: player, source: playlist.title) { tracks }
           .disabled(playable.isEmpty)
@@ -61,6 +81,9 @@ struct SmartPlaylistView: View {
       }
       ToolbarItem {
         Menu("Playlist", systemImage: "ellipsis.circle") {
+          #if os(iOS)
+          TrackListStylePicker(style: $style).pickerStyle(.inline)
+          #endif
           if let editor {
             Button("Edit Rule…", systemImage: "pencil") { editor.edit(.rule(playlist)) }
             Button("Duplicate…", systemImage: "doc.on.doc") { editor.edit(.copy(playlist)) }

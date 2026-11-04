@@ -258,6 +258,43 @@ final class JukeUITests: XCTestCase {
     XCTAssertTrue(app.staticTexts["No Such Playlist"].waitForExistence(timeout: 10), "never noticed the destroy")
   }
 
+  /// A playlist shown by album has a heading for each run of tracks
+  /// from one album, saying how much of the album the run is, and
+  /// leading to the album's page; the choice is remembered across
+  /// launches.
+  func testPlaylistByAlbum() async throws {
+    let title = "UI Smart \(Int(Date().timeIntervalSince1970))"
+    let id = try await jmap("SmartPlaylist/set", ["create": ["s": [
+      "title": title,
+      "filter": ["hasAudio": true],
+      "sort": [["property": "albumOrder"]],
+      "limit": 6,
+    ]]])
+    let created = try XCTUnwrap(((id["created"] as? [String: Any])?["s"] as? [String: Any])?["id"] as? String)
+
+    openPlaylist(title)
+    app.buttons["smartPlaylist.menu"].tap()
+    app.buttons["Albums"].tap()
+    // The heading reads as one button: the album's title, its artist,
+    // then its count.  The playlist's summary has a count too, but isn't
+    // a button.
+    let heading = app.buttons.matching(NSPredicate(format: "label MATCHES %@", "^.*, [0-9]+ (of [0-9]+ )?tracks?$")).firstMatch
+    XCTAssertTrue(heading.waitForExistence(timeout: 10), "no album heading")
+    snapshot("playlist by album")
+
+    heading.tap()
+    XCTAssertTrue(app.buttons["album.addToPlaylist"].waitForExistence(timeout: 5), "the heading didn't open the album")
+    snapshot("album page")
+
+    app.terminate()
+    app.launch()
+    XCTAssertTrue(app.navigationBars["Albums"].waitForExistence(timeout: syncTimeout), "the album list never appeared")
+    openPlaylist(title)
+    XCTAssertTrue(heading.waitForExistence(timeout: 10), "album view wasn't remembered")
+
+    _ = try await jmap("SmartPlaylist/set", ["destroy": [created]])
+  }
+
   /// A smart playlist is made in the editor: titled, its one blank
   /// condition dropped so the rule matches everything, the preview's
   /// count read, and the saved playlist opened with the same count;

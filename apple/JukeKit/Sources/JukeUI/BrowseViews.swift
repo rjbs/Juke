@@ -27,14 +27,6 @@ struct ArtistListView: View {
     }
     .findable(text: $search, isPresented: $searching, prompt: "Artist")
     .navigationTitle("Artists")
-    .navigationDestination(for: Artist.self) { artist in
-      ArtistView(library: library, player: player, artist: artist)
-    }
-    .navigationDestination(for: String.self) { id in
-      if let album = library.albums[id] {
-        AlbumView(library: library, player: player, album: album)
-      }
-    }
   }
 }
 
@@ -50,11 +42,11 @@ struct ArtistView: View {
   /// How the albums are ordered, kept across launches.
   @AppStorage("artistAlbumOrder") private var order = AlbumOrder.oldestFirst
 
-  /// An album with its tracks by disc, and where its first track falls
-  /// in the artist's whole list.
+  /// An album with its tracks, and where its first track falls in the
+  /// artist's whole list.
   private struct Shown: Identifiable {
     let album: Album
-    let discs: [[Track]]
+    let tracks: [Track]
     let offset: Int
     var id: String { album.id }
   }
@@ -62,63 +54,21 @@ struct ArtistView: View {
   private var shown: [Shown] {
     var offset = 0
     return order.sorted(artist.albumIds.compactMap { library.albums[$0] }).map { album in
-      let discs = library.tracks(of: album)
-      defer { offset += discs.reduce(0) { $0 + $1.count } }
-      return Shown(album: album, discs: discs, offset: offset)
+      let tracks = library.tracks(of: album).flatMap(\.self)
+      defer { offset += tracks.count }
+      return Shown(album: album, tracks: tracks, offset: offset)
     }
   }
 
   var body: some View {
     let shown = shown
-    let all = shown.flatMap { $0.discs.joined() }
+    let all = shown.flatMap(\.tracks)
     List {
       ForEach(shown) { entry in
-        let album = entry.album
-        Section {
-          ForEach(Array(entry.discs.enumerated()), id: \.offset) { d, tracks in
-            if entry.discs.count > 1 {
-              Text(album.discs[d].title ?? "Disc \(d + 1)")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            }
-            ForEach(Array(tracks.enumerated()), id: \.offset) { i, track in
-              let position = entry.offset + entry.discs[..<d].reduce(0) { $0 + $1.count } + i
-              TrackRow(library: library, player: player, track: track, number: i + 1,
-                       showArtist: track.artist != album.artist) {
-                player.play(all, at: position, from: artist.name)
-              }
-            }
-          }
-        } header: {
-          NavigationLink(value: album.id) {
-            HStack(spacing: 12) {
-              ArtworkView(library: library, artwork: album.artwork, size: 64, cornerRadius: 6)
-              VStack(alignment: .leading, spacing: 2) {
-                Text(album.title)
-                  .font(.title3.weight(.semibold))
-                  .foregroundStyle(Color.primary)
-                HStack(spacing: 4) {
-                  if library.offline.isKept(album) {
-                    Image(systemName: "arrow.down.circle.fill").accessibilityLabel("Kept offline")
-                  }
-                  if let released = album.releasedText {
-                    Text(released + " ·")
-                  }
-                  let count = entry.discs.reduce(0) { $0 + $1.count }
-                  Text(count == 1 ? "1 track" : "\(count) tracks")
-                }
-                .font(.caption)
-                .foregroundStyle(Color.secondary)
-              }
-              Spacer()
-              Image(systemName: "chevron.right")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.tertiary)
-            }
-            .padding(.vertical, 6)
-          }
-          .buttonStyle(.plain)
-          .textCase(nil)
+        AlbumSection(library: library, player: player, album: entry.album,
+                     entries: entry.tracks.enumerated().map { AlbumEntry(track: $1, index: entry.offset + $0) },
+                     linked: true) {
+          player.play(all, at: $0, from: artist.name)
         }
       }
     }

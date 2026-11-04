@@ -42,11 +42,6 @@ struct AlbumListView: View {
         PlayMenu(player: player, source: "All Albums") { library.albumList.flatMap { library.tracks(of: $0).joined() } }
       }
     }
-    .navigationDestination(for: String.self) { id in
-      if let album = library.albums[id] {
-        AlbumView(library: library, player: player, album: album)
-      }
-    }
   }
 }
 
@@ -56,36 +51,11 @@ struct AlbumView: View {
   let album: Album
 
   var body: some View {
-    let discs = library.tracks(of: album)
-    let all = discs.flatMap(\.self)
+    let all = library.tracks(of: album).flatMap(\.self)
     List {
-      Section {
-        HStack(alignment: .top, spacing: 12) {
-          ArtworkView(library: library, artwork: album.artwork, size: 120, cornerRadius: 8)
-          VStack(alignment: .leading, spacing: 4) {
-            Text(album.artist ?? "Compilation").foregroundStyle(.secondary)
-            let missing = all.count(where: { !$0.isPlayable })
-            Text((album.releasedText.map { $0 + " · " } ?? "") + "\(all.count) tracks" + (missing > 0 ? ", \(missing) missing" : ""))
-              .font(.caption)
-              .foregroundStyle(.secondary)
-            OfflineStatus(offline: library.offline, kept: library.offline.isKept(album), tracks: all)
-              .font(.caption)
-              .foregroundStyle(.secondary)
-          }
-        }
-      }
-      ForEach(Array(discs.enumerated()), id: \.offset) { d, tracks in
-        Section(discs.count > 1 ? (album.discs[d].title ?? "Disc \(d + 1)") : "") {
-          ForEach(Array(tracks.enumerated()), id: \.offset) { i, track in
-            // Positions count across discs, since the queue is the
-            // whole album. -- claude, 2026-10-25
-            let position = discs[..<d].reduce(0) { $0 + $1.count } + i
-            TrackRow(library: library, player: player, track: track, number: i + 1,
-                     showArtist: track.artist != album.artist) {
-              player.play(all, at: position, from: album.title)
-            }
-          }
-        }
+      AlbumSection(library: library, player: player, album: album,
+                   entries: all.enumerated().map { AlbumEntry(track: $1, index: $0) }, linked: false) {
+        player.play(all, at: $0, from: album.title)
       }
     }
     .navigationTitle(album.title)
