@@ -61,6 +61,14 @@ tr:hover td { background: var(--hover); }
 td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 td.date { color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
 .none { color: var(--faint); font-style: italic; }
+.album-head { display: flex; gap: 12px; align-items: center; margin: 20px 0 6px; }
+.album-head img, .album-head .no-art {
+  width: 72px; height: 72px; object-fit: contain; flex: none;
+  background: var(--hover); border: 1px solid var(--line); border-radius: 4px;
+}
+.album-head .no-art { display: flex; align-items: center; justify-content: center; color: var(--faint); font-size: 28px; }
+.album-head .title { font-size: 17px; font-weight: 600; }
+.album-head .sub { margin-bottom: 0; }
 tr.gap td { color: var(--faint); }
 tr.gap .title::after { content: " · missing"; font-size: 12px; }
 tr.playing td { color: var(--accent); }

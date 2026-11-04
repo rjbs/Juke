@@ -69,8 +69,12 @@ again and while the server is up.
     var/juke serve --db var/sample.sqlite --library sample
 
 It listens on `localhost:8737`, where `/` is a web page, built into the
-binary (`internal/web`), that browses albums, tracks and playlists of
-both kinds, plays them, and sets ratings, all through the JMAP API.
+binary (`internal/web`), that browses albums, artists, tracks and
+playlists of both kinds, plays them, and sets ratings, all through the
+JMAP API.  An artist is an album artist, found by folding the album
+list in the browser; their page shows each album whole under a header
+with its art, oldest first or newest, or by title, and plays the albums
+in that order or shuffled.
 A smart playlist shows the tracks its rule matches now, and the rule
 itself on request.  Smart playlists are made and edited there too
 (`internal/web/smart.js`): the rule is a tree of groups ("all", "any" or

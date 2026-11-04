@@ -7,6 +7,7 @@ const CAP_REVIEW = "https://semiotic.systems/jmap/juke/review";
 let session, accountId, maxGet;
 const albums = new Map();       // id -> Album
 let albumList = [];             // albums, by artist then title
+let artistList = [];            // album artists, by name, each with their albums
 const tracks = new Map();       // id -> Track, filled as needed
 
 // ---- DOM ----
@@ -40,6 +41,7 @@ function fold(s) { return (s || "").toLocaleLowerCase(); }
 // An album's release date for reading: "1991-02-00" is "1991-02", and
 // a year alone is the year.
 function releasedText(released) { return released.replace(/(-00)+$/, ""); }
+function plural(n, noun) { return `${n} ${noun}${n === 1 ? "" : "s"}`; }
 function day(date) { return date ? date.slice(0, 10) : ""; }
 function orNone(s, none) { return s ? s : h("span", { class: "none" }, none); }
 
@@ -166,9 +168,10 @@ function trackTable(list, cols = {}) {
 // groupedTrackTable shows titled groups of tracks, such as an album's
 // discs, as one table, so their columns line up; a group's title is a
 // row across it, and numbering starts over in each group.  Playing from
-// a track plays on through the groups that follow.
+// a track plays on through the groups that follow, or through
+// cols.queue, a longer list of playable track ids the table is part of.
 function groupedTrackTable(groups, cols = {}) {
-  const playable = groups.flatMap(g => g.tracks).filter(t => t.blobId);
+  const queue = cols.queue || groups.flatMap(g => g.tracks).filter(t => t.blobId).map(t => t.id);
   const columns = 6 + !!cols.number + !!cols.album + !!cols.added;
   return h("table", {},
     h("thead", {}, h("tr", {},
@@ -191,7 +194,7 @@ function groupedTrackTable(groups, cols = {}) {
         h("td", {}, t.blobId
           ? h("button", {
             class: "play", title: "Play from here",
-            onclick: () => player.play(playable.map(p => p.id), playable.indexOf(t)),
+            onclick: () => player.play(queue, queue.indexOf(t.id)),
           }, "▶")
           : h("span", { class: "no-audio", title: "No audio" }, "⊘")),
         h("td", { class: "title" }, t.title),
@@ -234,7 +237,7 @@ function renderAlbums() {
     });
     count.textContent = `${shown.length} of ${albumList.length} albums`;
     list.replaceChildren(...shown.map(a => h("tr", {},
-      h("td", {}, orNone(a.artist, "compilation")),
+      h("td", {}, a.artist ? h("a", { href: artistHash(a.artist) }, a.artist) : h("span", { class: "none" }, "compilation")),
       h("td", {}, h("a", { href: `#album/${a.id}` }, a.title)),
       h("td", { class: "num" }, a.discs.length > 1 ? `${a.discs.length} discs` : ""),
       h("td", { class: "num" }, a.discs.reduce((n, d) => n + d.trackIds.length, 0)),
@@ -274,6 +277,139 @@ async function renderAlbum(id) {
       title: a.discs.length > 1 ? d.title || `Disc ${i + 1}` : null,
       tracks: d.trackIds.map(t => tracks.get(t)),
     })), { number: true }),
+  );
+}
+
+// ---- Artists ----
+
+// An artist is an album artist, with their albums; compilations, having
+// no artist, belong to no one.  Artists have no id, so a page's hash
+// carries the name, encoded so a slash in it survives the routing.
+
+function artistHash(name) { return `#artist/${encodeURIComponent(name)}`; }
+
+// artistKey is a name as it sorts: folded, with a leading "The", "A" or
+// "An" dropped, so The Beatles sort under B.
+function artistKey(name) { return fold(name).trim().replace(/^(the|an?) (?=\S)/, ""); }
+
+// artistsOf groups albums by album artist, in name order, counting
+// each artist's tracks.
+function artistsOf(list) {
+  const byName = new Map();
+  for (const a of list) {
+    if (!a.artist) continue;
+    if (!byName.has(a.artist)) byName.set(a.artist, { name: a.artist, albums: [], tracks: 0 });
+    const artist = byName.get(a.artist);
+    artist.albums.push(a);
+    artist.tracks += a.discs.reduce((n, d) => n + d.trackIds.length, 0);
+  }
+  return [...byName.values()].sort((x, y) =>
+    artistKey(x.name).localeCompare(artistKey(y.name)) || x.name.localeCompare(y.name));
+}
+
+const ALBUM_ORDERS = [
+  ["oldest", "Oldest first"], ["newest", "Newest first"], ["title", "Title, A to Z"], ["title-desc", "Title, Z to A"],
+];
+
+// albumsInOrder sorts an artist's albums: by date with the undated
+// last whichever way the dates run, ties and the undated by title.
+function albumsInOrder(list, order) {
+  const byTitle = (a, b) => fold(a.title).localeCompare(fold(b.title));
+  const byDate = dir => (a, b) =>
+    (a.released == null) - (b.released == null)
+    || (a.released && b.released ? dir * a.released.localeCompare(b.released) : 0)
+    || byTitle(a, b);
+  const compare = { oldest: byDate(1), newest: byDate(-1), title: byTitle, "title-desc": (a, b) => byTitle(b, a) }[order] || byDate(1);
+  return [...list].sort(compare);
+}
+
+function shuffled(list) {
+  const out = [...list];
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [out[i], out[j]] = [out[j], out[i]];
+  }
+  return out;
+}
+
+const artistsView = { q: "" };
+
+function renderArtists() {
+  const list = h("tbody");
+  const count = h("span", { class: "sub" });
+  const fill = () => {
+    const words = fold(artistsView.q).split(/\s+/).filter(Boolean);
+    const shown = artistList.filter(a => words.every(w => fold(a.name).includes(w)));
+    count.textContent = `${shown.length} of ${artistList.length} artists`;
+    list.replaceChildren(...shown.map(a => h("tr", {},
+      h("td", {}, h("a", { href: artistHash(a.name) }, a.name)),
+      h("td", { class: "num" }, a.albums.length),
+      h("td", { class: "num" }, a.tracks),
+    )));
+  };
+  const search = h("input", {
+    type: "search", placeholder: "Filter by name", value: artistsView.q,
+    oninput: ev => { artistsView.q = ev.target.value; fill(); },
+  });
+  fill();
+  show(
+    h("div", { class: "controls" }, search, count),
+    h("table", {},
+      h("thead", {}, h("tr", {}, h("th", {}, "Artist"), h("th", { class: "num" }, "Albums"), h("th", { class: "num" }, "Tracks"))),
+      list),
+  );
+  search.focus();
+}
+
+// renderArtist shows an artist's albums whole, each under a header with
+// its art, in an order kept across visits.  Playing a track plays on
+// through the rest of the albums as shown.
+async function renderArtist(name) {
+  const artist = artistList.find(a => a.name === name);
+  if (!artist) return show(h("p", { class: "error" }, `No artist named ${name}.`));
+  await loadTracks(artist.albums.flatMap(a => a.discs.flatMap(d => d.trackIds)));
+  let order = localStorage.getItem("artistAlbumOrder") || "oldest";
+  let ordered = [], queue = [];
+  const tracksOf = a => a.discs.flatMap(d => d.trackIds.map(t => tracks.get(t)));
+  const body = h("div");
+  const fill = () => {
+    ordered = albumsInOrder(artist.albums, order);
+    queue = ordered.flatMap(tracksOf).filter(t => t.blobId).map(t => t.id);
+    body.replaceChildren(...ordered.map(a => {
+      const its = tracksOf(a);
+      const first = its.find(t => t.blobId);
+      return h("section", { class: "artist-album" },
+        h("div", { class: "album-head" },
+          a.artworkBlobId
+            ? h("img", { src: imageURL(a.artworkBlobId, a.artworkType), alt: "", loading: "lazy" })
+            : h("div", { class: "no-art" }, "♪"),
+          h("div", {},
+            h("div", { class: "title" }, h("a", { href: `#album/${a.id}` }, a.title)),
+            h("div", { class: "sub" },
+              a.released ? `${releasedText(a.released)} · ` : "",
+              `${its.length} tracks`, " · ",
+              h("button", { onclick: () => player.play(queue, queue.indexOf(first.id)), disabled: !first || null }, "Play album")))),
+        groupedTrackTable(a.discs.map((d, i) => ({
+          title: a.discs.length > 1 ? d.title || `Disc ${i + 1}` : null,
+          tracks: d.trackIds.map(t => tracks.get(t)),
+        })), { number: true, queue }));
+    }));
+  };
+  const select = h("select", { onchange: ev => { order = ev.target.value; localStorage.setItem("artistAlbumOrder", order); fill(); } },
+    ALBUM_ORDERS.map(([v, label]) => h("option", { value: v, selected: order === v || null }, label)));
+  fill();
+  show(
+    h("h2", {}, artist.name),
+    h("div", { class: "sub" },
+      plural(artist.albums.length, "album"), ", ", plural(artist.tracks, "track")),
+    h("div", { class: "controls" },
+      select,
+      h("button", { onclick: () => player.play(queue, 0), disabled: !queue.length || null }, "Play all"),
+      h("button", {
+        onclick: () => { const ids = shuffled(ordered).flatMap(tracksOf).filter(t => t.blobId).map(t => t.id); player.play(ids, 0); },
+        disabled: !queue.length || null,
+      }, "Play albums shuffled")),
+    body,
   );
 }
 
@@ -518,13 +654,15 @@ async function route() {
   const hash = location.hash.slice(1) || "albums";
   const [path] = hash.split("?");
   const [view, id] = path.split("/");
-  const tab = { album: "albums", playlist: "playlists", smart: "playlists" }[view] || view;
+  const tab = { album: "albums", artist: "artists", playlist: "playlists", smart: "playlists" }[view] || view;
   if (!review.leaving() || !smart.leaving()) return;
   document.querySelectorAll("nav a").forEach(a => a.classList.toggle("current", a.dataset.tab === tab));
   try {
     switch (view) {
       case "albums": renderAlbums(); break;
       case "album": await renderAlbum(id); break;
+      case "artists": renderArtists(); break;
+      case "artist": await renderArtist(decodeURIComponent(id)); break;
       case "tracks": await renderTracks(); break;
       case "playlists": await renderPlaylists(); break;
       case "playlist": await renderPlaylist(id); break;
@@ -548,6 +686,7 @@ async function start() {
       (a.artist == null) - (b.artist == null)
       || fold(a.artist).localeCompare(fold(b.artist))
       || fold(a.title).localeCompare(fold(b.title)));
+    artistList = artistsOf(albumList);
     status("");
   } catch (e) {
     return show(h("p", { class: "error" }, `Couldn't reach the server: ${e.message}`));
