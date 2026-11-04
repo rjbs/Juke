@@ -56,6 +56,17 @@ They sync a fresh mirror, play a track's audio through the cache, and
 write a rating and a play, so point them at the scratch server (see UI
 tests, below): `JUKE_TEST_SERVER=http://localhost:8738`.
 
+## Installing without TestFlight
+
+    cd apple
+    bin/install            # the Mac app, into ~/Applications
+    bin/install --phone    # the iOS app, onto the paired iPhone
+
+This builds in Release with development signing, from the command line,
+so it works while Jinx is open in Xcode.  The Mac install refuses to
+replace a copy that's running.  `--phone` needs the device paired and in
+Developer Mode; `--device NAME` picks one other than the only iPhone.
+
 ## Releasing to TestFlight
 
 This needs a paid Apple Developer Program membership on the team named in
