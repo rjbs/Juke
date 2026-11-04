@@ -46,6 +46,8 @@ struct ArtistView: View {
   let library: Library
   let player: Player
   let artist: Artist
+  /// How the albums are ordered, kept across launches.
+  @AppStorage("artistAlbumOrder") private var order = AlbumOrder.oldestFirst
 
   /// An album with its tracks by disc, and where its first track falls
   /// in the artist's whole list.
@@ -58,7 +60,7 @@ struct ArtistView: View {
 
   private var shown: [Shown] {
     var offset = 0
-    return artist.albumIds.compactMap { library.albums[$0] }.map { album in
+    return order.sorted(artist.albumIds.compactMap { library.albums[$0] }).map { album in
       let discs = library.tracks(of: album)
       defer { offset += discs.reduce(0) { $0 + $1.count } }
       return Shown(album: album, discs: discs, offset: offset)
@@ -98,6 +100,9 @@ struct ArtistView: View {
                   if library.offline.isKept(album) {
                     Image(systemName: "arrow.down.circle.fill").accessibilityLabel("Kept offline")
                   }
+                  if let released = album.releasedText {
+                    Text(released + " ·")
+                  }
                   let count = entry.discs.reduce(0) { $0 + $1.count }
                   Text(count == 1 ? "1 track" : "\(count) tracks")
                 }
@@ -122,6 +127,15 @@ struct ArtistView: View {
       ToolbarItem {
         PlayMenu(player: player, source: artist.name) { all }
           .disabled(!all.contains(where: \.isPlayable))
+      }
+      ToolbarItem {
+        Menu("Sort", systemImage: "arrow.up.arrow.down") {
+          Picker("Sort", selection: $order) {
+            ForEach(AlbumOrder.allCases) { Text($0.rawValue).tag($0) }
+          }
+          .pickerStyle(.inline)
+        }
+        .accessibilityIdentifier("artist.sort")
       }
     }
   }

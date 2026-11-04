@@ -81,7 +81,18 @@ public struct Album: Identifiable, Hashable, Sendable {
   public var title: String
   /// Nil for a compilation.
   public var artist: String?
+  /// When the album came out, as the server has it: "YYYY-MM-DD" with
+  /// "00" for a month or day not known.  Nil when nothing says.
+  public var released: String?
   public var discs: [Disc]
+
+  /// The release date for reading: as much of it as is known, so a
+  /// year alone is the year.
+  public var releasedText: String? {
+    guard var text = released else { return nil }
+    while text.hasSuffix("-00") { text.removeLast(3) }
+    return text
+  }
   /// The album's art.
   public var artwork: Artwork?
 
@@ -98,6 +109,7 @@ public struct Album: Identifiable, Hashable, Sendable {
     self.id = id
     self.title = title
     self.artist = v["artist"]?.stringValue
+    self.released = v["released"]?.stringValue
     self.artwork = Artwork(v)
     self.discs = discs.map { d in
       Disc(title: d["title"]?.stringValue, trackIds: d["trackIds"]?.arrayValue?.compactMap(\.stringValue) ?? [])

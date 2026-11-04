@@ -41,6 +41,10 @@ plus a streaming cache, built in two phases with downloads first.
   holds, following the result as it changes.  The app shows one page
   of a result, the server's query limit, and says so when the rule
   matched more; the lists one plays are capped well under that.
+- **An artist's albums are ordered** oldest or newest first by
+  `Album.released`, the undated last either way, or by title either
+  way; the choice is kept in user defaults.  Album headers show the
+  date as far as it is known, the year alone when that is all.
 - **Shuffle is a three-way setting**, off, tracks or albums, kept in
   the play queue and in user defaults across launches, and shown to the
   system's shuffle control as off, items or collections.  Shuffled

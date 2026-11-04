@@ -64,7 +64,7 @@ struct AlbumView: View {
           VStack(alignment: .leading, spacing: 4) {
             Text(album.artist ?? "Compilation").foregroundStyle(.secondary)
             let missing = all.count(where: { !$0.isPlayable })
-            Text("\(all.count) tracks" + (missing > 0 ? ", \(missing) missing" : ""))
+            Text((album.releasedText.map { $0 + " · " } ?? "") + "\(all.count) tracks" + (missing > 0 ? ", \(missing) missing" : ""))
               .font(.caption)
               .foregroundStyle(.secondary)
             OfflineStatus(offline: library.offline, kept: library.offline.isKept(album), tracks: all)

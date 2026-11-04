@@ -23,6 +23,39 @@ public struct Artist: Identifiable, Hashable, Sendable {
   public var id: String { name }
 }
 
+/// The ways an artist's albums can be ordered.  By date, the undated
+/// come last whichever way the dates run.
+public enum AlbumOrder: String, CaseIterable, Identifiable, Sendable {
+  case oldestFirst = "Oldest First"
+  case newestFirst = "Newest First"
+  case titleAscending = "Title, A to Z"
+  case titleDescending = "Title, Z to A"
+
+  public var id: String { rawValue }
+
+  public func sorted(_ albums: [Album]) -> [Album] {
+    switch self {
+    case .oldestFirst: albums.sorted { byDate($0, $1, ascending: true) }
+    case .newestFirst: albums.sorted { byDate($0, $1, ascending: false) }
+    case .titleAscending: albums.sorted { byTitle($0, $1) }
+    case .titleDescending: albums.sorted { byTitle($1, $0) }
+    }
+  }
+
+  private func byTitle(_ a: Album, _ b: Album) -> Bool {
+    a.title.localizedStandardCompare(b.title) == .orderedAscending
+  }
+
+  private func byDate(_ a: Album, _ b: Album, ascending: Bool) -> Bool {
+    switch (a.released, b.released) {
+    case (nil, nil): byTitle(a, b)
+    case (nil, _): false
+    case (_, nil): true
+    case (let x?, let y?): x == y ? byTitle(a, b) : (ascending ? x < y : x > y)
+    }
+  }
+}
+
 /// The ways the song list can be sorted.
 public enum SongOrder: String, CaseIterable, Identifiable, Sendable {
   case title = "Title"
