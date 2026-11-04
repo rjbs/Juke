@@ -89,6 +89,7 @@ struct RatingView: View {
       }
       .font(.caption2)
       .foregroundStyle(.orange)
+      .accessibilityElement(children: .ignore)
       .accessibilityLabel("\(rating.formatted()) stars")
     }
   }
