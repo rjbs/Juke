@@ -263,6 +263,13 @@ It has the following properties:
   One title per album; disc numbers are not part of it.
 - **artist**: `String|null`
   The album's artist, or null for a various-artists compilation.
+- **released**: `String|null`
+  When the album came out, as `YYYY-MM-DD` with `00` for a month or day
+  not known: `1991-00-00`, `1991-02-00` or `1991-02-19`.  A known day
+  needs a known month.  Null when nothing says.  The form sorts as text,
+  so a year alone sorts before any date in that year.  The import takes
+  it from the tracks' tags (the date most of them give) and the catalog's
+  year; see [import](import.md).
 - **discs**: `Disc[]`
   The album's discs, in order.  At least one.
 - **artworkBlobId**: `Id|null`
@@ -348,10 +355,11 @@ Standard JMAP `/changes` method.
 
 ### Album/query
 
-Standard JMAP `/query` method.  The sort is by `title`, or by `artist`,
+Standard JMAP `/query` method.  The sort is by `title`, by `artist`,
 which puts the albums with none last in either direction, as the web
-page's album list does; any other property is an `unsupportedSort`
-error.  With no sort, albums come in id order.
+page's album list does, or by `released`, which puts the undated last
+in either direction; any other property is an `unsupportedSort` error.
+With no sort, albums come in id order.
 
 A filter is accepted only under the review capability; otherwise any
 filter is an `unsupportedFilter` error.  A **FilterCondition** object
@@ -367,9 +375,11 @@ Both together is the one issue.  FilterOperators are not supported.
 ### Album/set
 
 Standard JMAP `/set` method.  A create or update may set `title`,
-`artist` and `discs`, and, under the review capability,
-`artworkBlobId`.  An album needs a title, and every id in its `discs` must name a
-track, each once.  As RFC 8620 requires, an update replaces `discs`
+`artist`, `released` and `discs`, and, under the review capability,
+`artworkBlobId`.  An album needs a title; a `released` in any shape but
+the one above is an `invalidProperties` SetError; and every id in
+`discs` must name a track, each once.  As RFC 8620 requires, an update
+replaces `discs`
 whole; a patch can't point into it.
 
 Merging two albums is one `Album/set` that updates the album to keep,

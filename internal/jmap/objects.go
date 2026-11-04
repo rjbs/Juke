@@ -50,7 +50,7 @@ func (s *Server) objectTypes() []*objectType {
 		{
 			name:             store.TypeAlbum,
 			table:            "album",
-			properties:       []string{"id", "title", "artist", "discs", "artworkBlobId", "artworkType", "issues", "artworkCandidates"},
+			properties:       []string{"id", "title", "artist", "released", "discs", "artworkBlobId", "artworkType", "issues", "artworkCandidates"},
 			reviewProperties: []string{"issues", "artworkCandidates"},
 			load:             loadAlbums,
 			query:            queryAlbums,
@@ -311,7 +311,7 @@ func loadTracks(ctx context.Context, q store.Queryer, ids []string) (map[string]
 func loadAlbums(ctx context.Context, q store.Queryer, ids []string) (map[string]object, []string, error) {
 	where, args := inClause("id", ids)
 	rows, err := q.QueryContext(ctx, `
-		SELECT id, title, artist, artwork_id, (SELECT mime FROM artwork WHERE id = album.artwork_id), `+issueColumns(reviewing(ctx))+`
+		SELECT id, title, artist, released, artwork_id, (SELECT mime FROM artwork WHERE id = album.artwork_id), `+issueColumns(reviewing(ctx))+`
 		FROM album`+where+` ORDER BY id`, args...)
 	if err != nil {
 		return nil, nil, err
@@ -321,9 +321,9 @@ func loadAlbums(ctx context.Context, q store.Queryer, ids []string) (map[string]
 	var order []string
 	for rows.Next() {
 		var id, title string
-		var artist, artworkID, artworkType sql.NullString
+		var artist, released, artworkID, artworkType sql.NullString
 		flags := make([]bool, len(albumIssues))
-		dest := []any{&id, &title, &artist, &artworkID, &artworkType}
+		dest := []any{&id, &title, &artist, &released, &artworkID, &artworkType}
 		for i := range flags {
 			dest = append(dest, &flags[i])
 		}
@@ -338,7 +338,7 @@ func loadAlbums(ctx context.Context, q store.Queryer, ids []string) (map[string]
 			}
 		}
 		out[id] = object{
-			"id": id, "title": title, "artist": nullString(artist),
+			"id": id, "title": title, "artist": nullString(artist), "released": nullString(released),
 			"artworkBlobId": nullString(artworkID), "artworkType": nullString(artworkType),
 			"issues": issues, "artworkCandidates": []candidate{},
 		}
@@ -689,9 +689,10 @@ func queryAlbums(ctx context.Context, s *Server, args *queryArgs) ([]string, err
 	return queryIDs(ctx, s.store.DB, "SELECT id FROM album"+where+" ORDER BY "+order)
 }
 
-// albumOrder is the ORDER BY for Album/query: by title, or by artist
-// with the unnamed albums last either way, as the web page lists them;
-// by id when no sort is given.
+// albumOrder is the ORDER BY for Album/query: by title, by artist with
+// the unnamed albums last either way, as the web page lists them, or by
+// release date with the undated last either way; by id when no sort is
+// given.
 func albumOrder(args *queryArgs) (string, error) {
 	if len(args.Sort) == 0 {
 		return "id", nil
@@ -707,6 +708,8 @@ func albumOrder(args *queryArgs) (string, error) {
 			parts = append(parts, "juke_fold(title)"+dir)
 		case "artist":
 			parts = append(parts, "(artist IS NULL)", "juke_fold(artist)"+dir)
+		case "released":
+			parts = append(parts, "(released IS NULL)", "released"+dir)
 		default:
 			return "", errorOf("unsupportedSort", "cannot sort on %q", c.Property)
 		}

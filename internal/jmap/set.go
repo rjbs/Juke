@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"semiotic.systems/juke/internal/store"
+	"semiotic.systems/juke/internal/tags"
 )
 
 // ---- /set -----------------------------------------------------------------
@@ -357,12 +358,14 @@ var playlistSetter = &setter{
 // albumProps is an Album create or patch, decoded.  A false has* or nil
 // field was not given.
 type albumProps struct {
-	title      *string
-	hasArtist  bool
-	artist     *string
-	discs      []store.Disc
-	hasArtwork bool
-	artwork    *string
+	title       *string
+	hasArtist   bool
+	artist      *string
+	hasReleased bool
+	released    *string
+	discs       []store.Disc
+	hasArtwork  bool
+	artwork     *string
 }
 
 func decodeAlbumProps(ctx context.Context, tx *sql.Tx, props map[string]json.RawMessage) (albumProps, error) {
@@ -385,6 +388,13 @@ func decodeAlbumProps(ctx context.Context, tx *sql.Tx, props map[string]json.Raw
 				continue
 			}
 			p.hasArtist, p.artist = true, artist
+		case "released":
+			released, ok := nullableStringValue(raw)
+			if !ok || (released != nil && !tags.ValidReleased(*released)) {
+				bad = append(bad, name)
+				continue
+			}
+			p.hasReleased, p.released = true, released
 		case "discs":
 			discs, ok, err := discsValue(ctx, tx, raw)
 			if err != nil {
@@ -418,7 +428,7 @@ func decodeAlbumProps(ctx context.Context, tx *sql.Tx, props map[string]json.Raw
 	}
 	if len(bad) > 0 {
 		return p, invalidProperties(
-			"only title, artist, discs and artworkBlobId may be set; discs must name tracks, each once; artworkBlobId must name a stored image", bad)
+			"only title, artist, released, discs and artworkBlobId may be set; released is YYYY-MM-DD with 00 for a month or day not known; discs must name tracks, each once; artworkBlobId must name a stored image", bad)
 	}
 	return p, nil
 }
@@ -482,11 +492,14 @@ var albumSetter = &setter{
 		if !p.hasArtist {
 			created["artist"] = nil
 		}
+		if !p.hasReleased {
+			created["released"] = nil
+		}
 		if p.discs == nil {
 			p.discs = []store.Disc{{TrackIDs: []string{}}}
 			created["discs"] = []any{map[string]any{"trackIds": []string{}, "title": nil}}
 		}
-		id, err := store.InsertAlbum(ctx, tx, store.NewAlbum{Title: *p.title, Artist: p.artist})
+		id, err := store.InsertAlbum(ctx, tx, store.NewAlbum{Title: *p.title, Artist: p.artist, Released: p.released})
 		if err != nil {
 			return nil, err
 		}
@@ -515,8 +528,9 @@ var albumSetter = &setter{
 		}
 		if _, err := tx.ExecContext(ctx, `
 			UPDATE album SET modseq = ?, title = coalesce(?, title),
-			  artist = CASE WHEN ? THEN ? ELSE artist END
-			WHERE id = ?`, modseq, p.title, p.hasArtist, p.artist, id,
+			  artist = CASE WHEN ? THEN ? ELSE artist END,
+			  released = CASE WHEN ? THEN ? ELSE released END
+			WHERE id = ?`, modseq, p.title, p.hasArtist, p.artist, p.hasReleased, p.released, id,
 		); err != nil {
 			return nil, err
 		}

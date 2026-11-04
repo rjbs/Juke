@@ -264,10 +264,45 @@ func TestAlbumSetCreates(t *testing.T) {
 	checkAlbum(t, f, grail, "Holy Grail", "Monty Python", []string{"Brave Sir Robin"})
 	checkAlbumOf(t, f, "Brave Sir Robin", grail)
 	checkEqual(t, "defaults are reported", created["empty"], map[string]any{
-		"id":     created["empty"].(map[string]any)["id"],
-		"artist": nil,
-		"discs":  []any{map[string]any{"trackIds": []any{}, "title": nil}},
+		"id":       created["empty"].(map[string]any)["id"],
+		"artist":   nil,
+		"released": nil,
+		"discs":    []any{map[string]any{"trackIds": []any{}, "title": nil}},
 	})
+}
+
+// A release date is set and cleared as a partial date string, refused
+// in any other shape, and sorts albums with the undated last either way.
+func TestAlbumSetReleased(t *testing.T) {
+	f := newFixture(t, Config{})
+	queen := f.objectID("Album", "Live Killers")
+	r := f.set("Album", map[string]any{"create": map[string]any{
+		"n": map[string]any{"title": "Night at the Opera", "artist": "Queen", "released": "1975-11-00"},
+	}})
+	opera := r["created"].(map[string]any)["n"].(map[string]any)["id"].(string)
+	checkEqual(t, "created with a date", f.album(opera, "released")["released"], "1975-11-00")
+
+	f.set("Album", map[string]any{"update": map[string]any{queen: map[string]any{"released": "1979-06-22"}}})
+	checkEqual(t, "updated with a date", f.album(queen, "released")["released"], "1979-06-22")
+
+	byRelease := func(ascending bool) []string {
+		return idList(f.call("Album/query", map[string]any{"sort": by("released", ascending)})["ids"])
+	}
+	asc, desc := byRelease(true), byRelease(false)
+	checkEqual(t, "oldest first", asc[:2], []string{opera, queen})
+	checkEqual(t, "newest first", desc[:2], []string{queen, opera})
+	checkEqual(t, "the undated last either way", sorted(asc[2:]), sorted(desc[2:]))
+
+	f.set("Album", map[string]any{"update": map[string]any{queen: map[string]any{"released": nil}}})
+	checkEqual(t, "cleared", f.album(queen, "released")["released"], nil)
+
+	update := func(props map[string]any) map[string]any {
+		return map[string]any{"update": map[string]any{queen: props}}
+	}
+	checkSetError(t, f, "Album", update(map[string]any{"released": "1979"}), "invalidProperties", "released")
+	checkSetError(t, f, "Album", update(map[string]any{"released": "1979-13-00"}), "invalidProperties", "released")
+	checkSetError(t, f, "Album", update(map[string]any{"released": "1979-00-22"}), "invalidProperties", "released")
+	checkSetError(t, f, "Album", update(map[string]any{"released": 1979}), "invalidProperties", "released")
 }
 
 func TestAlbumSetRefusals(t *testing.T) {

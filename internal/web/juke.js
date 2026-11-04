@@ -36,6 +36,10 @@ function show(...nodes) { main.replaceChildren(...nodes.flat(Infinity).filter(n 
 function status(text) { document.getElementById("status").textContent = text || ""; }
 
 function fold(s) { return (s || "").toLocaleLowerCase(); }
+
+// An album's release date for reading: "1991-02-00" is "1991-02", and
+// a year alone is the year.
+function releasedText(released) { return released.replace(/(-00)+$/, ""); }
 function day(date) { return date ? date.slice(0, 10) : ""; }
 function orNone(s, none) { return s ? s : h("span", { class: "none" }, none); }
 
@@ -263,7 +267,7 @@ async function renderAlbum(id) {
   show(
     h("h2", {}, a.title),
     h("div", { class: "sub" },
-      a.artist || "Compilation", " · ",
+      a.artist || "Compilation", a.released ? ` · ${releasedText(a.released)}` : "", " · ",
       `${all.length} tracks`, gaps ? `, ${gaps} missing` : "", " · ",
       h("button", { onclick: () => player.play(playable.map(t => t.id), 0), disabled: !playable.length || null }, "Play album")),
     groupedTrackTable(a.discs.map((d, i) => ({

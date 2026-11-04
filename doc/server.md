@@ -139,7 +139,8 @@ back but the snapshot.
 
 - **Track, Album, Playlist and SmartPlaylist** each have `/get`,
   `/changes` and `/query`.  Albums and playlists of both kinds can be
-  sorted by title but not filtered; Track's filters, sorts and caps are
+  sorted by title, and albums by artist or release date, but not
+  filtered; Track's filters, sorts and caps are
   listed in [object types](types.md).
 - **SmartPlaylist/set** stores a saved search, refusing a rule that
   `Track/query` would refuse, one naming a playlist that doesn't exist,
