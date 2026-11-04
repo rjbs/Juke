@@ -34,8 +34,13 @@ or from the command line:
 
 Jinx needs iOS 27, so the simulator needs an iOS 27 runtime.
 
-The app connects to `http://localhost:8737` until told otherwise in its
-settings; see [the server](../doc/server.md) for running one.
+The app connects to `https://juke.tail0324d.ts.net` until told otherwise
+in its settings; see [the server](../doc/server.md) for running one.  On
+macOS, Settings… is under the app menu (⌘,), and the window shows the
+server with an Edit… button.  The Mac app has one window, Window → Juke
+or ⌘0, and closing it leaves the music playing; File → New Playlist is
+⌘N and New Smart Playlist is ⌥⌘N.  On iOS the same three are toolbar
+buttons in the sidebar.
 
 ## Testing
 

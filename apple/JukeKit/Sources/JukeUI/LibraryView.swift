@@ -67,6 +67,10 @@ struct LibraryView: View {
         }
       }
       .navigationTitle("Juke")
+      // On macOS these are menu items instead: Settings… under the app
+      // menu, the two New items under File.  Toolbar buttons would spill
+      // into the overflow menu in a narrow sidebar.
+      #if os(iOS)
       .toolbar {
         ToolbarItem {
           Button("Settings", systemImage: "gear", action: showSettings)
@@ -80,6 +84,11 @@ struct LibraryView: View {
             .accessibilityIdentifier("smartPlaylist.new")
         }
       }
+      #endif
+      .focusedSceneValue(\.libraryActions, LibraryActions(
+        newPlaylist: { if editor.editing == nil { namingPlaylist = true } },
+        newSmartPlaylist: { if !namingPlaylist { editor.edit(.new) } }
+      ))
       .sheet(item: Bindable(editor).editing) { editing in
         SmartPlaylistEditor(library: library, editing: editing, window: editor.windowSize) { selection = .smartPlaylist($0) }
       }

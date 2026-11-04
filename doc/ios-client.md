@@ -41,6 +41,12 @@ plus a streaming cache, built in two phases with downloads first.
   holds, following the result as it changes.  The app shows one page
   of a result, the server's query limit, and says so when the rule
   matched more; the lists one plays are capped well under that.
+- **The App owns the connection** (`AppModel`): the server, the open
+  library and the player.  The window only shows them, so on macOS
+  closing the one window, or reopening it with ⌘0, neither stops
+  playback nor resyncs.  Menu commands reach the sidebar through a
+  focused scene value, so they are disabled when no library window is
+  key.
 - **Rules are edited in a sheet** (`SmartPlaylistEditor`), the same
   tree of groups and conditions, sort and limits as the web page's
   editor, with the tracks the draft matches now beneath, re-run as it
