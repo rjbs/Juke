@@ -218,6 +218,9 @@ struct SmartPlaylistEditor: View {
         Section {
           TextField("Title", text: $model.draft.title)
             .accessibilityIdentifier("smartPlaylist.title")
+          Toggle("Helper", isOn: $model.draft.isHelper)
+            .help("Kept for other smart playlists' rules to use, and listed apart")
+            .accessibilityIdentifier("smartPlaylist.isHelper")
         }
         Section("Match") {
           if let unreadable = model.unreadable {

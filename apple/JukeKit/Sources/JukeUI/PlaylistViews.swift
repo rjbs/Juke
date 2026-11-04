@@ -78,6 +78,11 @@ struct PlaylistView: View {
             newTitle = playlist.title
             renaming = true
           }
+          Toggle("Helper Playlist", systemImage: "wrench.adjustable", isOn: Binding(
+            get: { playlist.isHelper },
+            set: { want in edit { try await library.setHelper(playlist, want) } }
+          ))
+          .accessibilityIdentifier("playlist.isHelper")
           Button("Delete Playlist…", systemImage: "trash", role: .destructive) { confirmingDelete = true }
         }
         .accessibilityIdentifier("playlist.menu")
@@ -101,20 +106,29 @@ struct PlaylistView: View {
   }
 }
 
-/// A menu of playlists to add some tracks to.
+/// A menu of playlists to add some tracks to.  Helpers come after the
+/// rest, past a divider, since adding to one is how a hand-kept
+/// exclusion list is kept.
 struct AddToPlaylistMenu: View {
   let library: Library
   let tracks: [Track]
 
   var body: some View {
+    let helpers = library.playlists.filter(\.isHelper)
     Menu("Add to Playlist", systemImage: "text.badge.plus") {
-      ForEach(library.playlists) { playlist in
-        Button(playlist.title) {
-          Task { try? await library.add(tracks, to: playlist) }
-        }
+      ForEach(library.playlists.filter { !$0.isHelper }) { button(for: $0) }
+      if !helpers.isEmpty {
+        Divider()
+        ForEach(helpers) { button(for: $0) }
       }
     }
     .disabled(library.playlists.isEmpty || tracks.isEmpty)
+  }
+
+  private func button(for playlist: Playlist) -> some View {
+    Button(playlist.title) {
+      Task { try? await library.add(tracks, to: playlist) }
+    }
   }
 }
 

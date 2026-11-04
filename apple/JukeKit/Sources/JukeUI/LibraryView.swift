@@ -23,6 +23,8 @@ struct LibraryView: View {
   @State private var editor = SmartPlaylistEditorHost()
   /// Whether the new-playlist prompt is up.
   @State private var namingPlaylist = false
+  /// Whether the sidebar's Helpers section is open, kept per device.
+  @AppStorage("helpersExpanded") private var helpersExpanded = false
 
   var body: some View {
     switch library.phase {
@@ -45,6 +47,15 @@ struct LibraryView: View {
     }
   }
 
+  private func sidebarRow(_ row: PlaylistRow) -> some View {
+    switch row {
+    case .plain(let p):
+      Label(p.title, systemImage: row.icon).tag(SidebarItem.playlist(p.id))
+    case .smart(let s):
+      Label(s.title, systemImage: row.icon).tag(SidebarItem.smartPlaylist(s.id))
+    }
+  }
+
   private var columns: some View {
     NavigationSplitView {
       List(selection: $selection) {
@@ -53,16 +64,16 @@ struct LibraryView: View {
         Label("Songs", systemImage: "music.note").tag(SidebarItem.songs)
         Label("Offline", systemImage: "arrow.down.circle").tag(SidebarItem.offline)
         let rows = PlaylistRow.rows(of: library)
-        if !rows.isEmpty {
+        let playlists = rows.filter { !$0.isHelper }
+        let helpers = rows.filter(\.isHelper)
+        if !playlists.isEmpty {
           Section("Playlists") {
-            ForEach(rows) { row in
-              switch row {
-              case .plain(let p):
-                Label(p.title, systemImage: row.icon).tag(SidebarItem.playlist(p.id))
-              case .smart(let s):
-                Label(s.title, systemImage: row.icon).tag(SidebarItem.smartPlaylist(s.id))
-              }
-            }
+            ForEach(playlists, content: sidebarRow)
+          }
+        }
+        if !helpers.isEmpty {
+          Section("Helpers", isExpanded: $helpersExpanded) {
+            ForEach(helpers, content: sidebarRow)
           }
         }
       }
@@ -157,6 +168,13 @@ struct LibraryView: View {
     }
 
     /// The symbol that tells the kinds apart wherever they are listed.
+    var isHelper: Bool {
+      switch self {
+      case .plain(let p): p.isHelper
+      case .smart(let s): s.isHelper
+      }
+    }
+
     var icon: String {
       switch self {
       case .plain: "music.note.list"

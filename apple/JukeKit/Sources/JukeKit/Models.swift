@@ -127,6 +127,9 @@ public struct Playlist: Identifiable, Hashable, Sendable {
   public var serverId: String?
   public var title: String
   public var trackIds: [String]
+  /// Kept for smart playlists' rules to name, not for listening, and so
+  /// listed apart.
+  public var isHelper: Bool
 
   public var id: LocalKey { key }
 
@@ -140,6 +143,7 @@ public struct Playlist: Identifiable, Hashable, Sendable {
     self.serverId = id
     self.title = title
     self.trackIds = v["trackIds"]?.arrayValue?.compactMap(\.stringValue) ?? []
+    self.isHelper = v["isHelper"]?.boolValue ?? false
   }
 }
 
@@ -158,6 +162,8 @@ public struct SmartPlaylist: Identifiable, Hashable, Sendable {
   public var limit: Int?
   public var limitBytes: Int?
   public var limitSeconds: Int?
+  /// Kept for other rules to name, as a plain playlist's can be.
+  public var isHelper: Bool
 
   public init?(_ object: SyncedObject) {
     self.init(key: object.key, id: object.id, value: object.value)
@@ -173,6 +179,7 @@ public struct SmartPlaylist: Identifiable, Hashable, Sendable {
     self.limit = v["limit"]?.intValue
     self.limitBytes = v["limitBytes"]?.intValue
     self.limitSeconds = v["limitSeconds"]?.intValue
+    self.isHelper = v["isHelper"]?.boolValue ?? false
   }
 
   /// Whether this is the playlist that `properties`, as sent to
@@ -186,6 +193,7 @@ public struct SmartPlaylist: Identifiable, Hashable, Sendable {
       "limit": limit.map { .number(Double($0)) } ?? .null,
       "limitBytes": limitBytes.map { .number(Double($0)) } ?? .null,
       "limitSeconds": limitSeconds.map { .number(Double($0)) } ?? .null,
+      "isHelper": .bool(isHelper),
     ])
     return mine.isJMAPEquivalent(to: properties)
   }

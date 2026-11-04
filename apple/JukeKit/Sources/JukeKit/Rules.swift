@@ -456,6 +456,7 @@ public struct SmartPlaylistDraft: Hashable, Sendable {
   public var root: RuleGroup
   public var sort: [RuleSort]
   public var limits: [RuleLimit]
+  public var isHelper: Bool
 
   /// A blank rule, with one row to fill in.
   public init(title: String = "") {
@@ -463,6 +464,7 @@ public struct SmartPlaylistDraft: Hashable, Sendable {
     self.root = RuleGroup(items: [.row(RuleRow())])
     self.sort = []
     self.limits = []
+    self.isHelper = false
   }
 
   /// A stored playlist's rule, read back into the tree.  Throws for a
@@ -481,6 +483,7 @@ public struct SmartPlaylistDraft: Hashable, Sendable {
       if let stored { limits.append(RuleLimit(unit: unit, value: Double(stored) / unit.scale)) }
     }
     self.limits = limits
+    self.isHelper = playlist.isHelper
   }
 
   /// The filter as stored: a root group of one condition is stored as
@@ -511,6 +514,7 @@ public struct SmartPlaylistDraft: Hashable, Sendable {
       "title": .string(title),
       "filter": try filter(),
       "sort": .array(sort.map(\.compiled)),
+      "isHelper": .bool(isHelper),
     ]
     out.merge(limitProperties) { _, new in new }
     return .object(out)

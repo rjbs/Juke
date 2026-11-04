@@ -268,6 +268,10 @@ public final class Library {
     try await engine.update(playlist.key, patch: PatchObject(["title": .string(title)]))
   }
 
+  public func setHelper(_ playlist: Playlist, _ isHelper: Bool) async throws {
+    try await engine.update(playlist.key, patch: PatchObject(["isHelper": .bool(isHelper)]))
+  }
+
   public func delete(_ playlist: Playlist) async throws {
     try await engine.destroy(playlist.key)
   }

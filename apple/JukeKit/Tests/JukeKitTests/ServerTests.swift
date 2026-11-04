@@ -239,6 +239,12 @@ func playlistEditing() async throws {
   try await eventually("edits sent") { try await library.engine.object(key: key)?.pending == nil }
   try await checkServerPlaylist(id, title: title + " renamed", tracks: [t[2], t[0], t[1]])
 
+  try await library.setHelper(playlist, true)
+  try await eventually("the helper flag in the index") { playlist.isHelper }
+  try await eventually("helper flag sent") { try await library.engine.object(key: key)?.pending == nil }
+  let got = try await jmap("Playlist/get", ["ids": [id], "properties": ["isHelper"]])
+  #expect((got["list"] as? [[String: Any]])?.first?["isHelper"] as? Bool == true, "\(got)")
+
   try await library.delete(playlist)
   try await eventually("gone from the index") { !library.playlists.contains { $0.key == key } }
   try await eventually("destroy sent") { try await library.engine.object(key: key) == nil }
@@ -395,9 +401,12 @@ func smartPlaylistEditing() async throws {
   try await eventually("the saved rule's result") { library.smartResults[id]?.trackIds == preview.trackIds }
 
   var edited = try SmartPlaylistDraft(saved)
+  #expect(!saved.isHelper)
   edited.limits[0].value = 2
+  edited.isHelper = true
   try await library.save(edited, as: id)
   #expect(library.smartPlaylists.first { $0.id == id }?.limit == 2)
+  #expect(library.smartPlaylists.first { $0.id == id }?.isHelper == true)
 
   var broken = draft
   var row = RuleRow(field: .playlist, operator: .inAny)
