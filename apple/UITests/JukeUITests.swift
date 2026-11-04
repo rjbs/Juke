@@ -260,29 +260,42 @@ final class JukeUITests: XCTestCase {
 
   /// A playlist shown by album has a heading for each run of tracks
   /// from one album, saying how much of the album the run is, and
-  /// leading to the album's page; the choice is remembered across
-  /// launches.
+  /// leading to the album's page; each run lists its own tracks; and the
+  /// choice is remembered across launches.  The playlist is plain, of
+  /// three tracks from each of the first two albums, as Albumen is made
+  /// of whole albums.
   func testPlaylistByAlbum() async throws {
-    let title = "UI Smart \(Int(Date().timeIntervalSince1970))"
-    let id = try await jmap("SmartPlaylist/set", ["create": ["s": [
-      "title": title,
-      "filter": ["hasAudio": true],
-      "sort": [["property": "albumOrder"]],
-      "limit": 6,
-    ]]])
-    let created = try XCTUnwrap(((id["created"] as? [String: Any])?["s"] as? [String: Any])?["id"] as? String)
+    let found = try await jmap("Track/query", [
+      "filter": ["hasAudio": true], "sort": [["property": "albumOrder"]], "limit": 60,
+    ])
+    let ids = try XCTUnwrap(found["ids"] as? [String])
+    let got = try await jmap("Track/get", ["ids": ids, "properties": ["title", "albumId"]])
+    let byId = Dictionary(uniqueKeysWithValues: (got["list"] as? [[String: Any]] ?? []).map { ($0["id"] as! String, $0) })
+    let albums = ids.compactMap { byId[$0]?["albumId"] as? String }.reduce(into: [String]()) { if !$0.contains($1) { $0.append($1) } }
+    XCTAssertGreaterThanOrEqual(albums.count, 2, "the library needs two albums")
+    let chosen = albums.prefix(2).flatMap { album in ids.filter { byId[$0]?["albumId"] as? String == album }.prefix(3) }
+    let titles = chosen.map { byId[$0]!["title"] as! String }
+
+    let title = "UI Test \(Int(Date().timeIntervalSince1970))"
+    let made = try await jmap("Playlist/set", ["create": ["p": ["title": title, "trackIds": chosen]]])
+    let created = try XCTUnwrap(((made["created"] as? [String: Any])?["p"] as? [String: Any])?["id"] as? String)
 
     openPlaylist(title)
-    app.buttons["smartPlaylist.menu"].tap()
+    app.buttons["playlist.menu"].tap()
     app.buttons["Albums"].tap()
     // The heading reads as one button: the album's title, its artist,
-    // then its count.  The playlist's summary has a count too, but isn't
-    // a button.
-    let heading = app.buttons.matching(NSPredicate(format: "label MATCHES %@", "^.*, [0-9]+ (of [0-9]+ )?tracks?$")).firstMatch
-    XCTAssertTrue(heading.waitForExistence(timeout: 10), "no album heading")
+    // then its count.  A track's row reads as its number, then its title.
+    let headings = app.buttons.matching(NSPredicate(format: "label MATCHES %@", "^.*, [0-9]+ (of [0-9]+ )?tracks?$"))
+    XCTAssertTrue(headings.firstMatch.waitForExistence(timeout: 10), "no album heading")
+    XCTAssertEqual(headings.count, 2, "one heading for each album")
+    let rows = app.buttons.matching(NSPredicate(format: "label MATCHES %@", "^[0-9]+, .*"))
+      .allElementsBoundByIndex.map { String($0.label.split(separator: ", ", maxSplits: 1).last ?? "") }
+    // A rated track's row ends with its rating, as "Rowboat, 3 stars".
+    XCTAssertTrue(rows.count == titles.count && zip(rows, titles).allSatisfy { $0.hasPrefix($1) },
+                  "each run should list its own tracks: \(rows) against \(titles)")
     snapshot("playlist by album")
 
-    heading.tap()
+    headings.firstMatch.tap()
     XCTAssertTrue(app.buttons["album.addToPlaylist"].waitForExistence(timeout: 5), "the heading didn't open the album")
     snapshot("album page")
 
@@ -290,9 +303,9 @@ final class JukeUITests: XCTestCase {
     app.launch()
     XCTAssertTrue(app.navigationBars["Albums"].waitForExistence(timeout: syncTimeout), "the album list never appeared")
     openPlaylist(title)
-    XCTAssertTrue(heading.waitForExistence(timeout: 10), "album view wasn't remembered")
+    XCTAssertTrue(headings.firstMatch.waitForExistence(timeout: 10), "album view wasn't remembered")
 
-    _ = try await jmap("SmartPlaylist/set", ["destroy": [created]])
+    _ = try await jmap("Playlist/set", ["destroy": [created]])
   }
 
   /// A smart playlist is made in the editor: titled, its one blank

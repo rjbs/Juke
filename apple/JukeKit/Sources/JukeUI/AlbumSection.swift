@@ -38,20 +38,53 @@ struct AlbumSection: View {
       } else {
         heading
       }
-      let multiDisc = album.discs.count > 1
-      ForEach(Array(entries.enumerated()), id: \.offset) { i, entry in
-        let place = album.place(of: entry.track.id)
-        if multiDisc, let place, i == 0 || album.place(of: entries[i - 1].track.id)?.disc != place.disc {
-          Text(album.discs[place.disc].title ?? "Disc \(place.disc + 1)")
+      ForEach(rows) { row in
+        switch row {
+        case .disc(_, let title):
+          Text(title)
             .font(.caption)
             .foregroundStyle(.secondary)
-        }
-        TrackRow(library: library, player: player, track: entry.track, number: place?.number,
-                 showArtist: entry.track.artist != album.artist, remove: entry.remove) {
-          play(entry.index)
+        case .track(let entry, let number):
+          TrackRow(library: library, player: player, track: entry.track, number: number,
+                   showArtist: entry.track.artist != album.artist, remove: entry.remove) {
+            play(entry.index)
+          }
         }
       }
     }
+  }
+
+  /// A row under the heading: a track, or the title of the disc the
+  /// tracks after it are on, for an album of more than one.
+  ///
+  /// Each row's id is unique across the whole list, not just this
+  /// section: macOS's List showed every section with the first one's
+  /// rows when each section's rows were numbered from zero.
+  /// -- claude, 2026-11-04
+  private enum Row: Identifiable {
+    case disc(at: Int, title: String)
+    case track(AlbumEntry, number: Int?)
+
+    var id: String {
+      switch self {
+      case .disc(let at, _): "d\(at)"
+      case .track(let entry, _): "t\(entry.index)"
+      }
+    }
+  }
+
+  private var rows: [Row] {
+    var out: [Row] = []
+    var disc: Int?
+    for entry in entries {
+      let place = album.place(of: entry.track.id)
+      if album.discs.count > 1, let place, place.disc != disc {
+        out.append(.disc(at: entry.index, title: album.discs[place.disc].title ?? "Disc \(place.disc + 1)"))
+      }
+      disc = place?.disc
+      out.append(.track(entry, number: place?.number))
+    }
+    return out
   }
 
   private var heading: some View {
