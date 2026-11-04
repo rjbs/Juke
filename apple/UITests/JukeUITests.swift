@@ -139,7 +139,12 @@ final class JukeUITests: XCTestCase {
     app.buttons.containing(.staticText, identifier: "Autechre").firstMatch.tap()
     XCTAssertTrue(app.navigationBars["Autechre"].waitForExistence(timeout: 5), "no artist page")
     snapshot("Autechre")
+    // Albums come whole with their tracks now, so the one wanted may be
+    // below the fold.
     let album = app.buttons.containing(.staticText, identifier: "Anti EP [WAP54CD]").firstMatch
+    for _ in 0..<12 where !album.exists {
+      app.swipeUp()
+    }
     XCTAssertTrue(album.waitForExistence(timeout: 5), "Anti EP isn't on the artist page")
     album.tap()
     XCTAssertTrue(app.navigationBars["Anti EP [WAP54CD]"].waitForExistence(timeout: 5), "the album never opened")

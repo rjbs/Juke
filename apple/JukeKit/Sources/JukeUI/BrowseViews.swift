@@ -37,39 +37,97 @@ struct ArtistListView: View {
   }
 }
 
-/// One artist's albums.
+/// One artist's albums, each whole: a header with its art and title,
+/// leading to the album's own page, and its tracks beneath, as Music
+/// shows an artist.  Playing a track queues the whole discography from
+/// there, so shuffling by album from here plays the albums in random
+/// order.
 struct ArtistView: View {
   let library: Library
   let player: Player
   let artist: Artist
 
+  /// An album with its tracks by disc, and where its first track falls
+  /// in the artist's whole list.
+  private struct Shown: Identifiable {
+    let album: Album
+    let discs: [[Track]]
+    let offset: Int
+    var id: String { album.id }
+  }
+
+  private var shown: [Shown] {
+    var offset = 0
+    return artist.albumIds.compactMap { library.albums[$0] }.map { album in
+      let discs = library.tracks(of: album)
+      defer { offset += discs.reduce(0) { $0 + $1.count } }
+      return Shown(album: album, discs: discs, offset: offset)
+    }
+  }
+
   var body: some View {
-    let albums = artist.albumIds.compactMap { library.albums[$0] }
-    List(albums) { album in
-      NavigationLink(value: album.id) {
-        HStack(spacing: 12) {
-          ArtworkView(library: library, artwork: album.artwork, size: 44)
-          VStack(alignment: .leading) {
-            Text(album.title)
-            HStack(spacing: 4) {
-              if library.offline.isKept(album) {
-                Image(systemName: "arrow.down.circle.fill").accessibilityLabel("Kept offline")
-              }
-              let count = album.discs.reduce(0) { $0 + $1.trackIds.count }
-              Text(count == 1 ? "1 track" : "\(count) tracks")
+    let shown = shown
+    let all = shown.flatMap { $0.discs.joined() }
+    List {
+      ForEach(shown) { entry in
+        let album = entry.album
+        Section {
+          ForEach(Array(entry.discs.enumerated()), id: \.offset) { d, tracks in
+            if entry.discs.count > 1 {
+              Text(album.discs[d].title ?? "Disc \(d + 1)")
+                .font(.caption)
+                .foregroundStyle(.secondary)
             }
-            .font(.caption)
-            .foregroundStyle(.secondary)
+            ForEach(Array(tracks.enumerated()), id: \.offset) { i, track in
+              let position = entry.offset + entry.discs[..<d].reduce(0) { $0 + $1.count } + i
+              TrackRow(library: library, player: player, track: track, number: i + 1,
+                       showArtist: track.artist != album.artist) {
+                player.play(all, at: position, from: artist.name)
+              }
+            }
           }
+        } header: {
+          NavigationLink(value: album.id) {
+            HStack(spacing: 12) {
+              ArtworkView(library: library, artwork: album.artwork, size: 64, cornerRadius: 6)
+              VStack(alignment: .leading, spacing: 2) {
+                Text(album.title)
+                  .font(.title3.weight(.semibold))
+                  .foregroundStyle(Color.primary)
+                HStack(spacing: 4) {
+                  if library.offline.isKept(album) {
+                    Image(systemName: "arrow.down.circle.fill").accessibilityLabel("Kept offline")
+                  }
+                  let count = entry.discs.reduce(0) { $0 + $1.count }
+                  Text(count == 1 ? "1 track" : "\(count) tracks")
+                }
+                .font(.caption)
+                .foregroundStyle(Color.secondary)
+              }
+              Spacer()
+              Image(systemName: "chevron.right")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.tertiary)
+            }
+            .padding(.vertical, 6)
+          }
+          .buttonStyle(.plain)
+          .textCase(nil)
         }
       }
     }
     .navigationTitle(artist.name)
+    .navigationSubtitle(summary(albums: shown.count, tracks: all.count))
     .toolbar {
       ToolbarItem {
-        PlayMenu(player: player, source: artist.name) { albums.flatMap { library.tracks(of: $0).joined() } }
+        PlayMenu(player: player, source: artist.name) { all }
+          .disabled(!all.contains(where: \.isPlayable))
       }
     }
+  }
+
+  private func summary(albums: Int, tracks: Int) -> String {
+    (albums == 1 ? "1 album" : "\(albums) albums") + ", " + (tracks == 1 ? "1 track" : "\(tracks) tracks")
   }
 }
 
