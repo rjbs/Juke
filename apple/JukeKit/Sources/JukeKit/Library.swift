@@ -428,16 +428,7 @@ public final class Library {
         playlists = Array(byKey.values)
         sortPlaylists()
       case "SmartPlaylist":
-        var byKey = Dictionary(uniqueKeysWithValues: smartPlaylists.map { ($0.key, $0) })
-        for o in objects { if let s = SmartPlaylist(o) { byKey[s.key] = s } }
-        for k in changes.destroyed { byKey[k] = nil }
-        smartPlaylists = Array(byKey.values)
-        sortPlaylists()
-        try await declareSubscriptions()
-        // A rule that names another smart playlist is unchanged when
-        // that one's rule changes, and no track has moved either, so
-        // the engine wouldn't run it again on its own.  -- claude, 2026-11-02
-        try await engine.refreshSubscriptions(of: "Track")
+        try await adopt(objects.compactMap(SmartPlaylist.init), destroyed: changes.destroyed)
       default:
         break
       }
@@ -446,6 +437,31 @@ public final class Library {
       try await loadResult(of: id)
     }
     offline.reconcile()
+  }
+
+  /// Takes in smart playlists as they now stand, from the mirror or
+  /// from a save the server has just accepted, and keeps each one's
+  /// subscription to match.
+  func adopt(_ incoming: [SmartPlaylist], destroyed: [LocalKey] = []) async throws {
+    var byKey = Dictionary(uniqueKeysWithValues: smartPlaylists.map { ($0.key, $0) })
+    let ruleChanged = incoming.contains { new in
+      byKey[new.key].map { $0.subscription(accountId: accountId) != new.subscription(accountId: accountId) } ?? false
+    }
+    for s in incoming { byKey[s.key] = s }
+    for k in destroyed { byKey[k] = nil }
+    smartPlaylists = Array(byKey.values)
+    sortPlaylists()
+    try await declareSubscriptions()
+    // A rule that names another smart playlist is unchanged when
+    // that one's rule changes, and no track has moved either, so
+    // the engine wouldn't run it again on its own.  -- claude, 2026-11-02
+    //
+    // Running every rule again takes a pass of several seconds on a
+    // full library, which holds up whatever sync comes next, so it's
+    // done only when some rule did change: not for a new title or the
+    // helper flag, nor for a playlist created or destroyed, which no
+    // other rule can be naming.  -- claude, 2026-11-04
+    if ruleChanged { try await engine.refreshSubscriptions(of: "Track") }
   }
 
   private func sortAlbums() {
