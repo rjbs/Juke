@@ -37,13 +37,25 @@ func letters(_ entries: some Sequence<PlayQueue.Entry>) -> String {
   entries.map(\.track.title).joined()
 }
 
-/// A queue started on `letters` at `position`, shuffled or not.
-func queue(_ s: String, at position: Int = 0, shuffled: Bool = false, repeat mode: PlayQueue.Repeat = .off) -> PlayQueue {
+/// Album orders as letters, "A=abc B=d", as a `discs` closure.
+func discs(_ orders: String) -> PlayQueue.Discs {
+  var order: [String: [String]] = [:]
+  for spec in orders.split(separator: " ") {
+    let parts = spec.split(separator: "=")
+    order[String(parts[0])] = parts[1].map(String.init)
+  }
+  return { order[$0] }
+}
+
+/// A queue started on `letters` at `position`, in a shuffle or not.
+/// `albums` puts letters on albums and `orders` says each album's order.
+func queue(_ s: String, at position: Int = 0, shuffle: PlayQueue.Shuffle = .off, albums: String = "", orders: String = "",
+           repeat mode: PlayQueue.Repeat = .off, seed: UInt64 = 1) -> PlayQueue {
   var q = PlayQueue()
-  var rng = SeededGenerator(state: 1)
-  q.setShuffle(shuffled, using: &rng)
+  var rng = SeededGenerator(state: seed)
+  q.setShuffle(shuffle, using: &rng)
   q.repeatMode = mode
-  q.start(letterTracks(s), at: position, using: &rng)
+  q.start(letterTracks(s, albums: albums), at: position, discs: discs(orders), using: &rng)
   return q
 }
 
@@ -66,7 +78,7 @@ func checkStart(_ s: String, at position: Int, order: String, current: String?,
 @Test func shuffling() {
   var q = queue("abcdefgh", at: 2)
   var rng = SeededGenerator(state: 7)
-  q.setShuffle(true, using: &rng)
+  q.setShuffle(.tracks, using: &rng)
   #expect(letters(q.entries.prefix(3)) == "abc")
   #expect(q.current?.title == "c")
   #expect(letters(q.upcoming) != "defgh")
@@ -74,7 +86,7 @@ func checkStart(_ s: String, at position: Int, order: String, current: String?,
 
   q.move(to: 5)
   let playing = q.current?.title
-  q.setShuffle(false, using: &rng)
+  q.setShuffle(.off, using: &rng)
   #expect(letters(q.entries) == "abcdefgh")
   #expect(q.current?.title == playing)
 }
@@ -82,17 +94,57 @@ func checkStart(_ s: String, at position: Int, order: String, current: String?,
 // Starting while shuffled shuffles all but the chosen track, which plays
 // first.
 @Test func startingShuffled() {
-  let q = queue("abcdefgh", at: 3, shuffled: true)
+  let q = queue("abcdefgh", at: 3, shuffle: .tracks)
   #expect(q.current?.title == "d")
   #expect(q.index == 0)
   #expect(letters(q.entries).sorted() == Array("abcdefgh"))
+}
+
+// checkAlbumStart starts a queue shuffled by album and checks that the
+// chosen track plays first, that the rest of its album follows in
+// order, and that the whole order is one of those allowed.
+func checkAlbumStart(_ s: String, at position: Int, albums: String, orders: String, prefix: String, anyOf allowed: [String],
+                     sourceLocation: SourceLocation = #_sourceLocation) {
+  for seed: UInt64 in 1...6 {
+    let q = queue(s, at: position, shuffle: .albums, albums: albums, orders: orders, seed: seed)
+    let out = letters(q.entries)
+    #expect(q.index == 0, sourceLocation: sourceLocation)
+    #expect(out.hasPrefix(prefix), "\(out) from seed \(seed)", sourceLocation: sourceLocation)
+    #expect(allowed.contains(out), "\(out) from seed \(seed)", sourceLocation: sourceLocation)
+  }
+}
+
+@Test func startingShuffledByAlbum() {
+  // From a's album, the album finishes first, then the others whole.
+  checkAlbumStart("cazbd", at: 1, albums: "abc:A d:B", orders: "A=abc B=d", prefix: "abc", anyOf: ["abczd", "abcdz"])
+  // From b, mid-album: b, then the rest of A in A's order.
+  checkAlbumStart("cazbd", at: 3, albums: "abc:A d:B", orders: "A=abc B=d", prefix: "bac", anyOf: ["baczd", "bacdz"])
+  // From a loner, every album is whole, in any order.
+  checkAlbumStart("cazbd", at: 2, albums: "abc:A d:B", orders: "A=abc B=d", prefix: "z", anyOf: ["zabcd", "zdabc"])
+}
+
+// Switching to albums mid-queue keeps what's played, finishes the
+// current album, then plays the others whole; switching between
+// shuffles and back off restores the queued order.
+@Test func switchingShuffles() {
+  var q = queue("abcdef", at: 2, albums: "ab:A cd:B ef:C", orders: "A=ab B=cd C=fe")
+  var rng = SeededGenerator(state: 2)
+  q.setShuffle(.albums, discs: discs("A=ab B=cd C=fe"), using: &rng)
+  #expect(letters(q.entries) == "abcdfe")
+  #expect(q.current?.title == "c")
+  q.setShuffle(.tracks, using: &rng)
+  #expect(letters(q.entries.prefix(3)) == "abc")
+  #expect(letters(q.upcoming).sorted() == Array("def"))
+  q.setShuffle(.off, using: &rng)
+  #expect(letters(q.entries) == "abcdef")
+  #expect(q.current?.title == "c")
 }
 
 // checkInsert queues "xy" with play next or add, on a queue of "abcd"
 // playing c, and checks the order before and after unshuffling.
 func checkInsert(next: Bool, shuffled: Bool, order: String, unshuffled: String,
                  sourceLocation: SourceLocation = #_sourceLocation) {
-  var q = queue("abcd", at: 2, shuffled: shuffled)
+  var q = queue("abcd", at: 2, shuffle: shuffled ? .tracks : .off)
   var rng = SeededGenerator(state: 3)
   let xy = letterTracks("xy")
   let startNow = next ? q.playNext(xy) : q.add(xy)
@@ -102,7 +154,7 @@ func checkInsert(next: Bool, shuffled: Bool, order: String, unshuffled: String,
   } else {
     #expect(letters(q.entries).suffix(2) == "xy", sourceLocation: sourceLocation)
   }
-  q.setShuffle(false, using: &rng)
+  q.setShuffle(.off, using: &rng)
   #expect(letters(q.entries) == unshuffled, sourceLocation: sourceLocation)
   #expect(q.current?.title == "c", sourceLocation: sourceLocation)
 }
@@ -113,7 +165,7 @@ func checkInsert(next: Bool, shuffled: Bool, order: String, unshuffled: String,
   checkInsert(next: false, shuffled: true, order: "", unshuffled: "abcdxy")
 
   // Shuffled, the current track is first, so play next puts xy second.
-  var q = queue("abcd", at: 2, shuffled: true)
+  var q = queue("abcd", at: 2, shuffle: .tracks)
   _ = q.playNext(letterTracks("xy"))
   #expect(letters(q.entries.prefix(3)) == "cxy")
 }

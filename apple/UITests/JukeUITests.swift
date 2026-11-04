@@ -23,7 +23,7 @@ final class JukeUITests: XCTestCase {
     app = XCUIApplication()
     // A launch argument "-key value" lands in UserDefaults' argument
     // domain, which @AppStorage reads.  -- claude, 2026-10-25
-    app.launchArguments = ["-serverURL", testServer]
+    app.launchArguments = ["-serverURL", testServer, "-shuffle", "off"]
     app.launch()
     XCTAssertTrue(app.navigationBars["Albums"].waitForExistence(timeout: syncTimeout), "the album list never appeared")
   }
@@ -118,7 +118,8 @@ final class JukeUITests: XCTestCase {
     let shuffle = app.buttons["player.shuffle"]
     XCTAssertEqual(shuffle.value as? String, "off")
     shuffle.tap()
-    XCTAssertEqual(shuffle.value as? String, "on")
+    app.buttons["Shuffle Tracks"].tap()
+    XCTAssertEqual(shuffle.value as? String, "tracks")
     let repeatButton = app.buttons["player.repeat"]
     for want in ["all", "one", "off"] {
       repeatButton.tap()

@@ -41,6 +41,14 @@ plus a streaming cache, built in two phases with downloads first.
   holds, following the result as it changes.  The app shows one page
   of a result, the server's query limit, and says so when the rule
   matched more; the lists one plays are capped well under that.
+- **Shuffle is a three-way setting**, off, tracks or albums, kept in
+  the play queue and in user defaults across launches, and shown to the
+  system's shuffle control as off, items or collections.  Shuffled
+  albums keeps each album whole and in order, finishing the one playing
+  before the next.  Every Play button is the same plain play icon that
+  plays in the shuffle as set; its menu, a long press on iOS and the
+  chevron on macOS, plays shuffled by track or by album and sets the
+  shuffle so.  The player bar's shuffle control is a menu of the three.
 - **The App owns the connection** (`AppModel`): the server, the open
   library and the player.  The window only shows them, so on macOS
   closing the one window, or reopening it with ⌘0, neither stops

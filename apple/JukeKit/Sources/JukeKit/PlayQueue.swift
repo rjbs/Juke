@@ -6,10 +6,17 @@ import Foundation
 ///
 /// This is only bookkeeping, with no audio, so it can be tested alone.
 /// Randomness comes from a generator the caller gives, for the same
-/// reason.
+/// reason, and so does `discs`, which tells an album's track order for
+/// shuffling by album.
 public struct PlayQueue: Sendable {
   public enum Repeat: Sendable, CaseIterable {
     case off, all, one
+  }
+
+  /// How the queue is ordered: as queued, tracks at random, or albums
+  /// at random with each album whole and in order.
+  public enum Shuffle: String, Sendable, CaseIterable {
+    case off, tracks, albums
   }
 
   /// A track in the queue.  The same track can be queued twice, so each
@@ -22,12 +29,16 @@ public struct PlayQueue: Sendable {
     public let source: String?
   }
 
+  /// An album's track ids in order, or nil for an album not known.
+  public typealias Discs = (String) -> [String]?
+
   /// The entries in play order.
   public private(set) var entries: [Entry] = []
   /// The playing entry's place in `entries`.
   public private(set) var index: Int?
   public var repeatMode: Repeat = .off
-  public var isShuffled: Bool { unshuffled != nil }
+  public private(set) var shuffle: Shuffle = .off
+  public var isShuffled: Bool { shuffle != .off }
 
   /// While shuffled, the order to go back to when shuffle is turned off.
   private var unshuffled: [Entry]?
@@ -55,10 +66,11 @@ public struct PlayQueue: Sendable {
   }
 
   /// Replaces the queue with `tracks`, starting at the one at `position`.
-  /// Tracks with no audio are dropped.  If shuffle is on, the rest are
-  /// shuffled; the chosen track still plays first.
+  /// Tracks with no audio are dropped.  The chosen track plays first
+  /// whatever the shuffle; after it, shuffled tracks come at random, and
+  /// shuffled albums finish the chosen track's album, then the others.
   public mutating func start<G: RandomNumberGenerator>(
-    _ tracks: [Track], at position: Int, from source: String? = nil, using rng: inout G
+    _ tracks: [Track], at position: Int, from source: String? = nil, discs: Discs = { _ in nil }, using rng: inout G
   ) {
     guard tracks.indices.contains(position), tracks[position].isPlayable else { return }
     entries = makeEntries(tracks.filter(\.isPlayable), from: source)
@@ -67,26 +79,30 @@ public struct PlayQueue: Sendable {
       unshuffled = entries
       var rest = entries
       let chosen = rest.remove(at: first)
-      entries = [chosen] + rest.shuffled(using: &rng)
+      entries = [chosen] + arranged(rest, after: chosen, discs: discs, using: &rng)
       index = 0
     } else {
       index = first
     }
   }
 
-  /// Turns shuffle on, shuffling every entry after the current one, or
-  /// off, putting them back as they were.
-  public mutating func setShuffle<G: RandomNumberGenerator>(_ on: Bool, using rng: inout G) {
-    if on == isShuffled { return }
-    if on {
-      unshuffled = entries
-      let split = (index ?? -1) + 1
-      entries = Array(entries[..<split]) + entries[split...].shuffled(using: &rng)
-    } else if let original = unshuffled {
+  /// Sets the shuffle.  Turning it on, or changing it, rearranges every
+  /// entry after the current one; turning it off puts them back as they
+  /// were queued.
+  public mutating func setShuffle<G: RandomNumberGenerator>(_ mode: Shuffle, discs: Discs = { _ in nil }, using rng: inout G) {
+    if mode == shuffle { return }
+    shuffle = mode
+    if mode == .off {
+      guard let original = unshuffled else { return }
       let playing = index.map { entries[$0].id }
       entries = original
       unshuffled = nil
       index = playing.flatMap { id in entries.firstIndex { $0.id == id } }
+    } else {
+      unshuffled = unshuffled ?? entries
+      let split = (index ?? -1) + 1
+      let current = index.map { entries[$0] }
+      entries = Array(entries[..<split]) + arranged(Array(entries[split...]), after: current, discs: discs, using: &rng)
     }
   }
 
@@ -146,31 +162,52 @@ public struct PlayQueue: Sendable {
 
   /// The tracks grouped by album, the groups in random order and each in
   /// its album's order: a shuffle that keeps albums whole.  Tracks on no
-  /// album, or on one `discs` doesn't know, stand alone.  `discs` gives
-  /// an album's track ids in order.
+  /// album, or on one `discs` doesn't know, stand alone.
   public static func albumShuffled<G: RandomNumberGenerator>(
-    _ tracks: [Track], discs: (String) -> [String]?, using rng: inout G
+    _ tracks: [Track], discs: Discs, using rng: inout G
   ) -> [Track] {
-    var groups: [[Track]] = []
+    albumShuffled(tracks, track: { $0 }, first: nil, discs: discs, using: &rng)
+  }
+
+  /// The entries after `current`, in the order the shuffle wants them.
+  private func arranged<G: RandomNumberGenerator>(_ rest: [Entry], after current: Entry?, discs: Discs, using rng: inout G) -> [Entry] {
+    switch shuffle {
+    case .off: rest
+    case .tracks: rest.shuffled(using: &rng)
+    case .albums: Self.albumShuffled(rest, track: \.track, first: current?.track.albumId, discs: discs, using: &rng)
+    }
+  }
+
+  /// Groups items by their track's album, orders each group as its album
+  /// goes, and shuffles the groups, the album `first` (the one playing,
+  /// so it finishes) ahead of the rest.
+  private static func albumShuffled<T, G: RandomNumberGenerator>(
+    _ items: [T], track: (T) -> Track, first: String?, discs: Discs, using rng: inout G
+  ) -> [T] {
+    var groups: [[T]] = []
     var groupOf: [String: Int] = [:]
-    for track in tracks {
-      if let album = track.albumId, discs(album) != nil {
+    for item in items {
+      if let album = track(item).albumId, discs(album) != nil {
         if let g = groupOf[album] {
-          groups[g].append(track)
+          groups[g].append(item)
         } else {
           groupOf[album] = groups.count
-          groups.append([track])
+          groups.append([item])
         }
       } else {
-        groups.append([track])
+        groups.append([item])
       }
     }
-    let ordered = groups.map { group -> [Track] in
-      guard let album = group[0].albumId, let order = discs(album) else { return group }
+    var ordered = groups.map { group -> [T] in
+      guard let album = track(group[0]).albumId, let order = discs(album) else { return group }
       let rank = Dictionary(order.enumerated().map { ($1, $0) }, uniquingKeysWith: { a, _ in a })
-      return group.sorted { (rank[$0.id] ?? .max) < (rank[$1.id] ?? .max) }
+      return group.sorted { (rank[track($0).id] ?? .max) < (rank[track($1).id] ?? .max) }
     }
-    return ordered.shuffled(using: &rng).flatMap(\.self)
+    ordered.shuffle(using: &rng)
+    if let first, let g = ordered.firstIndex(where: { track($0[0]).albumId == first && discs(first) != nil }) {
+      ordered.insert(ordered.remove(at: g), at: 0)
+    }
+    return ordered.flatMap(\.self)
   }
 
   private mutating func makeEntries(_ tracks: [Track], from source: String?) -> [Entry] {

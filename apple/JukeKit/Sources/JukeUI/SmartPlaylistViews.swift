@@ -53,10 +53,8 @@ struct SmartPlaylistView: View {
     .navigationTitle(playlist.title)
     .toolbar {
       ToolbarItem {
-        Button("Play", systemImage: "play.fill") {
-          if let first = tracks.firstIndex(where: \.isPlayable) { player.play(tracks, at: first, from: playlist.title) }
-        }
-        .disabled(playable.isEmpty)
+        PlayMenu(player: player, source: playlist.title) { tracks }
+          .disabled(playable.isEmpty)
       }
       ToolbarItem {
         AddToPlaylistMenu(library: library, tracks: playable)
@@ -67,12 +65,7 @@ struct SmartPlaylistView: View {
       }
       ToolbarItem {
         Menu("Playlist", systemImage: "ellipsis.circle") {
-          Button("Shuffle by Album", systemImage: "square.stack") {
-            player.playShuffledByAlbum(tracks, from: playlist.title)
-          }
-          .disabled(playable.isEmpty)
           if let editor {
-            Divider()
             Button("Edit Rule…", systemImage: "pencil") { editor.edit(.rule(playlist)) }
             Button("Duplicate…", systemImage: "doc.on.doc") { editor.edit(.copy(playlist)) }
             Button("Delete Smart Playlist…", systemImage: "trash", role: .destructive) { confirmingDelete = true }

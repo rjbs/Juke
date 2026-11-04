@@ -67,9 +67,7 @@ struct ArtistView: View {
     .navigationTitle(artist.name)
     .toolbar {
       ToolbarItem {
-        Button("Shuffle by Album", systemImage: "shuffle") {
-          player.playShuffledByAlbum(albums.flatMap { library.tracks(of: $0).joined() }, from: artist.name)
-        }
+        PlayMenu(player: player, source: artist.name) { albums.flatMap { library.tracks(of: $0).joined() } }
       }
     }
   }

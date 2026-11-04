@@ -65,6 +65,10 @@ struct PlaylistView: View {
       ToolbarItem { EditButton() }
       #endif
       ToolbarItem {
+        PlayMenu(player: player, source: playlist.title) { library.tracks(of: playlist) }
+          .disabled(!tracks.contains(where: \.isPlayable))
+      }
+      ToolbarItem {
         KeepButton(kept: library.offline.isKept(playlist)) { library.offline.keep(playlist, $0) }
           .disabled(playlist.serverId == nil)
       }
@@ -73,9 +77,6 @@ struct PlaylistView: View {
           Button("Rename…", systemImage: "pencil") {
             newTitle = playlist.title
             renaming = true
-          }
-          Button("Shuffle by Album", systemImage: "square.stack") {
-            player.playShuffledByAlbum(library.tracks(of: playlist), from: playlist.title)
           }
           Button("Delete Playlist…", systemImage: "trash", role: .destructive) { confirmingDelete = true }
         }

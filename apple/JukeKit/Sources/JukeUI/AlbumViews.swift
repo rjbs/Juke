@@ -38,9 +38,7 @@ struct AlbumListView: View {
     .navigationTitle("Albums")
     .toolbar {
       ToolbarItem {
-        Button("Shuffle by Album", systemImage: "shuffle") {
-          player.playShuffledByAlbum(library.albumList.flatMap { library.tracks(of: $0).joined() }, from: "All Albums")
-        }
+        PlayMenu(player: player, source: "All Albums") { library.albumList.flatMap { library.tracks(of: $0).joined() } }
       }
     }
     .navigationDestination(for: String.self) { id in
@@ -92,10 +90,8 @@ struct AlbumView: View {
     .navigationTitle(album.title)
     .toolbar {
       ToolbarItem {
-        Button("Play", systemImage: "play.fill") {
-          if let first = all.firstIndex(where: \.isPlayable) { player.play(all, at: first, from: album.title) }
-        }
-        .disabled(!all.contains(where: \.isPlayable))
+        PlayMenu(player: player, source: album.title) { all }
+          .disabled(!all.contains(where: \.isPlayable))
       }
       ToolbarItem {
         AddToPlaylistMenu(library: library, tracks: all.filter(\.isPlayable))

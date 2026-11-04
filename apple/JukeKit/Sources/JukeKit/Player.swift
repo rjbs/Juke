@@ -30,7 +30,7 @@ public final class Player {
   public var current: Track? { playQueue.current }
   public var currentAlbum: Album? { current?.albumId.flatMap { library.albums[$0] } }
   public var hasNext: Bool { playQueue.following(skipping: true) != nil }
-  public var isShuffled: Bool { playQueue.isShuffled }
+  public var shuffle: PlayQueue.Shuffle { playQueue.shuffle }
   public var repeatMode: PlayQueue.Repeat { playQueue.repeatMode }
 
   @ObservationIgnored public let library: Library
@@ -63,6 +63,8 @@ public final class Player {
     #if os(iOS)
     try? AVAudioSession.sharedInstance().setCategory(.playback)
     #endif
+    var rng = SystemRandomNumberGenerator()
+    playQueue.setShuffle(Self.savedShuffle, using: &rng)
     setUpRemoteCommands()
     timeObserver = player.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.25, preferredTimescale: 600), queue: .main) {
       [weak self] time in
@@ -94,20 +96,37 @@ public final class Player {
   public func play(_ tracks: [Track], at position: Int, from source: String? = nil) {
     guard tracks.indices.contains(position), tracks[position].isPlayable else { return }
     var rng = SystemRandomNumberGenerator()
-    playQueue.start(tracks, at: position, from: source, using: &rng)
+    playQueue.start(tracks, at: position, from: source, discs: discs, using: &rng)
     if let i = playQueue.index { load(i) }
   }
 
-  /// Plays tracks an album at a time: the albums in random order, each
-  /// whole and in order.  Shuffle is turned off, since it would undo
-  /// that.
+  /// Turns shuffle to tracks and plays `tracks` from one at random.
+  public func playShuffled(_ tracks: [Track], from source: String? = nil) {
+    let playable = tracks.indices.filter { tracks[$0].isPlayable }
+    guard let position = playable.randomElement() else { return }
+    setShuffle(.tracks)
+    play(tracks, at: position, from: source)
+  }
+
+  /// Turns shuffle to albums and plays `tracks` an album at a time: the
+  /// albums in random order, each whole and in order, from the start of
+  /// one of them.
   public func playShuffledByAlbum(_ tracks: [Track], from source: String? = nil) {
     var rng = SystemRandomNumberGenerator()
-    let ordered = PlayQueue.albumShuffled(
-      tracks.filter(\.isPlayable), discs: { [library] in library.albums[$0]?.discs.flatMap(\.trackIds) }, using: &rng)
+    let ordered = PlayQueue.albumShuffled(tracks.filter(\.isPlayable), discs: discs, using: &rng)
     guard !ordered.isEmpty else { return }
-    playQueue.setShuffle(false, using: &rng)
+    setShuffle(.albums)
     play(ordered, at: 0, from: source)
+  }
+
+  /// An album's track ids in order, for shuffling by album.
+  private var discs: PlayQueue.Discs {
+    { [library] in library.albums[$0]?.discs.flatMap(\.trackIds) }
+  }
+
+  /// The shuffle as last set, kept across launches.
+  private static var savedShuffle: PlayQueue.Shuffle {
+    UserDefaults.standard.string(forKey: "shuffle").flatMap(PlayQueue.Shuffle.init) ?? .off
   }
 
   /// Plays tracks after the current one, or now if nothing is playing.
@@ -121,9 +140,10 @@ public final class Player {
     if playQueue.add(tracks, from: Self.queuedByHand), let i = playQueue.index { load(i) }
   }
 
-  public func setShuffle(_ on: Bool) {
+  public func setShuffle(_ mode: PlayQueue.Shuffle) {
     var rng = SystemRandomNumberGenerator()
-    playQueue.setShuffle(on, using: &rng)
+    playQueue.setShuffle(mode, discs: discs, using: &rng)
+    UserDefaults.standard.set(mode.rawValue, forKey: "shuffle")
     updateRemoteModes()
   }
 
@@ -322,7 +342,12 @@ public final class Player {
     }
     center.changeShuffleModeCommand.addTarget { [weak self] event in
       guard let event = event as? MPChangeShuffleModeCommandEvent else { return .commandFailed }
-      MainActor.assumeIsolated { self?.setShuffle(event.shuffleType != .off) }
+      let mode: PlayQueue.Shuffle = switch event.shuffleType {
+      case .items: .tracks
+      case .collections: .albums
+      default: .off
+      }
+      MainActor.assumeIsolated { self?.setShuffle(mode) }
       return .success
     }
     center.changeRepeatModeCommand.addTarget { [weak self] event in
@@ -341,7 +366,11 @@ public final class Player {
   /// Tells the system's shuffle and repeat controls how they're set.
   private func updateRemoteModes() {
     let center = MPRemoteCommandCenter.shared()
-    center.changeShuffleModeCommand.currentShuffleType = isShuffled ? .items : .off
+    center.changeShuffleModeCommand.currentShuffleType = switch shuffle {
+    case .off: .off
+    case .tracks: .items
+    case .albums: .collections
+    }
     center.changeRepeatModeCommand.currentRepeatType = switch repeatMode {
     case .off: .off
     case .all: .all

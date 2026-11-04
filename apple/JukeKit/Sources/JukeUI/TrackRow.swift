@@ -150,15 +150,49 @@ struct PlayerBar: View {
   }
 }
 
-/// Turns shuffle on and off; tinted while it's on.
+/// Chooses the shuffle from a menu: ordered, tracks or albums; tinted
+/// while it's on, with the album icon for albums.
 struct ShuffleButton: View {
   let player: Player
 
   var body: some View {
-    Button("Shuffle", systemImage: "shuffle") { player.setShuffle(!player.isShuffled) }
-      .foregroundStyle(player.isShuffled ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
-      .accessibilityValue(player.isShuffled ? "on" : "off")
-      .accessibilityIdentifier("player.shuffle")
+    Menu {
+      Picker("Shuffle", selection: Binding(get: { player.shuffle }, set: { player.setShuffle($0) })) {
+        Label("Ordered", systemImage: "list.bullet").tag(PlayQueue.Shuffle.off)
+        Label("Shuffle Tracks", systemImage: "shuffle").tag(PlayQueue.Shuffle.tracks)
+        Label("Shuffle Albums", systemImage: "square.stack").tag(PlayQueue.Shuffle.albums)
+      }
+      .pickerStyle(.inline)
+    } label: {
+      Label("Shuffle", systemImage: player.shuffle == .albums ? "square.stack" : "shuffle")
+    }
+    .menuIndicator(.hidden)
+    .foregroundStyle(player.shuffle == .off ? AnyShapeStyle(.secondary) : AnyShapeStyle(.tint))
+    .accessibilityValue(player.shuffle.rawValue)
+    .accessibilityIdentifier("player.shuffle")
+  }
+}
+
+/// The Play button for a list of tracks: plays them in order, in the
+/// shuffle as set.  Its menu, a long press on iOS and the chevron on
+/// macOS, plays them shuffled by track or by album, setting the shuffle
+/// so.  `tracks` is a closure because some lists are the whole library.
+struct PlayMenu: View {
+  let player: Player
+  let source: String?
+  let tracks: () -> [Track]
+
+  var body: some View {
+    Menu {
+      Button("Play Shuffled", systemImage: "shuffle") { player.playShuffled(tracks(), from: source) }
+      Button("Play Shuffled by Album", systemImage: "square.stack") { player.playShuffledByAlbum(tracks(), from: source) }
+    } label: {
+      Label("Play", systemImage: "play.fill")
+    } primaryAction: {
+      let all = tracks()
+      if let first = all.firstIndex(where: \.isPlayable) { player.play(all, at: first, from: source) }
+    }
+    .accessibilityIdentifier("play")
   }
 }
 
