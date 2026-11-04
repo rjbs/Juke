@@ -108,6 +108,10 @@ struct LibraryView: View {
         .font(.caption)
         .foregroundStyle(.secondary)
         .padding(8)
+        // The list scrolls under the inset, as under a toolbar, so the
+        // inset needs a background of its own, or the rows show through.
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.bar)
       }
     } detail: {
       NavigationStack {
