@@ -169,6 +169,7 @@ type audioFile struct {
 	albumArtist  string
 	album        string
 	genre        string
+	released     string // as Album.released has it; "" for none
 	duration     *int64 // seconds; nil when the audio didn't say
 	trackNumber  int
 	trackCount   int
@@ -436,6 +437,7 @@ func (im *run) readFile(ctx context.Context, p, rel, contentType string) (*audio
 		f.albumArtist = albumArtistName(m.AlbumArtist())
 		f.album = strings.TrimSpace(m.Album())
 		f.genre = tags.Genre(m.Raw())
+		f.released = tags.Released(m.Raw())
 		f.trackNumber, f.trackCount = m.Track()
 		f.discNumber, _ = m.Disc()
 	}
@@ -656,9 +658,18 @@ func (im *run) importDir(ctx context.Context, dir string, files []*audioFile) er
 	if artist != nil {
 		albumArtist = *artist
 	}
+	var releases []string
+	for _, f := range files {
+		releases = append(releases, f.released)
+	}
+	var released *string
+	if r := tags.CommonReleased(releases); r != "" {
+		released = &r
+	}
 	albumID, err := store.InsertAlbum(ctx, im.tx, store.NewAlbum{
 		Title:           title,
 		Artist:          artist,
+		Released:        released,
 		DiscTitles:      make([]*string, len(discs)),
 		DiscTrackCounts: trackCounts,
 	})

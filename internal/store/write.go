@@ -15,6 +15,7 @@ import (
 type NewAlbum struct {
 	Title           string
 	Artist          *string
+	Released        *string // "YYYY-MM-DD", "00" for a part not known
 	DiscTitles      []*string
 	DiscTrackCounts []*int
 }
@@ -30,8 +31,8 @@ func InsertAlbum(ctx context.Context, q Queryer, a NewAlbum) (string, error) {
 		return "", err
 	}
 	if _, err := q.ExecContext(ctx,
-		`INSERT INTO album (id, title, artist, created_modseq, modseq) VALUES (?, ?, ?, ?, ?)`,
-		id, a.Title, a.Artist, modseq, modseq,
+		`INSERT INTO album (id, title, artist, released, created_modseq, modseq) VALUES (?, ?, ?, ?, ?, ?)`,
+		id, a.Title, a.Artist, a.Released, modseq, modseq,
 	); err != nil {
 		return "", err
 	}

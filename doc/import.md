@@ -34,6 +34,12 @@ the server doesn't recognize resyncs from scratch.
   ("(17)" is Rock, and iTunes's "(36)Game" is Game), or from the XML
   when the tags are silent, which is also where a gap track's comes from.
   A third of the library has none, in the XML as in the tags.
+- **Release date** comes from the tags: ID3v2.4's timestamp, ID3v2.3's
+  and v2.2's year and day frames, MP4's day atom, or ID3v1's year.  The
+  album takes the date most of its files give, as `YYYY-MM-DD` with
+  `00` for a month or day not known, so a year the files share beats
+  one file's full date.  The backfill fills albums the import left
+  undated the same way, then from the XML's year.
 - **Duration** is measured from the audio: an MP4 file's movie header,
   or an MP3's frame count from its Xing header, its bytes over its
   bitrate, or a walk of its frames when it has neither.  A gap track

@@ -208,6 +208,13 @@ ALTER TABLE artwork ADD COLUMN uploaded_at TEXT;
 	`
 ALTER TABLE artwork ADD COLUMN dhash INTEGER;
 `,
+
+	// When an album came out, as "YYYY-MM-DD" with "00" for a month or
+	// day not known, so it sorts as text: from the tracks' tags at
+	// import or by backfill, or set by hand.  NULL when nothing says.
+	`
+ALTER TABLE album ADD COLUMN released TEXT;
+`,
 }
 
 func dsn(path string, readOnly bool) string {

@@ -15,7 +15,7 @@ import (
 // followed by some bytes standing in for audio.
 func id3(frames map[string]string) []byte {
 	var body bytes.Buffer
-	for _, id := range []string{"TIT2", "TPE1", "TPE2", "TALB", "TRCK", "TPOS", "TCON"} {
+	for _, id := range []string{"TIT2", "TPE1", "TPE2", "TALB", "TRCK", "TPOS", "TCON", "TYER", "TDAT"} {
 		text, ok := frames[id]
 		if !ok {
 			continue
@@ -110,8 +110,8 @@ func syntheticImport(t *testing.T) (*sql.DB, *Report) {
 			t.Fatal(err)
 		}
 	}
-	write("Undamaged/Band/Album/01 One.mp3", withAudio(id3(map[string]string{"TIT2": "One", "TPE1": "Band", "TALB": "Album", "TRCK": "1", "TCON": "(17)"}), 3000))
-	write("Undamaged/Band/Album/03 Three.mp3", id3(map[string]string{"TIT2": "Three", "TPE1": "Band", "TALB": "Album", "TRCK": "3/3"}))
+	write("Undamaged/Band/Album/01 One.mp3", withAudio(id3(map[string]string{"TIT2": "One", "TPE1": "Band", "TALB": "Album", "TRCK": "1", "TCON": "(17)", "TYER": "1997", "TDAT": "2105"}), 3000))
+	write("Undamaged/Band/Album/03 Three.mp3", id3(map[string]string{"TIT2": "Three", "TPE1": "Band", "TALB": "Album", "TRCK": "3/3", "TYER": "1997"}))
 	write("Undamaged/Band/Album/cover.jpg", []byte("JPEG"))
 	write("Undamaged/Band/Unknown Album/Loose.mp3", id3(map[string]string{"TIT2": "Loose", "TPE1": "Band"}))
 	write("Undamaged/Compilations/Mix/01 A.mp3", id3(map[string]string{"TIT2": "A", "TPE1": "X", "TALB": "Mix", "TRCK": "1", "TCON": "(36)Game"}))
@@ -259,6 +259,11 @@ func TestSyntheticImport(t *testing.T) {
 	checkTrackArtist(t, db, "Cut", "DJ Real")
 	checkTrackArtist(t, db, "Filler", "")
 
+	// The album's date is the one most of its files give: the year both
+	// share, not the one file's full date.
+	checkAlbumReleased(t, db, "Album", "1997-00-00")
+	checkAlbumReleased(t, db, "Mix", "")
+
 	var compilationArtist sql.NullString
 	db.QueryRow(`SELECT artist FROM album WHERE title = 'Mix'`).Scan(&compilationArtist)
 	if compilationArtist.Valid {
@@ -367,6 +372,17 @@ func checkTrackArtist(t *testing.T, db *sql.DB, title, artist string) {
 
 // checkAlbumArtist checks the artist of one imported album, found by
 // title; "" means none.
+func checkAlbumReleased(t *testing.T, db *sql.DB, title, want string) {
+	t.Helper()
+	var got sql.NullString
+	if err := db.QueryRow(`SELECT released FROM album WHERE title = ?`, title).Scan(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got.String != want {
+		t.Errorf("album %s released %q, want %q", title, got.String, want)
+	}
+}
+
 func checkAlbumArtist(t *testing.T, db *sql.DB, title, artist string) {
 	t.Helper()
 	var got sql.NullString

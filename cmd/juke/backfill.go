@@ -61,6 +61,14 @@ func runBackfill(ctx context.Context, args []string) error {
 		fmt.Printf("catalog disagrees:     %d\n", d.CatalogDisagrees)
 	}
 
+	rel, err := backfill.Released(ctx, s.DB, catalog)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("released from tags:    %d\n", rel.FromTags)
+	fmt.Printf("released from catalog: %d\n", rel.FromCatalog)
+	fmt.Printf("albums still undated:  %d\n", rel.Without)
+
 	n, err := backfill.Numbers(ctx, s.DB, catalog, *journal)
 	if err != nil {
 		return err
