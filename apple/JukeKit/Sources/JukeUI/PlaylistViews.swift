@@ -117,31 +117,40 @@ struct AddToPlaylistMenu: View {
   }
 }
 
-/// The button that makes a new, empty playlist, asking for its title.
+/// The prompt that makes a new, empty playlist, asking for its title.
 /// `made` gets the new playlist's key, to show it.
-struct NewPlaylistButton: View {
+///
+/// This hangs on a view that is always in the window, not on the
+/// button that raises it: on macOS a toolbar button pushed into the
+/// overflow menu is only a menu item there, and an alert attached to
+/// it never shows.  -- claude, 2026-11-03
+struct NewPlaylistPrompt: ViewModifier {
   let library: Library
+  @Binding var isPresented: Bool
   let made: (Playlist.ID) -> Void
 
-  @State private var naming = false
   @State private var title = ""
 
-  var body: some View {
-    Button("New Playlist", systemImage: "plus") {
-      title = ""
-      naming = true
-    }
-    .accessibilityIdentifier("playlist.new")
-    .alert("New Playlist", isPresented: $naming) {
-      TextField("Title", text: $title)
-      Button("Create") {
-        let title = title.trimmingCharacters(in: .whitespaces)
-        guard !title.isEmpty else { return }
-        Task {
-          if let key = try? await library.createPlaylist(titled: title) { made(key) }
+  func body(content: Content) -> some View {
+    content
+      .onChange(of: isPresented) { if isPresented { title = "" } }
+      .alert("New Playlist", isPresented: $isPresented) {
+        TextField("Title", text: $title)
+        Button("Create") {
+          let title = title.trimmingCharacters(in: .whitespaces)
+          guard !title.isEmpty else { return }
+          Task {
+            if let key = try? await library.createPlaylist(titled: title) { made(key) }
+          }
         }
+        Button("Cancel", role: .cancel) {}
       }
-      Button("Cancel", role: .cancel) {}
-    }
+  }
+}
+
+extension View {
+  /// Asks for a title and makes a new playlist while `isPresented`.
+  func newPlaylistPrompt(isPresented: Binding<Bool>, library: Library, made: @escaping (Playlist.ID) -> Void) -> some View {
+    modifier(NewPlaylistPrompt(library: library, isPresented: isPresented, made: made))
   }
 }

@@ -21,6 +21,8 @@ struct LibraryView: View {
   @State private var selection: SidebarItem? = .albums
   /// The smart playlist editor, shown as a sheet while it has a subject.
   @State private var editor = SmartPlaylistEditorHost()
+  /// Whether the new-playlist prompt is up.
+  @State private var namingPlaylist = false
 
   var body: some View {
     switch library.phase {
@@ -70,7 +72,8 @@ struct LibraryView: View {
           Button("Settings", systemImage: "gear", action: showSettings)
         }
         ToolbarItem {
-          NewPlaylistButton(library: library) { selection = .playlist($0) }
+          Button("New Playlist", systemImage: "plus") { namingPlaylist = true }
+            .accessibilityIdentifier("playlist.new")
         }
         ToolbarItem {
           Button("New Smart Playlist", systemImage: "gearshape.2") { editor.edit(.new) }
@@ -80,6 +83,7 @@ struct LibraryView: View {
       .sheet(item: Bindable(editor).editing) { editing in
         SmartPlaylistEditor(library: library, editing: editing, window: editor.windowSize) { selection = .smartPlaylist($0) }
       }
+      .newPlaylistPrompt(isPresented: $namingPlaylist, library: library) { selection = .playlist($0) }
       .safeAreaInset(edge: .bottom) {
         VStack(alignment: .leading, spacing: 4) {
           if let failure = library.syncFailure {
