@@ -57,10 +57,6 @@ struct SmartPlaylistView: View {
           .disabled(playable.isEmpty)
       }
       ToolbarItem {
-        AddToPlaylistMenu(library: library, tracks: playable)
-          .accessibilityIdentifier("smartPlaylist.addToPlaylist")
-      }
-      ToolbarItem {
         KeepButton(kept: library.offline.isKept(playlist)) { library.offline.keep(playlist, $0) }
       }
       ToolbarItem {
