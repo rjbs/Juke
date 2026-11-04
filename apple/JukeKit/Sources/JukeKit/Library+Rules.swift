@@ -77,8 +77,9 @@ extension Library {
   }
 
   /// Saves a draft as a new smart playlist, or over an existing one, and
-  /// returns the playlist's id once the mirror has it, so the caller can
-  /// show it at once.  Throws for a draft that isn't finished and for a
+  /// returns the playlist's id once the library has it, so the caller can
+  /// show it at once: a saved change at once, a new playlist when the
+  /// mirror brings it.  Throws for a draft that isn't finished and for a
   /// rule the server refuses.
   @discardableResult
   public func save(_ draft: SmartPlaylistDraft, as id: String? = nil) async throws -> String {
@@ -88,6 +89,18 @@ extension Library {
     if let id {
       result = try await call("SmartPlaylist/set", ["update": .object([id: properties])])
       if let refusal = ServerRefusal(setError: result["notUpdated"]?[id]) { throw refusal }
+      // The server has what was sent, plus any seed it chose, so the
+      // library takes that now rather than waiting on the mirror, which
+      // can be busy for seconds running rules.  -- claude, 2026-11-04
+      if let current = smartPlaylists.first(where: { $0.id == id }),
+         case .object(var value) = properties {
+        if case .object(let filled)? = result["updated"]?[id] { value.merge(filled) { _, new in new } }
+        if let saved = SmartPlaylist(key: current.key, id: id, value: .object(value)) {
+          try await adopt([saved])
+          syncNow()
+          return id
+        }
+      }
       savedId = id
     } else {
       result = try await call("SmartPlaylist/set", ["create": .object(["s": properties])])

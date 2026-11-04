@@ -378,9 +378,10 @@ func smartPlaylistPastTheCap() async throws {
 }
 
 // A rule edited in the app is previewed, saved and deleted through the
-// server directly, with the mirror caught up before each call returns;
-// the server's refusals come back as errors: a rule that won't run, and
-// deleting a playlist another rule names.
+// server directly, with the library caught up before each call returns;
+// a rule naming an edited one runs again; the server's refusals come
+// back as errors: a rule that won't run, and deleting a playlist another
+// rule names.
 @Test(.enabled(if: testServer != nil))
 @MainActor
 func smartPlaylistEditing() async throws {
@@ -418,6 +419,12 @@ func smartPlaylistEditing() async throws {
   row.lists = [RuleList(id: id, smart: true)]
   referring.root.items = [.row(row)]
   let referringId = try await library.save(referring)
+  try await eventually("the referring rule's result") { library.smartResults[referringId]?.trackIds.count == 2 }
+  // A rule saved through the library is taken in before the mirror has
+  // it, and a rule naming it still runs again.
+  edited.limits[0].value = 1
+  try await library.save(edited, as: id)
+  try await eventually("the referring rule rerun") { library.smartResults[referringId]?.trackIds.count == 1 }
   await #expect(throws: ServerRefusal.self) { try await library.delete(saved) }
 
   try await library.delete(try #require(library.smartPlaylists.first { $0.id == referringId }))
