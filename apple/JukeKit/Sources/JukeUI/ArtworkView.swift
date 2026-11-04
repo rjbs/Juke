@@ -7,6 +7,11 @@ import SwiftUI
 ///
 /// The image is asked for at the size it's drawn, in pixels, so a list
 /// of thumbnails decodes thumbnails, not covers.
+///
+/// What was loaded is kept with the art it was loaded for: a view whose
+/// art changes (the player bar, as tracks change) must not go on showing
+/// the old image, nor skip loading the new one because it has one.
+/// -- claude, 2026-11-04
 struct ArtworkView: View {
   let library: Library
   let artwork: Artwork?
@@ -14,12 +19,15 @@ struct ArtworkView: View {
   var maxWidth: CGFloat = 260
   var cornerRadius: CGFloat = 6
   @Environment(\.displayScale) private var scale
-  @State private var image: CGImage?
+  @State private var loaded: (artwork: Artwork, image: CGImage)?
 
   private var maxPixels: Int { Int((size ?? maxWidth) * scale) }
 
   var body: some View {
-    let shown = artwork.flatMap { image ?? library.images.cached($0, maxPixels: maxPixels) }
+    let shown = artwork.flatMap { art in
+      loaded.flatMap { $0.artwork == art ? $0.image : nil }
+        ?? library.images.cached(art, maxPixels: maxPixels)
+    }
     Group {
       if let shown {
         Color.clear.overlay {
@@ -38,7 +46,9 @@ struct ArtworkView: View {
     .accessibilityHidden(true)
     .task(id: artwork) {
       guard let artwork, shown == nil else { return }
-      image = await library.images.image(artwork, maxPixels: maxPixels)
+      if let image = await library.images.image(artwork, maxPixels: maxPixels) {
+        loaded = (artwork, image)
+      }
     }
   }
 
