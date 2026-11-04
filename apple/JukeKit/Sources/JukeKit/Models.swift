@@ -98,6 +98,15 @@ public struct Album: Identifiable, Hashable, Sendable {
 
   public var trackIds: [String] { discs.flatMap(\.trackIds) }
 
+  /// Where a track falls on the album: the index of its disc, and its
+  /// number on that disc, counting from 1.
+  public func place(of trackId: String) -> (disc: Int, number: Int)? {
+    for (d, disc) in discs.enumerated() {
+      if let i = disc.trackIds.firstIndex(of: trackId) { return (d, i + 1) }
+    }
+    return nil
+  }
+
   public init?(_ object: SyncedObject) {
     self.init(key: object.key, id: object.id, value: object.value)
   }

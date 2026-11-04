@@ -91,3 +91,19 @@ func checkOrder(_ order: SongOrder, _ expected: [String], sourceLocation: Source
   // Tied ratings break by title; unrated last.
   checkOrder(.rating, ["ånother", "Creep", "Yellow", "Bones", "Zebra"])
 }
+
+// checkRuns splits a list of album letters, "-" for no album, into runs
+// and checks them, each as its start and its letters.
+func checkRuns(_ albums: String, _ expected: [String], sourceLocation: SourceLocation = #_sourceLocation) {
+  let got = runs(of: albums.map(String.init)) { $0 == "-" ? nil : $0 }
+    .map { "\($0.start):" + $0.elements.joined() }
+  #expect(got == expected, sourceLocation: sourceLocation)
+}
+
+@Test func albumRuns() {
+  checkRuns("", [])
+  checkRuns("AAABB", ["0:AAA", "3:BB"])
+  checkRuns("AABAA", ["0:AA", "2:B", "3:AA"])
+  checkRuns("A--A", ["0:A", "1:-", "2:-", "3:A"])
+  checkRuns("ABCD", ["0:A", "1:B", "2:C", "3:D"])
+}

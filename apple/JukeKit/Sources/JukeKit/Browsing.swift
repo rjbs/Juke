@@ -116,3 +116,30 @@ extension Library {
     return sorted.map(\.track)
   }
 }
+
+/// A stretch of consecutive items that share a key, as a list of tracks
+/// shown by album has one per album it passes through.
+public struct Run<Element, Key: Equatable> {
+  /// Where the run begins in the whole list.
+  public var start: Int
+  /// The key the run's items share, or nil for an item with none, which
+  /// is a run of its own.
+  public var key: Key?
+  public var elements: [Element]
+}
+
+/// Splits items into runs of consecutive ones with the same key, in
+/// order: the same key after a different one starts a new run, so the
+/// runs read in the list's own order.
+public func runs<Element, Key: Equatable>(of items: [Element], by key: (Element) -> Key?) -> [Run<Element, Key>] {
+  var out: [Run<Element, Key>] = []
+  for (i, item) in items.enumerated() {
+    let k = key(item)
+    if let k, out.last?.key == k {
+      out[out.count - 1].elements.append(item)
+    } else {
+      out.append(Run(start: i, key: k, elements: [item]))
+    }
+  }
+  return out
+}
