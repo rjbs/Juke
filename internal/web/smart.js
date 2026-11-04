@@ -236,6 +236,7 @@ function rule() {
   const e = editing, t = e.tree;
   return {
     title: e.title,
+    isHelper: e.isHelper,
     filter: !t.items.length ? null : t.items.length === 1 && t.op !== "none" ? compile(t.items[0]) : compile(t),
     sort: e.sort.map(comparator),
     ...limitProperties(e.limits),
@@ -258,6 +259,7 @@ async function open(pl, { id = pl?.id ?? null, title = pl?.title ?? "" } = {}) {
     id, hash: `#smart/${id ?? "new"}`,
     back: id ?? pl?.id ?? null, // where Cancel goes: this playlist, or the one copied
     title,
+    isHelper: pl?.isHelper ?? false,
     tree: pl ? parse(pl.filter) : group("all", [newRow()]),
     sort: (pl?.sort ?? []).map(c => ({ ...c })),
     limits: limitsOf(pl),
@@ -279,6 +281,10 @@ function render() {
     h("div", { class: "editor" },
       h("div", { class: "field" }, h("label", {}, "Title"),
         h("input", { type: "text", value: e.title, placeholder: "Title", size: 40, oninput: ev => { e.title = ev.target.value; document.querySelector(".savebar")?.replaceWith(saveBar()); } })),
+      h("div", { class: "field" },
+        h("label", { class: "helper", title: "Kept for other smart playlists' rules to use, and listed apart" },
+          h("input", { type: "checkbox", checked: e.isHelper, onchange: ev => { e.isHelper = ev.target.checked; document.querySelector(".savebar")?.replaceWith(saveBar()); } }),
+          " Helper: listed apart, for other rules to use")),
       FIELDS.filter(f => f.suggest).map(f => h("datalist", { id: `suggest-${f.key}` }, f.suggest().map(v => h("option", { value: v })))),
       h("h3", {}, "Match"),
       h("div", { class: "rule" }, groupView(e.tree, null)),

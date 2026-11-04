@@ -146,3 +146,8 @@ tr.drop-after td { border-bottom: 2px solid var(--accent); }
 .chips input { border: none; min-width: 100px; padding: 2px; }
 .chips input:focus { outline: none; }
 .editor input[type=number] { width: 80px; }
+
+/* ---- Helper playlists ---- */
+details.helpers { margin-top: 16px; }
+details.helpers summary { cursor: pointer; color: var(--muted); margin-bottom: 8px; }
+label.helper { color: var(--muted); cursor: pointer; }

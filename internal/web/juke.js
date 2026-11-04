@@ -516,20 +516,44 @@ async function renderTracks() {
 function gear() { return h("span", { class: "gear", title: "Smart playlist" }, "⚙"); }
 
 // The Playlists tab lists playlists of both kinds together, by title; a
-// smart playlist wears a gear.
+// smart playlist wears a gear.  Helpers come after the rest, in a section
+// that stays as this browser last left it, closed at first.
 async function renderPlaylists() {
-  const [p, s] = await jmap(["Playlist/get", { ids: null, properties: ["id", "title"] }],
-                            ["SmartPlaylist/get", { ids: null, properties: ["id", "title"] }]);
+  const props = ["id", "title", "isHelper"];
+  const [p, s] = await jmap(["Playlist/get", { ids: null, properties: props }],
+                            ["SmartPlaylist/get", { ids: null, properties: props }]);
   const rows = [
     ...p.list.map(pl => ({ pl, href: `#playlist/${pl.id}` })),
     ...s.list.map(pl => ({ pl, href: `#smart/${pl.id}`, smart: true })),
   ].sort((a, b) => fold(a.pl.title).localeCompare(fold(b.pl.title)));
-  show(
-    h("div", { class: "controls" }, h("a", { href: "#smart/new" }, h("button", {}, "New smart playlist"))),
-    h("table", {},
+  const table = rows => h("table", {},
     h("thead", {}, h("tr", {}, h("th", {}, "Title"))),
     h("tbody", {}, rows.map(r => h("tr", {},
-      h("td", {}, r.smart && gear(), h("a", { href: r.href }, r.pl.title)))))));
+      h("td", {}, r.smart && gear(), h("a", { href: r.href }, r.pl.title))))));
+  const helpers = rows.filter(r => r.pl.isHelper);
+  show(
+    h("div", { class: "controls" }, h("a", { href: "#smart/new" }, h("button", {}, "New smart playlist"))),
+    table(rows.filter(r => !r.pl.isHelper)),
+    helpers.length > 0 && h("details", {
+      class: "helpers",
+      open: localStorage.getItem("helpersOpen") === "yes",
+      ontoggle: ev => localStorage.setItem("helpersOpen", ev.target.open ? "yes" : "no"),
+    }, h("summary", {}, `Helpers (${helpers.length})`), table(helpers)));
+}
+
+// helperBox is the checkbox that marks a playlist of either kind as a
+// helper, saved as soon as it's clicked.
+function helperBox(typ, pl) {
+  return h("label", { class: "helper", title: "Kept for smart playlists' rules to use, and listed apart" },
+    h("input", { type: "checkbox", checked: pl.isHelper, onchange: async ev => {
+      const want = ev.target.checked;
+      const [r] = await jmap([`${typ}/set`, { update: { [pl.id]: { isHelper: want } } }]);
+      if (r.notUpdated) {
+        ev.target.checked = !want;
+        alert(`Couldn't save: ${Object.values(r.notUpdated).map(f => f.type).join("; ")}`);
+      } else pl.isHelper = want;
+    } }),
+    " Helper");
 }
 
 // showRule opens a dialog showing what a smart playlist stores: the
@@ -583,7 +607,8 @@ async function renderPlaylist(id) {
   show(
     h("h2", {}, pl.title),
     h("div", { class: "sub" }, `${list.length} tracks · `,
-      h("button", { onclick: () => player.play(playable.map(t => t.id), 0), disabled: !playable.length || null }, "Play")),
+      h("button", { onclick: () => player.play(playable.map(t => t.id), 0), disabled: !playable.length || null }, "Play"),
+      " · ", helperBox("Playlist", pl)),
     trackTable(list, { number: true, album: true }),
   );
 }
