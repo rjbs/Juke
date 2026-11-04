@@ -19,11 +19,37 @@ extension FocusedValues {
   }
 }
 
+/// What Edit → Find does: a view with a search field publishes one
+/// that presents the field, so ⌘F lands in it.
+struct FindAction {
+  var run: () -> Void
+}
+
+private struct FindActionKey: FocusedValueKey {
+  typealias Value = FindAction
+}
+
+extension FocusedValues {
+  var find: FindAction? {
+    get { self[FindActionKey.self] }
+    set { self[FindActionKey.self] = newValue }
+  }
+}
+
+extension View {
+  /// A search field that Edit → Find (⌘F) presents and focuses.
+  func findable(text: Binding<String>, isPresented: Binding<Bool>, prompt: String) -> some View {
+    searchable(text: text, isPresented: isPresented, prompt: prompt)
+      .focusedSceneValue(\.find, FindAction { isPresented.wrappedValue = true })
+  }
+}
+
 /// The app's menu commands.  File → New Playlist is ⌘N and New Smart
 /// Playlist is ⌥⌘N, as in Music; there is no New Window, since the
 /// library has one.
 public struct JukeCommands: Commands {
   @FocusedValue(\.libraryActions) private var actions
+  @FocusedValue(\.find) private var find
 
   public init() {}
 
@@ -35,6 +61,11 @@ public struct JukeCommands: Commands {
       Button("New Smart Playlist") { actions?.newSmartPlaylist() }
         .keyboardShortcut("n", modifiers: [.command, .option])
         .disabled(actions == nil)
+    }
+    CommandGroup(after: .textEditing) {
+      Button("Find") { find?.run() }
+        .keyboardShortcut("f")
+        .disabled(find == nil)
     }
   }
 }

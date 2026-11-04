@@ -5,6 +5,7 @@ struct AlbumListView: View {
   let library: Library
   let player: Player
   @State private var search = ""
+  @State private var searching = false
 
   private var shown: [Album] {
     let words = search.split(separator: " ").map(String.init)
@@ -34,7 +35,7 @@ struct AlbumListView: View {
         }
       }
     }
-    .searchable(text: $search, prompt: "Artist or title")
+    .findable(text: $search, isPresented: $searching, prompt: "Artist or title")
     .navigationTitle("Albums")
     .toolbar {
       ToolbarItem {

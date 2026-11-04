@@ -6,6 +6,7 @@ struct ArtistListView: View {
   let library: Library
   let player: Player
   @State private var search = ""
+  @State private var searching = false
 
   private var shown: [Artist] {
     let words = search.split(separator: " ").map(String.init)
@@ -24,7 +25,7 @@ struct ArtistListView: View {
         }
       }
     }
-    .searchable(text: $search, prompt: "Artist")
+    .findable(text: $search, isPresented: $searching, prompt: "Artist")
     .navigationTitle("Artists")
     .navigationDestination(for: Artist.self) { artist in
       ArtistView(library: library, player: player, artist: artist)
@@ -153,6 +154,7 @@ struct SongListView: View {
 
   @State private var order: SongOrder = .title
   @State private var search = ""
+  @State private var searching = false
   @State private var model = SongListModel()
 
   var body: some View {
@@ -169,7 +171,7 @@ struct SongListView: View {
         ContentUnavailableView.search(text: search)
       }
     }
-    .searchable(text: $search, prompt: "Title or artist")
+    .findable(text: $search, isPresented: $searching, prompt: "Title or artist")
     .navigationTitle("Songs")
     .toolbar {
       ToolbarItem {
