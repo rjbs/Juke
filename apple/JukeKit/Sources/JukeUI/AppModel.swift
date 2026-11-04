@@ -15,6 +15,11 @@ public final class AppModel {
   public private(set) var player: Player?
   /// Why the last attempt to open the library failed, if it did.
   public private(set) var openFailure: String?
+  /// Other servers' libraries kept on this device, as of the last
+  /// `refreshCopies`.
+  public private(set) var otherCopies: [LibraryCopy] = []
+  /// Why the last removal of a copy failed, if it did.
+  public private(set) var removeFailure: String?
   @ObservationIgnored private var opening: Task<Void, Never>?
 
   public init() {
@@ -37,6 +42,27 @@ public final class AppModel {
   public func reopen() {
     opening?.cancel()
     opening = Task { await open() }
+  }
+
+  /// Lists the other servers' copies again, walking their sizes in the
+  /// background.
+  public func refreshCopies() {
+    let current = URL(string: serverURL).flatMap { try? Library.directory(for: $0) }?.lastPathComponent
+    Task.detached(priority: .utility) {
+      let copies = (try? Library.copies()) ?? []
+      await MainActor.run { self.otherCopies = copies.filter { $0.id != current } }
+    }
+  }
+
+  /// Deletes another server's copy from this device.
+  public func remove(_ copy: LibraryCopy) {
+    do {
+      try Library.remove(copy)
+      otherCopies.removeAll { $0.id == copy.id }
+      removeFailure = nil
+    } catch {
+      removeFailure = error.localizedDescription
+    }
   }
 
   private func open() async {

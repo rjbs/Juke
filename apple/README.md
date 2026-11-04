@@ -40,7 +40,10 @@ macOS, Settings… is under the app menu (⌘,), and the window shows the
 server with an Edit… button.  The Mac app has one window, Window → Juke
 or ⌘0, and closing it leaves the music playing; File → New Playlist is
 ⌘N and New Smart Playlist is ⌥⌘N.  On iOS the same three are toolbar
-buttons in the sidebar.
+buttons in the sidebar.  Each server's library is kept in its own
+directory under Application Support, so changing the server keeps the
+old copy, pinned audio and all; the settings list the other copies
+with their sizes and a Remove Copy… button.
 
 ## Testing
 

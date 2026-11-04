@@ -51,10 +51,15 @@ struct SettingsView: View {
   var body: some View {
     NavigationStack {
       Form {
-        TextField("Server", text: $draft, prompt: Text(AppModel.defaultServer))
-          .autocorrectionDisabled()
-          .textInputAutocapitalization(.never)
-          .keyboardType(.URL)
+        Section {
+          TextField("Server", text: $draft, prompt: Text(AppModel.defaultServer))
+            .autocorrectionDisabled()
+            .textInputAutocapitalization(.never)
+            .keyboardType(.URL)
+        } footer: {
+          Text("Juke keeps a copy of each server's library.  Changing the server switches to that server's copy, syncing it afresh if there isn't one yet.  The copy you leave stays on this device until you remove it here.")
+        }
+        CopiesSection(model: model)
       }
       .navigationTitle("Settings")
       .toolbar {
@@ -67,7 +72,10 @@ struct SettingsView: View {
         }
       }
     }
-    .onAppear { draft = model.serverURL }
+    .onAppear {
+      draft = model.serverURL
+      model.refreshCopies()
+    }
   }
 }
 #endif
@@ -94,7 +102,7 @@ public struct JukeSettingsView: View {
             .multilineTextAlignment(.trailing)
         }
         HStack(alignment: .top) {
-          Text("Juke keeps a copy of each server's library.  Changing the server switches to that server's copy, syncing it afresh if there isn't one yet.")
+          Text("Juke keeps a copy of each server's library.  Changing the server switches to that server's copy, syncing it afresh if there isn't one yet.  The copy you leave stays on this Mac until you remove it here.")
             .font(.callout)
             .foregroundStyle(.secondary)
           Spacer()
@@ -105,9 +113,11 @@ public struct JukeSettingsView: View {
         Label(failure, systemImage: "wifi.exclamationmark")
           .foregroundStyle(.secondary)
       }
+      CopiesSection(model: model)
     }
     .formStyle(.grouped)
     .frame(width: 520)
+    .onAppear { model.refreshCopies() }
     .sheet(isPresented: $editing) {
       ServerEditor(model: model)
     }

@@ -98,6 +98,7 @@ public final class Library {
       urlSession: URLSession(configuration: config)
     )
     let accountId = try await account(from: transport, rememberedIn: directory.appending(path: "account"))
+    try? Data(server.absoluteString.utf8).write(to: directory.appending(path: "server"))
     let store = try GRDBSyncStore(path: directory.appending(path: "library.sqlite").path)
     let engine = try SyncEngine(
       configuration: SyncConfiguration(
@@ -132,17 +133,6 @@ public final class Library {
       guard let saved = try? String(contentsOf: file, encoding: .utf8), !saved.isEmpty else { throw error }
       return saved
     }
-  }
-
-  /// The directory a server's library lives in, under Application
-  /// Support: one per server, so pointing the app at another server
-  /// never mixes two libraries.
-  public static func directory(for server: URL) throws -> URL {
-    let base = try FileManager.default.url(
-      for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true
-    )
-    let name = [server.host() ?? "server", server.port.map(String.init)].compactMap(\.self).joined(separator: "-")
-    return base.appending(path: "Juke").appending(path: name)
   }
 
   /// Builds the index and keeps syncing until `stop`.  With a mirror from
