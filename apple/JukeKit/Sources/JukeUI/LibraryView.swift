@@ -102,6 +102,7 @@ struct LibraryView: View {
           let offline = library.offline!
           if offline.present < offline.wanted {
             Label("Downloading \(offline.present) of \(offline.wanted)", systemImage: "arrow.down.circle")
+              .monospacedDigit()
               .help(offline.failure ?? "")
           }
         }

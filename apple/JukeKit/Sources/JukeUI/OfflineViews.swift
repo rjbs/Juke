@@ -13,7 +13,10 @@ struct OfflineStatus: View {
     if kept {
       let p = offline.progress(of: tracks)
       if p.present < p.wanted {
+        // Digits of one width, so the line, and the icon beside it,
+        // hold still as the count climbs.
         Label("Downloading \(p.present) of \(p.wanted)", systemImage: "arrow.down.circle")
+          .monospacedDigit()
       } else {
         Label("Available offline", systemImage: "checkmark.circle")
       }
