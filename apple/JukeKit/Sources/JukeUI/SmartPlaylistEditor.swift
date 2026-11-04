@@ -415,12 +415,14 @@ struct RowEditor: View {
     case .none:
       EmptyView()
     case .text:
-      TextField("Value", text: $row.text)
+      TextField("Value", text: $row.text, prompt: Text("Value"))
+        .labelsHidden()
         .textFieldStyle(.roundedBorder)
         .frame(minWidth: 120, idealWidth: 220)
       SuggestionMenu(values: model.suggestions[row.field] ?? []) { row.text = $0 }
     case .number:
-      TextField("0", value: $row.number, format: .number)
+      TextField("Value", value: $row.number, format: .number, prompt: Text("0"))
+        .labelsHidden()
         .textFieldStyle(.roundedBorder)
         .frame(width: 72)
         #if os(iOS)
@@ -498,7 +500,8 @@ struct ChipList: View {
       }
       HStack {
         if let typed {
-          TextField("Add", text: $entry)
+          TextField("Add", text: $entry, prompt: Text("Add"))
+            .labelsHidden()
             .textFieldStyle(.roundedBorder)
             .frame(minWidth: 120, idealWidth: 220)
             .onSubmit {
@@ -575,7 +578,8 @@ struct LimitsEditor: View {
     ForEach($limits) { $l in
       HStack {
         Text("At most")
-        TextField("0", value: $l.value, format: .number)
+        TextField("Limit", value: $l.value, format: .number, prompt: Text("0"))
+          .labelsHidden()
           .textFieldStyle(.roundedBorder)
           .frame(width: 72)
           #if os(iOS)
