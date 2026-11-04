@@ -58,14 +58,14 @@ func (s *Server) objectTypes() []*objectType {
 		{
 			name:       store.TypePlaylist,
 			table:      "playlist",
-			properties: []string{"id", "title", "trackIds"},
+			properties: []string{"id", "title", "trackIds", "isHelper"},
 			load:       loadPlaylists,
 			query:      queryByTitle("playlist"),
 		},
 		{
 			name:       store.TypeSmartPlaylist,
 			table:      "smart_playlist",
-			properties: []string{"id", "title", "filter", "sort", "limit", "limitBytes", "limitSeconds"},
+			properties: []string{"id", "title", "filter", "sort", "limit", "limitBytes", "limitSeconds", "isHelper"},
 			load:       loadSmartPlaylists,
 			query:      queryByTitle("smart_playlist"),
 		},
@@ -414,7 +414,7 @@ func loadAlbums(ctx context.Context, q store.Queryer, ids []string) (map[string]
 
 func loadPlaylists(ctx context.Context, q store.Queryer, ids []string) (map[string]object, []string, error) {
 	where, args := inClause("id", ids)
-	rows, err := q.QueryContext(ctx, `SELECT id, title FROM playlist`+where+` ORDER BY id`, args...)
+	rows, err := q.QueryContext(ctx, `SELECT id, title, is_helper FROM playlist`+where+` ORDER BY id`, args...)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -422,11 +422,12 @@ func loadPlaylists(ctx context.Context, q store.Queryer, ids []string) (map[stri
 	var order []string
 	for rows.Next() {
 		var id, title string
-		if err := rows.Scan(&id, &title); err != nil {
+		var isHelper bool
+		if err := rows.Scan(&id, &title, &isHelper); err != nil {
 			rows.Close()
 			return nil, nil, err
 		}
-		out[id] = object{"id": id, "title": title, "trackIds": []string{}}
+		out[id] = object{"id": id, "title": title, "trackIds": []string{}, "isHelper": isHelper}
 		order = append(order, id)
 	}
 	rows.Close()

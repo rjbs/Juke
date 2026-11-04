@@ -410,6 +410,11 @@ properties:
 - **trackIds**: `Id[]`
   The ids of the tracks in the playlist, in play order.  A track may
   appear more than once.
+- **isHelper**: `Boolean` (default: false)
+  The playlist is kept for smart playlists' rules to name, not for
+  listening.  Clients list helpers apart from other playlists, but
+  treat them alike otherwise: they can still be played, added to and
+  kept offline.
 
 ### Playlist/get
 
@@ -427,10 +432,10 @@ is an `unsupportedFilter` error) and the only sort property is
 
 ### Playlist/set
 
-Standard JMAP `/set` method.  A create or update may set `title` and
-`trackIds`; a playlist needs a title, and every id in `trackIds` must
-name a track.  As RFC 8620 requires, an update replaces `trackIds`
-whole; a patch can't point into it.
+Standard JMAP `/set` method.  A create or update may set `title`,
+`trackIds` and `isHelper`; a playlist needs a title, and every id in
+`trackIds` must name a track.  As RFC 8620 requires, an update
+replaces `trackIds` whole; a patch can't point into it.
 
 Destroying a playlist that a smart playlist's rule names is rejected
 with a `playlistInUse` SetError.
@@ -457,6 +462,9 @@ following properties:
   At most this much audio, by `size`.
 - **limitSeconds**: `UnsignedInt|null`
   At most this much playing time, by `duration`.
+- **isHelper**: `Boolean` (default: false)
+  The smart playlist is kept for other rules to name, as Playlist's
+  `isHelper` is.
 
 `limit` is a cap like the other two, applied before any paging by the
 client that runs the query: a client that wants the first ten of a
@@ -480,8 +488,8 @@ is an `unsupportedFilter` error) and the only sort property is
 ### SmartPlaylist/set
 
 Standard JMAP `/set` method.  A create or update may set `title`,
-`filter`, `sort`, `limit`, `limitBytes` and `limitSeconds`; a smart
-playlist needs a title.
+`filter`, `sort`, `limit`, `limitBytes`, `limitSeconds` and
+`isHelper`; a smart playlist needs a title.
 
 The server compiles the filter and sort before storing them and
 refuses what `Track/query` would refuse, so a stored rule always runs.

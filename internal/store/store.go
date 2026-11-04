@@ -215,6 +215,13 @@ ALTER TABLE artwork ADD COLUMN dhash INTEGER;
 	`
 ALTER TABLE album ADD COLUMN released TEXT;
 `,
+
+	// A helper playlist is one kept for other smart playlists' rules to
+	// name, not for listening; clients show helpers apart from the rest.
+	`
+ALTER TABLE playlist ADD COLUMN is_helper INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE smart_playlist ADD COLUMN is_helper INTEGER NOT NULL DEFAULT 0;
+`,
 }
 
 func dsn(path string, readOnly bool) string {

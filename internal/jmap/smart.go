@@ -14,7 +14,7 @@ import (
 func loadSmartPlaylists(ctx context.Context, q store.Queryer, ids []string) (map[string]object, []string, error) {
 	where, args := inClause("id", ids)
 	rows, err := q.QueryContext(ctx,
-		`SELECT id, title, filter, sort, "limit", limit_bytes, limit_seconds FROM smart_playlist`+where+` ORDER BY id`, args...)
+		`SELECT id, title, filter, sort, "limit", limit_bytes, limit_seconds, is_helper FROM smart_playlist`+where+` ORDER BY id`, args...)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -25,7 +25,8 @@ func loadSmartPlaylists(ctx context.Context, q store.Queryer, ids []string) (map
 		var id, title, sort string
 		var filter sql.NullString
 		var limit, limitBytes, limitSeconds sql.NullInt64
-		if err := rows.Scan(&id, &title, &filter, &sort, &limit, &limitBytes, &limitSeconds); err != nil {
+		var isHelper bool
+		if err := rows.Scan(&id, &title, &filter, &sort, &limit, &limitBytes, &limitSeconds, &isHelper); err != nil {
 			return nil, nil, err
 		}
 		obj := object{
@@ -36,6 +37,7 @@ func loadSmartPlaylists(ctx context.Context, q store.Queryer, ids []string) (map
 			"limit":        nullInt(limit),
 			"limitBytes":   nullInt(limitBytes),
 			"limitSeconds": nullInt(limitSeconds),
+			"isHelper":     isHelper,
 		}
 		if filter.Valid {
 			obj["filter"] = json.RawMessage(filter.String)
@@ -69,6 +71,8 @@ type smartProps struct {
 
 	hasLimit, hasLimitBytes, hasLimitSeconds bool
 	limit, limitBytes, limitSeconds          *int64
+
+	isHelper *bool
 }
 
 // decodeSmartProps checks every property given.  The filter and sort
@@ -148,12 +152,19 @@ func (s *Server) decodeSmartProps(ctx context.Context, tx *sql.Tx, props map[str
 			case "limitSeconds":
 				p.hasLimitSeconds, p.limitSeconds = true, v
 			}
+		case "isHelper":
+			v, ok := boolValue(raw)
+			if !ok {
+				bad = append(bad, name)
+				continue
+			}
+			p.isHelper = &v
 		default:
 			bad = append(bad, name)
 		}
 	}
 	if len(bad) > 0 {
-		return p, invalidProperties("only title, filter, sort, limit, limitBytes and limitSeconds may be set; a filter and sort must be ones Track/query accepts, naming playlists that exist", bad)
+		return p, invalidProperties("only title, filter, sort, limit, limitBytes, limitSeconds and isHelper may be set; a filter and sort must be ones Track/query accepts, naming playlists that exist", bad)
 	}
 	return p, nil
 }
@@ -248,6 +259,9 @@ func (s *Server) smartPlaylistSetter() *setter {
 			if err := store.SetSmartPlaylistRefs(ctx, tx, id, p.refs); err != nil {
 				return nil, err
 			}
+			if err := createHelper(ctx, tx, "smart_playlist", id, p.isHelper, created); err != nil {
+				return nil, err
+			}
 			created["id"] = id
 			return created, nil
 		},
@@ -290,6 +304,11 @@ func (s *Server) smartPlaylistSetter() *setter {
 			}
 			if err := store.WriteSmartPlaylist(ctx, tx, id, title, sq); err != nil {
 				return nil, err
+			}
+			if p.isHelper != nil {
+				if _, err := tx.ExecContext(ctx, `UPDATE smart_playlist SET is_helper = ? WHERE id = ?`, *p.isHelper, id); err != nil {
+					return nil, err
+				}
 			}
 			if p.hasFilter {
 				if err := store.SetSmartPlaylistRefs(ctx, tx, id, p.refs); err != nil {

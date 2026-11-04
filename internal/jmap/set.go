@@ -213,6 +213,30 @@ func titleValue(raw json.RawMessage) (string, bool) {
 	return s, true
 }
 
+// boolValue decodes a Boolean.
+func boolValue(raw json.RawMessage) (bool, bool) {
+	var v bool
+	if string(raw) == "null" || json.Unmarshal(raw, &v) != nil {
+		return false, false
+	}
+	return v, true
+}
+
+// createHelper stores isHelper for a playlist of either kind just
+// inserted into table, which starts out false, or reports that default
+// in created when the create didn't give it.
+func createHelper(ctx context.Context, tx *sql.Tx, table, id string, isHelper *bool, created object) error {
+	if isHelper == nil {
+		created["isHelper"] = false
+		return nil
+	}
+	if !*isHelper {
+		return nil
+	}
+	_, err := tx.ExecContext(ctx, `UPDATE `+table+` SET is_helper = 1 WHERE id = ?`, id)
+	return err
+}
+
 // nullableStringValue decodes a String|null.
 func nullableStringValue(raw json.RawMessage) (*string, bool) {
 	if string(raw) == "null" {
@@ -256,6 +280,7 @@ func tracksExist(ctx context.Context, tx *sql.Tx, ids []string) (bool, error) {
 type playlistProps struct {
 	title    *string
 	trackIDs *[]string
+	isHelper *bool
 }
 
 func decodePlaylistProps(ctx context.Context, tx *sql.Tx, props map[string]json.RawMessage) (playlistProps, error) {
@@ -281,12 +306,19 @@ func decodePlaylistProps(ctx context.Context, tx *sql.Tx, props map[string]json.
 				continue
 			}
 			p.trackIDs = &ids
+		case "isHelper":
+			v, ok := boolValue(raw)
+			if !ok {
+				bad = append(bad, name)
+				continue
+			}
+			p.isHelper = &v
 		default:
 			bad = append(bad, name)
 		}
 	}
 	if len(bad) > 0 {
-		return p, invalidProperties("only title and trackIds may be set; trackIds must name tracks", bad)
+		return p, invalidProperties("only title, trackIds and isHelper may be set; trackIds must name tracks", bad)
 	}
 	return p, nil
 }
@@ -310,6 +342,9 @@ var playlistSetter = &setter{
 		if err != nil {
 			return nil, err
 		}
+		if err := createHelper(ctx, tx, "playlist", id, p.isHelper, created); err != nil {
+			return nil, err
+		}
 		created["id"] = id
 		return created, nil
 	},
@@ -326,7 +361,8 @@ var playlistSetter = &setter{
 			return nil, err
 		}
 		if _, err := tx.ExecContext(ctx,
-			`UPDATE playlist SET modseq = ?, title = coalesce(?, title) WHERE id = ?`, modseq, p.title, id,
+			`UPDATE playlist SET modseq = ?, title = coalesce(?, title), is_helper = coalesce(?, is_helper) WHERE id = ?`,
+			modseq, p.title, p.isHelper, id,
 		); err != nil {
 			return nil, err
 		}
