@@ -87,10 +87,17 @@ public struct JukeSettingsView: View {
 
   public var body: some View {
     Form {
-      LabeledContent("Server") {
-        HStack {
+      Section {
+        LabeledContent("Server") {
           Text(model.serverURL)
             .textSelection(.enabled)
+            .multilineTextAlignment(.trailing)
+        }
+        HStack(alignment: .top) {
+          Text("Juke keeps a copy of each server's library.  Changing the server switches to that server's copy, syncing it afresh if there isn't one yet.")
+            .font(.callout)
+            .foregroundStyle(.secondary)
+          Spacer()
           Button("Edit…") { editing = true }
         }
       }
