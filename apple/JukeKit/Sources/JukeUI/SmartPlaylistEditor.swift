@@ -114,7 +114,7 @@ final class SmartPlaylistEditorModel {
     suggestions = [
       .artist: distinct(library.albumList.map(\.artist)),
       .album: distinct(library.albumList.map(\.title)),
-      .genre: distinct(library.tracks.values.map(\.genre)),
+      .genre: library.genreList.map(\.name),
     ]
   }
 
