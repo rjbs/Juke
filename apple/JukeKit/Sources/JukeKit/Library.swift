@@ -49,6 +49,15 @@ public final class Library {
   /// Goes up whenever any track changes, for views that sort or filter
   /// all of them.
   public private(set) var trackRevision = 0
+  /// Genres by name, gathered from every track when first wanted after
+  /// any track has changed, rather than on every sync.
+  public var genreList: [Genre] {
+    if genreCache?.revision != trackRevision {
+      genreCache = (trackRevision, Self.genres(of: tracks.values))
+    }
+    return genreCache!.genres
+  }
+  @ObservationIgnored private var genreCache: (revision: Int, genres: [Genre])?
   /// Playlists by title.
   public private(set) var playlists: [Playlist] = []
   /// Smart playlists by title.
@@ -222,6 +231,12 @@ public final class Library {
 
   public func tracks(of playlist: Playlist) -> [Track] {
     playlist.trackIds.compactMap { tracks[$0] }
+  }
+
+  /// A genre's tracks, by album in album list order; see
+  /// `tracks(of:among:albums:)`.
+  public func tracks(of genre: Genre) -> [Track] {
+    Self.tracks(of: genre, among: tracks.values, albums: albumList)
   }
 
   /// A smart playlist's tracks as the server last answered, in the

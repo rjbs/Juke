@@ -107,3 +107,67 @@ func checkRuns(_ albums: String, _ expected: [String], sourceLocation: SourceLoc
   checkRuns("A--A", ["0:A", "1:-", "2:-", "3:A"])
   checkRuns("ABCD", ["0:A", "1:B", "2:C", "3:D"])
 }
+
+/// A track for grouping by genre, on the album with the given id, if any.
+func tagged(_ title: String, _ genre: String?, on albumId: String? = nil) -> Track {
+  var v: [String: JSONValue] = ["title": .string(title)]
+  if let genre { v["genre"] = .string(genre) }
+  if let albumId { v["albumId"] = .string(albumId) }
+  return Track(key: LocalKey(1), id: "T\(title)", value: .object(v))!
+}
+
+// checkGenres groups tracks by genre and checks the genres in order, as
+// "name (count)".
+func checkGenres(_ tracks: [Track], _ expected: [String], sourceLocation: SourceLocation = #_sourceLocation) {
+  let got = Library.genres(of: tracks).map { "\($0.name) (\($0.trackCount))" }
+  #expect(got == expected, sourceLocation: sourceLocation)
+}
+
+@Test func genreGrouping() {
+  checkGenres([
+    tagged("a", "Rock"), tagged("b", "rock"), tagged("c", "Rock"), tagged("d", "ROCK"),
+    tagged("e", "Électronique"), tagged("f", "electronique"),
+    tagged("g", "Jazz"),
+    tagged("h", nil), tagged("i", "  "),
+    tagged("j", "Hip-Hop/Rap"), tagged("k", "Hip Hop"),
+  ], [
+    "electronique (2)",
+    "Hip Hop (1)",
+    "Hip-Hop/Rap (1)",
+    "Jazz (1)",
+    "Rock (4)",
+  ])
+}
+
+/// An album with the given tracks, by title, on one disc.
+func album(_ id: String, holding titles: [String]) -> Album {
+  let v: JSONValue = .object([
+    "title": .string(id),
+    "discs": .array([.object(["trackIds": .array(titles.map { .string("T\($0)") })])]),
+  ])
+  return Album(key: LocalKey(1), id: id, value: v)!
+}
+
+// checkGenreTracks picks out one genre's tracks, by the genre's name in
+// any case, with the albums in the given order, and checks their titles.
+func checkGenreTracks(_ name: String, _ tracks: [Track], albums: [Album], _ expected: [String],
+                      sourceLocation: SourceLocation = #_sourceLocation) {
+  let genre = Genre(name: name, key: sortKey(name), trackCount: 0)
+  let got = Library.tracks(of: genre, among: tracks, albums: albums).map(\.title)
+  #expect(got == expected, sourceLocation: sourceLocation)
+}
+
+@Test func genreTracks() {
+  checkGenreTracks("rock", [
+    tagged("loose z", "Rock"),
+    tagged("b2", "rock", on: "B"), tagged("b1", "Rock", on: "B"),
+    tagged("a1", "Rock", on: "A"), tagged("a2", "Jazz", on: "A"), tagged("a3", "ROCK", on: "A"),
+    tagged("loose a", "Rock"),
+    tagged("c1", "Jazz", on: "C"),
+    tagged("lost", "Rock", on: "gone"),
+  ], albums: [
+    album("A", holding: ["a1", "a2", "a3"]),
+    album("B", holding: ["b1", "b2"]),
+    album("C", holding: ["c1"]),
+  ], ["a1", "a3", "b1", "b2", "loose a", "loose z", "lost"])
+}

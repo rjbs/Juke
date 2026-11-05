@@ -23,6 +23,17 @@ public struct Artist: Identifiable, Hashable, Sendable {
   public var id: String { name }
 }
 
+/// A genre as the tracks name it, gathered without regard to case or
+/// accents, so "Rock", "rock" and "ROCK" are one genre, called by
+/// whichever spelling the most tracks use.
+public struct Genre: Identifiable, Hashable, Sendable {
+  public var name: String
+  /// What its spellings have in common: each one's `sortKey`.
+  public var key: String
+  public var trackCount: Int
+  public var id: String { key }
+}
+
 /// The ways an artist's albums can be ordered.  By date, the undated
 /// come last whichever way the dates run.
 public enum AlbumOrder: String, CaseIterable, Identifiable, Sendable {
@@ -79,6 +90,52 @@ extension Library {
       Artist(name: name, albumIds: albums.sorted { sortKey($0.title) < sortKey($1.title) }.map(\.id))
     }
     .sorted { (sortKey($0.name, droppingArticle: true), $0.name) < (sortKey($1.name, droppingArticle: true), $1.name) }
+  }
+
+  /// The genres these tracks name, by name.  Tracks with no genre are
+  /// in none.
+  nonisolated public static func genres(of tracks: some Sequence<Track>) -> [Genre] {
+    // A library has tens of thousands of tracks but only a hundred or so
+    // spellings of genre, so spellings are counted first and each one is
+    // folded once.  -- claude, 2026-11-05
+    var spellings: [String: Int] = [:]
+    for track in tracks {
+      if let genre = track.genre { spellings[genre, default: 0] += 1 }
+    }
+    var byKey: [String: [(spelling: String, count: Int)]] = [:]
+    for (spelling, count) in spellings {
+      let key = sortKey(spelling)
+      if !key.isEmpty { byKey[key, default: []].append((spelling, count)) }
+    }
+    return byKey.map { key, spellings in
+      // The most used spelling, and of equally used ones, the first in
+      // code point order, so the name doesn't change from run to run.
+      let name = spellings.max { ($0.count, $1.spelling) < ($1.count, $0.spelling) }!.spelling
+      return Genre(name: name, key: key, trackCount: spellings.reduce(0) { $0 + $1.count })
+    }
+    .sorted { ($0.key, $0.name) < ($1.key, $1.name) }
+  }
+
+  /// A genre's tracks among these: those on albums first, the albums in
+  /// the given order and each one's tracks in its own order, then the
+  /// tracks on no album, by title.  Only the tracks in the genre are
+  /// included, so an album of mixed genres contributes only some.
+  nonisolated public static func tracks(of genre: Genre, among tracks: some Collection<Track>, albums: [Album]) -> [Track] {
+    var keys: [String: String] = [:]
+    let matching = tracks.filter { track in
+      guard let spelling = track.genre else { return false }
+      if keys[spelling] == nil { keys[spelling] = sortKey(spelling) }
+      return keys[spelling] == genre.key
+    }
+    var loose = Dictionary(uniqueKeysWithValues: matching.map { ($0.id, $0) })
+    var ordered: [Track] = []
+    let albumIds = Set(matching.compactMap(\.albumId))
+    for album in albums where albumIds.contains(album.id) {
+      for id in album.discs.flatMap(\.trackIds) {
+        if let track = loose.removeValue(forKey: id) { ordered.append(track) }
+      }
+    }
+    return ordered + sorted(Array(loose.values), by: .title)
   }
 
   /// Tracks in the given order.  Ties, and tracks with nothing to sort
