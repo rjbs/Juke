@@ -1,4 +1,9 @@
 import Foundation
+#if canImport(UIKit)
+import UIKit
+#else
+import AppKit
+#endif
 
 /// The color of a cover drawn where there's no art, picked from a fixed
 /// palette by a hash of something stable, usually the album's id, so an
@@ -53,4 +58,54 @@ public struct PlaceholderSwatch: Hashable, Sendable {
     973200 983308 994220 9b3603 9c5539 9d74a7 9d8f9d 9e672e 9f50b3 a03e0f
     a72828 a9460c a95c5c ad9db1 b94615 bc590a c44100
     """.split(whereSeparator: \.isWhitespace).map { PlaceholderSwatch(hex: String($0)) }
+}
+
+extension PlaceholderSwatch {
+  /// The placeholder cover as an image `pixels` on a side: the swatch,
+  /// with a music note in the middle a quarter as tall, as the app draws
+  /// it.  This is for places that want a picture, not a view, like the
+  /// system's now-playing display.
+  public func image(pixels: Int) -> CGImage? {
+    let side = CGFloat(pixels)
+    let rect = CGRect(x: 0, y: 0, width: side, height: side)
+    #if canImport(UIKit)
+    let fill = UIColor(red: red, green: green, blue: blue, alpha: 1)
+    let ink = inkIsLight ? UIColor.white.withAlphaComponent(0.82) : UIColor.black.withAlphaComponent(0.62)
+    let config = UIImage.SymbolConfiguration(pointSize: side / 4)
+      .applying(UIImage.SymbolConfiguration(paletteColors: [ink]))
+    let format = UIGraphicsImageRendererFormat()
+    format.scale = 1
+    return UIGraphicsImageRenderer(size: rect.size, format: format).image { context in
+      fill.setFill()
+      context.fill(rect)
+      if let note = UIImage(systemName: "music.note", withConfiguration: config) {
+        note.draw(in: Self.centered(note.size, in: rect))
+      }
+    }.cgImage
+    #else
+    guard let rep = NSBitmapImageRep(
+      bitmapDataPlanes: nil, pixelsWide: pixels, pixelsHigh: pixels, bitsPerSample: 8,
+      samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB,
+      bytesPerRow: 0, bitsPerPixel: 0
+    ) else { return nil }
+    let fill = NSColor(red: red, green: green, blue: blue, alpha: 1)
+    let ink = inkIsLight ? NSColor.white.withAlphaComponent(0.82) : NSColor.black.withAlphaComponent(0.62)
+    let config = NSImage.SymbolConfiguration(pointSize: side / 4, weight: .regular)
+      .applying(NSImage.SymbolConfiguration(paletteColors: [ink]))
+    NSGraphicsContext.saveGraphicsState()
+    NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+    fill.setFill()
+    rect.fill()
+    if let note = NSImage(systemSymbolName: "music.note", accessibilityDescription: nil)?
+      .withSymbolConfiguration(config) {
+      note.draw(in: Self.centered(note.size, in: rect))
+    }
+    NSGraphicsContext.restoreGraphicsState()
+    return rep.cgImage
+    #endif
+  }
+
+  private static func centered(_ size: CGSize, in rect: CGRect) -> CGRect {
+    CGRect(x: rect.midX - size.width / 2, y: rect.midY - size.height / 2, width: size.width, height: size.height)
+  }
 }

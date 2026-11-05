@@ -48,8 +48,9 @@ public final class Player {
 
   @ObservationIgnored private var statusObserver: NSKeyValueObservation?
   /// The current track's art for the lock screen and Control Center, and
-  /// which image it is, so a stale one is never shown for a new track.
-  @ObservationIgnored private var artwork: (blobId: String, image: CGImage)?
+  /// which image it is (see `artKey(for:)`), so a stale one is never shown
+  /// for a new track.
+  @ObservationIgnored private var artwork: (key: String, image: CGImage)?
   @ObservationIgnored private var artworkTask: Task<Void, Never>?
   @ObservationIgnored private var timeObserver: Any?
   /// Seeks asked for but not yet done.  Until they are, the player still
@@ -219,19 +220,33 @@ public final class Player {
     }
   }
 
+  /// Which image the now-playing info should show for a track: its art,
+  /// or with none, its album's placeholder cover.  Nil for a track with
+  /// neither, which shows no image.
+  private func artKey(for track: Track) -> String? {
+    if let art = library.artwork(for: track) { return art.blobId }
+    return track.albumId.map { "placeholder:\($0)" }
+  }
+
   /// Fetches a track's art for the now-playing info, which is set again
-  /// once it comes.
+  /// once it comes.  A placeholder is drawn at once.
   private func fetchArtwork(for track: Track) {
     artworkTask?.cancel()
-    guard let art = library.artwork(for: track) else {
+    guard let key = artKey(for: track) else {
       artwork = nil
       return
     }
-    if artwork?.blobId == art.blobId { return }
+    if artwork?.key == key { return }
     artwork = nil
+    guard let art = library.artwork(for: track) else {
+      if let albumId = track.albumId, let image = PlaceholderSwatch.for(albumId).image(pixels: 600) {
+        artwork = (key, image)
+      }
+      return
+    }
     artworkTask = Task { [weak self] in
       guard let self, let image = await library.images.image(art, maxPixels: 1024), !Task.isCancelled else { return }
-      artwork = (art.blobId, image)
+      artwork = (key, image)
       updateNowPlaying()
     }
   }
@@ -389,7 +404,7 @@ public final class Player {
     if let artist = track.artist { info[MPMediaItemPropertyArtist] = artist }
     if let album = track.albumId.flatMap({ library.albums[$0] }) { info[MPMediaItemPropertyAlbumTitle] = album.title }
     if let duration { info[MPMediaItemPropertyPlaybackDuration] = duration }
-    if let artwork, artwork.blobId == library.artwork(for: track)?.blobId {
+    if let artwork, artwork.key == artKey(for: track) {
       let image = artwork.image
       let size = CGSize(width: image.width, height: image.height)
       // The system asks for the image on its own queue, so the closure
