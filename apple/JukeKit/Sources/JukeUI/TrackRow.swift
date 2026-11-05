@@ -105,7 +105,7 @@ struct PlayerBar: View {
     if player.current != nil || player.failure != nil {
       HStack(spacing: 16) {
         if let track = player.current {
-          ArtworkView(library: player.library, artwork: player.library.artwork(for: track), size: 40, cornerRadius: 4)
+          ArtworkView(library: player.library, artwork: player.library.artwork(for: track), seed: track.albumId, size: 40, cornerRadius: 4)
             .onTapGesture { showingNowPlaying = true }
         }
         // Tapping what's playing opens the whole player.  A gesture, not

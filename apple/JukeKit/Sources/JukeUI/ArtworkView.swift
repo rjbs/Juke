@@ -15,6 +15,9 @@ import SwiftUI
 struct ArtworkView: View {
   let library: Library
   let artwork: Artwork?
+  /// What picks the color drawn when there's no art: the album's id,
+  /// usually.  With none, the placeholder is plain grey.
+  var seed: String? = nil
   var size: CGFloat? = nil
   var maxWidth: CGFloat = 260
   var cornerRadius: CGFloat = 6
@@ -34,11 +37,7 @@ struct ArtworkView: View {
           Image(decorative: shown, scale: 1).resizable().aspectRatio(contentMode: .fill)
         }
       } else {
-        Rectangle().fill(.quaternary).overlay {
-          Image(systemName: "music.note")
-            .font(.system(size: (size ?? maxWidth) / 4))
-            .foregroundStyle(.secondary)
-        }
+        placeholder
       }
     }
     .modifier(Square(size: size, maxWidth: maxWidth))
@@ -49,6 +48,18 @@ struct ArtworkView: View {
       if let image = await library.images.image(artwork, maxPixels: maxPixels) {
         loaded = (artwork, image)
       }
+    }
+  }
+
+  @ViewBuilder private var placeholder: some View {
+    let note = Image(systemName: "music.note").font(.system(size: (size ?? maxWidth) / 4))
+    if let seed {
+      let swatch = PlaceholderSwatch.for(seed)
+      Rectangle().fill(Color(red: swatch.red, green: swatch.green, blue: swatch.blue)).overlay {
+        note.foregroundStyle(swatch.inkIsLight ? Color.white.opacity(0.82) : Color.black.opacity(0.62))
+      }
+    } else {
+      Rectangle().fill(.quaternary).overlay { note.foregroundStyle(.secondary) }
     }
   }
 

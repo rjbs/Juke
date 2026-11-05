@@ -95,7 +95,7 @@ struct AlbumSection: View {
       ? (whole == 1 ? "1 track" : "\(whole) tracks")
       : "\(tracks.count) of \(whole) tracks"
     return HStack(alignment: .top, spacing: 12) {
-      ArtworkView(library: library, artwork: album.artwork, size: artSize, cornerRadius: artSize / 15)
+      ArtworkView(library: library, artwork: album.artwork, seed: album.id, size: artSize, cornerRadius: artSize / 15)
       VStack(alignment: .leading, spacing: 4) {
         if linked {
           Text(album.title).font(.title3.weight(.semibold))
