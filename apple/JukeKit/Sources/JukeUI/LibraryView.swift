@@ -12,6 +12,7 @@ struct LibraryView: View {
   enum SidebarItem: Hashable {
     case albums
     case artists
+    case genres
     case songs
     case offline
     case playlist(Playlist.ID)
@@ -61,6 +62,7 @@ struct LibraryView: View {
       List(selection: $selection) {
         Label("Albums", systemImage: "square.stack").tag(SidebarItem.albums)
         Label("Artists", systemImage: "music.mic").tag(SidebarItem.artists)
+        Label("Genres", systemImage: "guitars").tag(SidebarItem.genres)
         Label("Songs", systemImage: "music.note").tag(SidebarItem.songs)
         Label("Offline", systemImage: "arrow.down.circle").tag(SidebarItem.offline)
         let rows = PlaylistRow.rows(of: library)
@@ -133,6 +135,8 @@ struct LibraryView: View {
             AlbumListView(library: library, player: player)
           case .artists:
             ArtistListView(library: library, player: player)
+          case .genres:
+            GenreListView(library: library, player: player)
           case .songs:
             SongListView(library: library, player: player)
           case .offline:

@@ -162,8 +162,8 @@ struct AlbumRunsView: View {
 }
 
 extension View {
-  /// Where a link to an album, by its id, or to an artist leads.  Set
-  /// once, on the stack, so every view in it can link to either.
+  /// Where a link to an album, by its id, or to an artist or genre leads.  Set
+  /// once, on the stack, so every view in it can link to any of them.
   func libraryDestinations(library: Library, player: Player) -> some View {
     navigationDestination(for: String.self) { id in
       if let album = library.albums[id] {
@@ -172,6 +172,9 @@ extension View {
     }
     .navigationDestination(for: Artist.self) { artist in
       ArtistView(library: library, player: player, artist: artist)
+    }
+    .navigationDestination(for: Genre.self) { genre in
+      GenreView(library: library, player: player, genre: genre)
     }
   }
 }

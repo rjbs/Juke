@@ -96,6 +96,84 @@ struct ArtistView: View {
   }
 }
 
+/// The genres the tracks name, searchable, each leading to its tracks.
+/// Tracks with no genre aren't listed here.
+struct GenreListView: View {
+  let library: Library
+  let player: Player
+  @State private var search = ""
+  @State private var searching = false
+
+  private var shown: [Genre] {
+    let words = search.split(separator: " ").map(String.init)
+    guard !words.isEmpty else { return library.genreList }
+    return library.genreList.filter { g in words.allSatisfy { g.name.localizedStandardContains($0) } }
+  }
+
+  var body: some View {
+    List(shown) { genre in
+      NavigationLink(value: genre) {
+        VStack(alignment: .leading) {
+          Text(genre.name)
+          Text(genre.trackCount == 1 ? "1 track" : "\(genre.trackCount.formatted()) tracks")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+      }
+    }
+    .findable(text: $search, isPresented: $searching, prompt: "Genre")
+    .navigationTitle("Genres")
+  }
+}
+
+/// One genre's tracks, by album in the album list's order, shown either
+/// as one list or under their albums' headings.  An album of mixed
+/// genres shows only its tracks in this one.
+struct GenreView: View {
+  let library: Library
+  let player: Player
+  let genre: Genre
+  /// Kept for all genres alike, on this device.
+  @AppStorage("trackListStyle.genre") private var style = TrackListStyle.albums
+
+  var body: some View {
+    let tracks = library.tracks(of: genre)
+    List {
+      switch style {
+      case .tracks:
+        ForEach(Array(tracks.enumerated()), id: \.element.id) { i, track in
+          TrackRow(library: library, player: player, track: track, number: i + 1, showArtist: true, showAlbum: true) {
+            player.play(tracks, at: i, from: genre.name)
+          }
+        }
+      case .albums:
+        AlbumRunsView(library: library, player: player,
+                      entries: tracks.enumerated().map { AlbumEntry(track: $1, index: $0) }) {
+          player.play(tracks, at: $0, from: genre.name)
+        }
+      }
+    }
+    .navigationTitle(genre.name)
+    .navigationSubtitle(tracks.count == 1 ? "1 track" : "\(tracks.count.formatted()) tracks")
+    .toolbar {
+      #if os(macOS)
+      ToolbarItem { TrackListStylePicker(style: $style).pickerStyle(.segmented) }
+      #endif
+      ToolbarItem {
+        PlayMenu(player: player, source: genre.name) { tracks }
+          .disabled(!tracks.contains(where: \.isPlayable))
+      }
+      #if os(iOS)
+      ToolbarItem {
+        Menu("Genre", systemImage: "ellipsis.circle") {
+          TrackListStylePicker(style: $style).pickerStyle(.inline)
+        }
+      }
+      #endif
+    }
+  }
+}
+
 /// Every track, searchable by title and artist, in a chosen order.
 /// Tapping one plays the list as shown, from there.
 struct SongListView: View {
