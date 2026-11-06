@@ -69,6 +69,8 @@ public final class Library {
   public private(set) var syncFailure: String?
 
   @ObservationIgnored let engine: SyncEngine<GRDBSyncStore>
+  /// The engine, for a diagnostic window to look inside.
+  public var inspecting: any SyncInspecting { engine }
   @ObservationIgnored let blobs: BlobStore<GRDBSyncStore>
   @ObservationIgnored let accountId: String
   /// The server, for the few calls made outside the mirror: running and
