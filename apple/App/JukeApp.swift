@@ -15,6 +15,11 @@ struct JukeApp: App {
     .keyboardShortcut("0")
     .commands { JukeCommands() }
 
+    // A Window scene is listed in the Window menu by its title.
+    Window("Jinx Inspector", id: "jinx-inspector") {
+      JukeInspectorView(model: model)
+    }
+
     Settings {
       JukeSettingsView(model: model)
     }
