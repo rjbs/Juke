@@ -154,18 +154,16 @@ struct LibraryView: View {
       .id(selection)
       .environment(editor)
       .environment(\.navigator, Navigator(
-        goToArtist: { select(.artists, opening: $0) },
-        goToAlbum: { select(.albums, opening: $0) }
+        goToArtist: { path.append($0) },
+        goToAlbum: { path.append($0) }
       ))
     }
   }
 
-  /// Shows a sidebar item's list, with these pages opened over it.
-  private func select(_ item: SidebarItem?, opening pages: any Hashable...) {
+  /// Shows a sidebar item's list, closing any pages opened over the last.
+  private func select(_ item: SidebarItem?) {
     selection = item
-    var path = NavigationPath()
-    for page in pages { path.append(page) }
-    self.path = path
+    path = NavigationPath()
   }
 
   /// A playlist of either kind, for a list that shows them together by

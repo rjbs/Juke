@@ -2,8 +2,7 @@ import JukeKit
 import SwiftUI
 
 /// Jumps from anywhere in the library to an artist's or an album's page,
-/// switching the sidebar to Artists or Albums and opening the page there,
-/// so Back leads to that list, not to wherever the jump started.
+/// opening it over the page the jump started from, so Back leads there.
 struct Navigator {
   var goToArtist: (Artist) -> Void = { _ in }
   var goToAlbum: (Album.ID) -> Void = { _ in }
