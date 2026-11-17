@@ -7,16 +7,6 @@ struct NowPlayingView: View {
   let player: Player
   @Environment(\.dismiss) private var dismiss
 
-  /// The seek bar's drag.  The times follow the drag; playback moves when
-  /// it's released, or has rested a moment, so scrubbing doesn't stutter
-  /// through the audio.
-  @State private var scrubber: Scrubber
-
-  init(player: Player) {
-    self.player = player
-    _scrubber = State(initialValue: Scrubber { player.seek(to: $0) })
-  }
-
   var body: some View {
     NavigationStack {
       List {
@@ -24,7 +14,7 @@ struct NowPlayingView: View {
           VStack(spacing: 16) {
             artwork
             titles
-            seekBar
+            SeekBar(player: player, layout: .stacked)
             transport
           }
           .frame(maxWidth: .infinity)
@@ -87,28 +77,6 @@ struct NowPlayingView: View {
     }
   }
 
-  private var seekBar: some View {
-    let duration = player.duration ?? 0
-    let shown = scrubber.target ?? min(player.elapsed, duration)
-    return VStack(spacing: 2) {
-      Slider(
-        value: Binding(get: { shown }, set: { scrubber.moved(to: $0) }),
-        in: 0...max(duration, 1)
-      ) { editing in
-        if !editing { scrubber.released() }
-      }
-      .disabled(player.duration == nil)
-      .accessibilityIdentifier("nowPlaying.seek")
-      HStack {
-        Text(Self.time(shown)).accessibilityIdentifier("nowPlaying.elapsed")
-        Spacer()
-        Text("-" + Self.time(max(duration - shown, 0))).accessibilityIdentifier("nowPlaying.remaining")
-      }
-      .font(.caption.monospacedDigit())
-      .foregroundStyle(.secondary)
-    }
-  }
-
   private var transport: some View {
     HStack(spacing: 28) {
       ShuffleButton(player: player)
@@ -126,6 +94,70 @@ struct NowPlayingView: View {
     .font(.title2)
     .labelStyle(.iconOnly)
     .buttonStyle(.borderless)
+  }
+}
+
+/// A seek bar with the time gone and the time left, under the bar or on
+/// either side of it.
+struct SeekBar: View {
+  enum Layout {
+    /// The times beneath the bar, for the whole player.
+    case stacked
+    /// The times beside it, for the player bar.
+    case inline
+  }
+
+  let player: Player
+  let layout: Layout
+
+  /// The bar's drag.  The times follow the drag; playback moves when
+  /// it's released, or has rested a moment, so scrubbing doesn't stutter
+  /// through the audio.
+  @State private var scrubber: Scrubber
+
+  init(player: Player, layout: Layout) {
+    self.player = player
+    self.layout = layout
+    _scrubber = State(initialValue: Scrubber { player.seek(to: $0) })
+  }
+
+  /// Where the UI tests find it: in the whole player, or in the bar.
+  private var id: String { layout == .stacked ? "nowPlaying" : "player" }
+
+  var body: some View {
+    let duration = player.duration ?? 0
+    let shown = scrubber.target ?? min(player.elapsed, duration)
+    let slider = Slider(
+      value: Binding(get: { shown }, set: { scrubber.moved(to: $0) }),
+      in: 0...max(duration, 1)
+    ) { editing in
+      if !editing { scrubber.released() }
+    }
+    .disabled(player.duration == nil)
+    .accessibilityIdentifier("\(id).seek")
+    let elapsed = Text(Self.time(shown)).accessibilityIdentifier("\(id).elapsed")
+    let remaining = Text("-" + Self.time(max(duration - shown, 0))).accessibilityIdentifier("\(id).remaining")
+    switch layout {
+    case .stacked:
+      VStack(spacing: 2) {
+        slider
+        HStack {
+          elapsed
+          Spacer()
+          remaining
+        }
+        .font(.caption.monospacedDigit())
+        .foregroundStyle(.secondary)
+      }
+    case .inline:
+      HStack(spacing: 8) {
+        elapsed.frame(minWidth: 36, alignment: .trailing)
+        slider.controlSize(.small)
+        remaining.frame(minWidth: 40, alignment: .leading)
+      }
+      .font(.caption.monospacedDigit())
+      .foregroundStyle(.secondary)
+    }
   }
 
   /// Seconds as m:ss, or h:mm:ss for an hour or more.
