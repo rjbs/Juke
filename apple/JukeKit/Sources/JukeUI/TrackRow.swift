@@ -125,6 +125,12 @@ struct PlayerBar: View {
         .contentShape(Rectangle())
         .onTapGesture { showingNowPlaying = true }
         .accessibilityAction(named: "Show Now Playing") { showingNowPlaying = true }
+        #if os(macOS)
+        if player.current != nil {
+          SeekBar(player: player, layout: .inline)
+            .frame(minWidth: 200, maxWidth: 480)
+        }
+        #endif
         if player.isLoading { ProgressView().controlSize(.small) }
         Button("Previous", systemImage: "backward.fill") { player.previous() }
           .disabled(player.current == nil)
