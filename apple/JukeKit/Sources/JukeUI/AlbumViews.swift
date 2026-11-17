@@ -58,6 +58,7 @@ struct AlbumView: View {
         player.play(all, at: $0, from: album.title)
       }
     }
+    .environment(\.destination, .album(album.id))
     .navigationTitle(album.title)
     .toolbar {
       ToolbarItem {

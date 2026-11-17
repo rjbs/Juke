@@ -20,6 +20,8 @@ struct LibraryView: View {
   }
 
   @State private var selection: SidebarItem? = .albums
+  /// The pages open in the detail column, over the sidebar item's list.
+  @State private var path = NavigationPath()
   /// The smart playlist editor, shown as a sheet while it has a subject.
   @State private var editor = SmartPlaylistEditorHost()
   /// Whether the new-playlist prompt is up.
@@ -59,7 +61,7 @@ struct LibraryView: View {
 
   private var columns: some View {
     NavigationSplitView {
-      List(selection: $selection) {
+      List(selection: Binding(get: { selection }, set: { select($0) })) {
         Label("Albums", systemImage: "square.stack").tag(SidebarItem.albums)
         Label("Artists", systemImage: "music.mic").tag(SidebarItem.artists)
         Label("Genres", systemImage: "guitars").tag(SidebarItem.genres)
@@ -128,7 +130,7 @@ struct LibraryView: View {
         .background(.bar)
       }
     } detail: {
-      NavigationStack {
+      NavigationStack(path: $path) {
         Group {
           switch selection {
           case .albums, nil:
@@ -151,7 +153,19 @@ struct LibraryView: View {
       }
       .id(selection)
       .environment(editor)
+      .environment(\.navigator, Navigator(
+        goToArtist: { select(.artists, opening: $0) },
+        goToAlbum: { select(.albums, opening: $0) }
+      ))
     }
+  }
+
+  /// Shows a sidebar item's list, with these pages opened over it.
+  private func select(_ item: SidebarItem?, opening pages: any Hashable...) {
+    selection = item
+    var path = NavigationPath()
+    for page in pages { path.append(page) }
+    self.path = path
   }
 
   /// A playlist of either kind, for a list that shows them together by

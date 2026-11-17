@@ -46,6 +46,7 @@ public final class Library {
   public private(set) var albumList: [Album] = []
   /// Album artists by name, ignoring a leading article.
   public private(set) var artistList: [Artist] = []
+  private var artistsByName: [String: Artist] = [:]
   /// Goes up whenever any track changes, for views that sort or filter
   /// all of them.
   public private(set) var trackRevision = 0
@@ -481,6 +482,11 @@ public final class Library {
     if ruleChanged { try await engine.refreshSubscriptions(of: "Track") }
   }
 
+  /// The album artist with exactly this name, if there is one.
+  public func artist(named name: String) -> Artist? {
+    artistsByName[name]
+  }
+
   private func sortAlbums() {
     albumList = albums.values.sorted { a, b in
       if (a.artist == nil) != (b.artist == nil) { return b.artist == nil }
@@ -489,6 +495,7 @@ public final class Library {
       return a.title.localizedStandardCompare(b.title) == .orderedAscending
     }
     artistList = Self.artists(of: albums.values)
+    artistsByName = Dictionary(uniqueKeysWithValues: artistList.map { ($0.name, $0) })
   }
 
   private func sortPlaylists() {

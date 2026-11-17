@@ -72,6 +72,7 @@ struct ArtistView: View {
         }
       }
     }
+    .environment(\.destination, .artist(artist.name))
     .navigationTitle(artist.name)
     .navigationSubtitle(summary(albums: shown.count, tracks: all.count))
     .toolbar {
