@@ -109,25 +109,30 @@ struct LibraryView: View {
       }
       .newPlaylistPrompt(isPresented: $namingPlaylist, library: library) { selection = .playlist($0) }
       .safeAreaInset(edge: .bottom) {
-        VStack(alignment: .leading, spacing: 4) {
-          if let failure = library.syncFailure {
-            Label("Can't reach the server", systemImage: "exclamationmark.icloud")
-              .help(failure)
+        let offline = library.offline!
+        let downloading = offline.present < offline.wanted
+        // With nothing to say, there's no inset at all, rather than an
+        // empty strip of padding and background.
+        if library.syncFailure != nil || downloading {
+          VStack(alignment: .leading, spacing: 4) {
+            if let failure = library.syncFailure {
+              Label("Can't reach the server", systemImage: "exclamationmark.icloud")
+                .help(failure)
+            }
+            if downloading {
+              Label("Downloading \(offline.present) of \(offline.wanted)", systemImage: "arrow.down.circle")
+                .monospacedDigit()
+                .help(offline.failure ?? "")
+            }
           }
-          let offline = library.offline!
-          if offline.present < offline.wanted {
-            Label("Downloading \(offline.present) of \(offline.wanted)", systemImage: "arrow.down.circle")
-              .monospacedDigit()
-              .help(offline.failure ?? "")
-          }
+          .font(.caption)
+          .foregroundStyle(.secondary)
+          .padding(8)
+          // The list scrolls under the inset, as under a toolbar, so the
+          // inset needs a background of its own, or the rows show through.
+          .frame(maxWidth: .infinity, alignment: .leading)
+          .background(.bar)
         }
-        .font(.caption)
-        .foregroundStyle(.secondary)
-        .padding(8)
-        // The list scrolls under the inset, as under a toolbar, so the
-        // inset needs a background of its own, or the rows show through.
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.bar)
       }
     } detail: {
       NavigationStack(path: $path) {
