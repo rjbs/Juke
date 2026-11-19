@@ -63,6 +63,7 @@ public final class Player {
     self.library = library
     #if os(iOS)
     try? AVAudioSession.sharedInstance().setCategory(.playback)
+    watchAudioSession()
     #endif
     var rng = SystemRandomNumberGenerator()
     playQueue.setShuffle(Self.savedShuffle, using: &rng)
@@ -326,6 +327,36 @@ public final class Player {
   }
 
   // MARK: - System integration
+
+  #if os(iOS)
+  /// Pauses when the headphones are pulled out or another app's audio
+  /// interrupts.  The system pauses the AVPlayer itself then, but nothing
+  /// else would tell `isPlaying`, which would go on saying it plays, so
+  /// that the Pause button took one tap to do nothing and another to
+  /// play.  -- claude, 2026-11-19
+  private func watchAudioSession() {
+    let center = NotificationCenter.default
+    center.addObserver(forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main) { [weak self] note in
+      let reason = (note.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt)
+        .flatMap(AVAudioSession.RouteChangeReason.init)
+      guard reason == .oldDeviceUnavailable else { return }
+      MainActor.assumeIsolated { self?.pausedBySystem() }
+    }
+    center.addObserver(forName: AVAudioSession.interruptionNotification, object: nil, queue: .main) { [weak self] note in
+      let type = (note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt)
+        .flatMap(AVAudioSession.InterruptionType.init)
+      guard type == .began else { return }
+      MainActor.assumeIsolated { self?.pausedBySystem() }
+    }
+  }
+
+  private func pausedBySystem() {
+    guard isPlaying else { return }
+    player.pause()
+    isPlaying = false
+    updateNowPlaying()
+  }
+  #endif
 
   private func setUpRemoteCommands() {
     let center = MPRemoteCommandCenter.shared()
