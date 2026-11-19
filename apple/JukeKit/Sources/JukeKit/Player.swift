@@ -53,6 +53,9 @@ public final class Player {
   @ObservationIgnored private var artwork: (key: String, image: CGImage)?
   @ObservationIgnored private var artworkTask: Task<Void, Never>?
   @ObservationIgnored private var timeObserver: Any?
+  /// Whether an interruption under way stopped playback, which should go
+  /// on when it ends.  Pausing or playing in the meantime settles it.
+  @ObservationIgnored private var resumeAfterInterruption = false
   /// Seeks asked for but not yet done.  Until they are, the player still
   /// reports the old time, which shouldn't drag `elapsed` back after a
   /// seek has set it.  -- claude, 2026-11-02
@@ -169,6 +172,7 @@ public final class Player {
 
   public func togglePause() {
     guard index != nil else { return }
+    resumeAfterInterruption = false
     if isPlaying { player.pause() } else { player.play() }
     isPlaying.toggle()
     updateNowPlaying()
@@ -340,13 +344,28 @@ public final class Player {
       let reason = (note.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt)
         .flatMap(AVAudioSession.RouteChangeReason.init)
       guard reason == .oldDeviceUnavailable else { return }
-      MainActor.assumeIsolated { self?.pausedBySystem() }
+      MainActor.assumeIsolated {
+        self?.resumeAfterInterruption = false
+        self?.pausedBySystem()
+      }
     }
     center.addObserver(forName: AVAudioSession.interruptionNotification, object: nil, queue: .main) { [weak self] note in
-      let type = (note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt)
-        .flatMap(AVAudioSession.InterruptionType.init)
-      guard type == .began else { return }
-      MainActor.assumeIsolated { self?.pausedBySystem() }
+      let info = note.userInfo
+      let type = (info?[AVAudioSessionInterruptionTypeKey] as? UInt).flatMap(AVAudioSession.InterruptionType.init)
+      let options = AVAudioSession.InterruptionOptions(rawValue: info?[AVAudioSessionInterruptionOptionKey] as? UInt ?? 0)
+      MainActor.assumeIsolated {
+        guard let self else { return }
+        switch type {
+        case .began:
+          self.resumeAfterInterruption = self.isPlaying
+          self.pausedBySystem()
+        case .ended:
+          if self.resumeAfterInterruption && options.contains(.shouldResume) { self.resumedBySystem() }
+          self.resumeAfterInterruption = false
+        default:
+          break
+        }
+      }
     }
   }
 
@@ -354,6 +373,15 @@ public final class Player {
     guard isPlaying else { return }
     player.pause()
     isPlaying = false
+    updateNowPlaying()
+  }
+
+  /// Plays again after an interruption, as the system says to when the
+  /// interruption was, say, a call, and not another app starting to play.
+  private func resumedBySystem() {
+    guard !isPlaying, current != nil, player.currentItem != nil else { return }
+    player.play()
+    isPlaying = true
     updateNowPlaying()
   }
   #endif
