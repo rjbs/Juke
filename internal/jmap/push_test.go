@@ -20,7 +20,26 @@ type pushEvent struct {
 // listen opens the event source with the given query and returns its
 // events as they arrive.  The channel closes when the server ends the
 // stream.
+//
+// A stream that isn't closeafter=state opens with an event giving the
+// state of each type asked for.  That event is not passed on, so that what
+// a test sees is what happened after it began to listen; listenFromOpening
+// is for the test of the opening event itself.
 func (f *fixture) listen(query string) <-chan pushEvent {
+	f.t.Helper()
+	events := f.listenFromOpening(query)
+	if !strings.Contains(query, "closeafter=state") {
+		select {
+		case ev := <-events:
+			checkEqual(f.t, "opening event", ev.name, "state")
+		case <-time.After(5 * time.Second):
+			f.t.Fatal("no opening state event")
+		}
+	}
+	return events
+}
+
+func (f *fixture) listenFromOpening(query string) <-chan pushEvent {
 	f.t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	f.t.Cleanup(cancel)
@@ -91,6 +110,13 @@ func checkQuiet(t *testing.T, events <-chan pushEvent) {
 
 func rate(f *fixture, title string, rating float64) {
 	f.call("Track/set", map[string]any{"update": map[string]any{f.ids[title]: map[string]any{"rating": rating}}})
+}
+
+func TestPushOpening(t *testing.T) {
+	f := newFixture(t, Config{PushPollInterval: time.Hour})
+	checkStateChange(t, f, f.listenFromOpening("types=*&closeafter=no&ping=0"), pushTypes...)
+	checkStateChange(t, f, f.listenFromOpening("types=Album,Frobnitz&closeafter=no&ping=0"), "Album")
+	checkQuiet(t, f.listenFromOpening("types=*&closeafter=state&ping=0"))
 }
 
 func TestPushOnSet(t *testing.T) {

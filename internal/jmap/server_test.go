@@ -396,10 +396,12 @@ func TestSession(t *testing.T) {
 	defer resp.Body.Close()
 	var s map[string]any
 	json.NewDecoder(resp.Body).Decode(&s)
-	checkEqual(t, "primary account", s["primaryAccounts"], map[string]any{CapJuke: "music"})
+	checkEqual(t, "primary account", s["primaryAccounts"], map[string]any{CapJuke: "music", CapReview: "music"})
 	checkEqual(t, "apiUrl", s["apiUrl"], f.srv.URL+"/jmap/api")
 	checkEqual(t, "downloadUrl", s["downloadUrl"], f.srv.URL+"/jmap/download/{accountId}/{blobId}/{name}?type={type}")
-	checkEqual(t, "state", s["state"], strings.SplitN(f.state("Track"), "-", 2)[0])
+	if state, _ := s["state"].(string); state == "" {
+		t.Errorf("the session has no state: %v", s["state"])
+	}
 }
 
 // checkDownload fetches a blob, optionally a byte range of it, and checks

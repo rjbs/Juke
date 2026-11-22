@@ -101,7 +101,11 @@ func newFixture(t *testing.T, cfg Config) *fixture {
 	cfg.Library = f.library
 	cfg.Now = func() time.Time { return fixtureNow }
 	cfg.Log = log.New(io.Discard, "", 0)
-	f.srv = httptest.NewServer(New(cfg).Handler())
+	srv := New(cfg)
+	watching, stop := context.WithCancel(ctx)
+	t.Cleanup(stop)
+	go srv.Watch(watching)
+	f.srv = httptest.NewServer(srv.Handler())
 	t.Cleanup(f.srv.Close)
 	return f
 }

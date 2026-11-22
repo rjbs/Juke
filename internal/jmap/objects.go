@@ -74,9 +74,6 @@ func (s *Server) objectTypes() []*objectType {
 
 func (s *Server) methodTable() map[string]method {
 	m := map[string]method{
-		"Core/echo": {CapCore, func(_ context.Context, _ *Server, args json.RawMessage) (any, error) {
-			return args, nil
-		}},
 		"Track/set": {CapJuke, func(ctx context.Context, s *Server, args json.RawMessage) (any, error) {
 			return s.set(ctx, trackSetter, args)
 		}},
