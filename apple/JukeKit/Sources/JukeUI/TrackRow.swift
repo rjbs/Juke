@@ -17,6 +17,8 @@ struct TrackRow: View {
   /// Removes the track from the list it's in, for a list that allows it.
   var remove: (() -> Void)? = nil
   let play: () -> Void
+  @Environment(\.navigator) private var navigator
+  @Environment(\.destination) private var destination
 
   var body: some View {
     Button(action: play) {
@@ -64,10 +66,25 @@ struct TrackRow: View {
         Button("Play Next", systemImage: "text.line.first.and.arrowtriangle.forward") { player.playNext([track]) }
         Button("Add to Queue", systemImage: "text.line.last.and.arrowtriangle.forward") { player.addToQueue([track]) }
       }
+      Section { goTo }
       AddToPlaylistMenu(library: library, tracks: [track])
       if let remove {
         Button("Remove from Playlist", systemImage: "minus.circle", role: .destructive, action: remove)
       }
+    }
+  }
+
+  /// Links to the track's artist and album, but not to the page it's on.
+  /// The artist is the track's own, if they have albums, so a song on a
+  /// compilation leads to its singer; otherwise it's the album's.
+  @ViewBuilder private var goTo: some View {
+    let album = track.albumId.flatMap { library.albums[$0] }
+    let artist = [track.artist, album?.artist].lazy.compactMap { $0.flatMap(library.artist(named:)) }.first
+    if let artist, destination != .artist(artist.name) {
+      Button("Go to Artist", systemImage: "music.mic") { navigator.goToArtist(artist) }
+    }
+    if let album, destination != .album(album.id) {
+      Button("Go to Album", systemImage: "square.stack") { navigator.goToAlbum(album.id) }
     }
   }
 
@@ -125,6 +142,12 @@ struct PlayerBar: View {
         .contentShape(Rectangle())
         .onTapGesture { showingNowPlaying = true }
         .accessibilityAction(named: "Show Now Playing") { showingNowPlaying = true }
+        #if os(macOS)
+        if player.current != nil {
+          SeekBar(player: player, layout: .inline)
+            .frame(minWidth: 200, maxWidth: 480)
+        }
+        #endif
         if player.isLoading { ProgressView().controlSize(.small) }
         Button("Previous", systemImage: "backward.fill") { player.previous() }
           .disabled(player.current == nil)

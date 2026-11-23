@@ -28,7 +28,13 @@ let package = Package(
         .product(name: "JinxWire", package: "Jinx"),
       ]
     ),
-    .target(name: "JukeUI", dependencies: ["JukeKit"]),
+    .target(
+      name: "JukeUI",
+      dependencies: [
+        "JukeKit",
+        .product(name: "JinxInspector", package: "Jinx"),
+      ]
+    ),
     .testTarget(name: "JukeKitTests", dependencies: ["JukeKit"]),
   ]
 )

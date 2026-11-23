@@ -20,6 +20,8 @@ struct LibraryView: View {
   }
 
   @State private var selection: SidebarItem? = .albums
+  /// The pages open in the detail column, over the sidebar item's list.
+  @State private var path = NavigationPath()
   /// The smart playlist editor, shown as a sheet while it has a subject.
   @State private var editor = SmartPlaylistEditorHost()
   /// Whether the new-playlist prompt is up.
@@ -59,7 +61,7 @@ struct LibraryView: View {
 
   private var columns: some View {
     NavigationSplitView {
-      List(selection: $selection) {
+      List(selection: Binding(get: { selection }, set: { select($0) })) {
         Label("Albums", systemImage: "square.stack").tag(SidebarItem.albums)
         Label("Artists", systemImage: "music.mic").tag(SidebarItem.artists)
         Label("Genres", systemImage: "guitars").tag(SidebarItem.genres)
@@ -107,28 +109,33 @@ struct LibraryView: View {
       }
       .newPlaylistPrompt(isPresented: $namingPlaylist, library: library) { selection = .playlist($0) }
       .safeAreaInset(edge: .bottom) {
-        VStack(alignment: .leading, spacing: 4) {
-          if let failure = library.syncFailure {
-            Label("Can't reach the server", systemImage: "exclamationmark.icloud")
-              .help(failure)
+        let offline = library.offline!
+        let downloading = offline.present < offline.wanted
+        // With nothing to say, there's no inset at all, rather than an
+        // empty strip of padding and background.
+        if library.syncFailure != nil || downloading {
+          VStack(alignment: .leading, spacing: 4) {
+            if let failure = library.syncFailure {
+              Label("Can't reach the server", systemImage: "exclamationmark.icloud")
+                .help(failure)
+            }
+            if downloading {
+              Label("Downloading \(offline.present) of \(offline.wanted)", systemImage: "arrow.down.circle")
+                .monospacedDigit()
+                .help(offline.failure ?? "")
+            }
           }
-          let offline = library.offline!
-          if offline.present < offline.wanted {
-            Label("Downloading \(offline.present) of \(offline.wanted)", systemImage: "arrow.down.circle")
-              .monospacedDigit()
-              .help(offline.failure ?? "")
-          }
+          .font(.caption)
+          .foregroundStyle(.secondary)
+          .padding(8)
+          // The list scrolls under the inset, as under a toolbar, so the
+          // inset needs a background of its own, or the rows show through.
+          .frame(maxWidth: .infinity, alignment: .leading)
+          .background(.bar)
         }
-        .font(.caption)
-        .foregroundStyle(.secondary)
-        .padding(8)
-        // The list scrolls under the inset, as under a toolbar, so the
-        // inset needs a background of its own, or the rows show through.
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.bar)
       }
     } detail: {
-      NavigationStack {
+      NavigationStack(path: $path) {
         Group {
           switch selection {
           case .albums, nil:
@@ -151,7 +158,17 @@ struct LibraryView: View {
       }
       .id(selection)
       .environment(editor)
+      .environment(\.navigator, Navigator(
+        goToArtist: { path.append($0) },
+        goToAlbum: { path.append($0) }
+      ))
     }
+  }
+
+  /// Shows a sidebar item's list, closing any pages opened over the last.
+  private func select(_ item: SidebarItem?) {
+    selection = item
+    path = NavigationPath()
   }
 
   /// A playlist of either kind, for a list that shows them together by
