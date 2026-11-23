@@ -2,7 +2,9 @@ package jmap
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"log"
 	"log/slog"
 	"net/http"
@@ -11,6 +13,7 @@ import (
 	"github.com/rjbs/gizmo/httpd"
 	gizmo "github.com/rjbs/gizmo/jmap"
 	"github.com/rjbs/gizmo/push"
+	"github.com/rjbs/gizmo/std"
 
 	"semiotic.systems/juke/internal/store"
 )
@@ -52,7 +55,7 @@ func decodeArgs(raw json.RawMessage, into any) error {
 // and returns the arguments of its response.
 type method struct {
 	capability string
-	fn         func(ctx context.Context, s *Server, args json.RawMessage) (any, error)
+	fn         func(c *gizmo.Call, s *Server, args json.RawMessage) (any, error)
 }
 
 // processor makes a Gizmo processor of the server's methods.  Every one
@@ -64,7 +67,7 @@ func (s *Server) processor() *gizmo.Processor {
 	find := func(id string) (*Server, bool) { return s, id == s.cfg.AccountID }
 	for name, m := range s.methodTable() {
 		p.Register(name, m.capability, auth.ForAccount(find, func(s *Server, c *gizmo.Call, args json.RawMessage) (any, error) {
-			return m.fn(c.Context(), s, args)
+			return m.fn(c, s, args)
 		}))
 	}
 	return p
@@ -156,4 +159,80 @@ func (s *Server) handler() *httpd.Server {
 // slogTo makes a structured logger that writes where a plain one does.
 func slogTo(l *log.Logger) *slog.Logger {
 	return slog.New(slog.NewTextHandler(l.Writer(), nil))
+}
+
+// txn is a transaction as Gizmo's standard methods know one.  A method
+// that writes gets a real one.  A method that only reads gets the database
+// itself, as reads here have always had: its statements each see what is
+// committed when they run.
+type txn struct {
+	ctx context.Context
+	s   *Server
+	q   store.Queryer
+	tx  *sql.Tx // nil when only reading
+}
+
+func (s *Server) begin(ctx context.Context, write bool) (*txn, error) {
+	if !write {
+		return &txn{ctx: ctx, s: s, q: s.store.DB}, nil
+	}
+	tx, err := s.store.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	return &txn{ctx: ctx, s: s, q: tx, tx: tx}, nil
+}
+
+func (t *txn) State(ctx context.Context, typ string) (string, error) {
+	state, _, err := t.s.state(ctx, t.q, typ)
+	return state, err
+}
+
+func (t *txn) Savepoint(ctx context.Context, fn func() error) error {
+	if t.tx == nil {
+		return fn()
+	}
+	if _, err := t.tx.ExecContext(ctx, "SAVEPOINT object"); err != nil {
+		return err
+	}
+	err := fn()
+	if err != nil {
+		if _, undo := t.tx.ExecContext(ctx, "ROLLBACK TO object"); undo != nil {
+			return undo
+		}
+	}
+	if _, release := t.tx.ExecContext(ctx, "RELEASE object"); release != nil && err == nil {
+		return release
+	}
+	return err
+}
+
+func (t *txn) Commit() error {
+	if t.tx == nil {
+		return errors.New("a transaction that only reads can't be committed")
+	}
+	if err := t.tx.Commit(); err != nil {
+		return err
+	}
+	t.s.publish(t.ctx)
+	return nil
+}
+
+func (t *txn) Rollback() error {
+	if t.tx == nil {
+		return nil
+	}
+	if err := t.tx.Rollback(); err != nil && !errors.Is(err, sql.ErrTxDone) {
+		return err
+	}
+	return nil
+}
+
+// limits are the limits the standard methods keep to.
+func (s *Server) limits() std.Limits {
+	return std.Limits{
+		MaxObjectsInGet: s.cfg.MaxObjectsInGet,
+		MaxObjectsInSet: s.cfg.MaxObjectsInSet,
+		MaxQueryLimit:   s.cfg.MaxQueryLimit,
+	}
 }

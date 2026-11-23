@@ -8,19 +8,14 @@ import (
 	"sort"
 	"strings"
 
+	gizmo "github.com/rjbs/gizmo/jmap"
+	"github.com/rjbs/gizmo/std"
+
 	"semiotic.systems/juke/internal/store"
 	"semiotic.systems/juke/internal/tags"
 )
 
 // ---- /set -----------------------------------------------------------------
-
-type setArgs struct {
-	AccountID string                                `json:"accountId"`
-	IfInState *string                               `json:"ifInState"`
-	Create    map[string]map[string]json.RawMessage `json:"create"`
-	Update    map[string]map[string]json.RawMessage `json:"update"`
-	Destroy   []string                              `json:"destroy"`
-}
 
 // setter is what one type's /set does with each object, inside the
 // method's transaction.  A *methodError result is a SetError for that
@@ -40,137 +35,58 @@ type setter struct {
 	destroy func(ctx context.Context, tx *sql.Tx, id string) error
 }
 
-// set runs a /set: creates, then updates, then destroys, as RFC 8620
-// orders them, all in one transaction.  An update or destroy may name an
-// object created in the same call as "#" and its creation id.
-func (s *Server) set(ctx context.Context, h *setter, raw json.RawMessage) (any, error) {
-	var args setArgs
-	if err := decodeArgs(raw, &args); err != nil {
-		return nil, err
-	}
-	if err := s.checkAccount(args.AccountID); err != nil {
-		return nil, err
-	}
-	if len(args.Create)+len(args.Update)+len(args.Destroy) > s.cfg.MaxObjectsInSet {
-		return nil, errorOf("requestTooLarge", "at most %d objects per /set", s.cfg.MaxObjectsInSet)
-	}
-
-	tx, err := s.store.DB.BeginTx(ctx, nil)
+// set runs a /set through Gizmo, which gives each object a savepoint in one
+// transaction for the call, and destroys, then creates, then updates.  An
+// update or destroy may name an object created in the same call as "#" and
+// its creation id.
+func (s *Server) set(c *gizmo.Call, h *setter, raw json.RawMessage) (any, error) {
+	req, err := std.ParseSet(raw, nil)
 	if err != nil {
 		return nil, err
 	}
-	defer tx.Rollback()
-
-	oldState, _, err := s.state(ctx, tx, h.typ)
-	if err != nil {
-		return nil, err
-	}
-	if args.IfInState != nil && *args.IfInState != oldState {
-		return nil, errorOf("stateMismatch", "state is %s", oldState)
-	}
-
-	// setError sorts an object's failure: a SetError goes in the map, and
-	// anything else is returned to fail the method.
-	setError := func(failed map[string]any, key string, err error) error {
-		var me *methodError
-		if !errors.As(err, &me) {
-			return err
+	properties := func(raw json.RawMessage) (map[string]json.RawMessage, error) {
+		var props map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &props); err != nil {
+			return nil, &gizmo.SetError{Type: "invalidProperties", Description: err.Error()}
 		}
-		failed[key] = me
-		return nil
+		return props, nil
 	}
-
-	created, notCreated := map[string]any{}, map[string]any{}
-	createdIDs := map[string]string{}
-	for _, cid := range sortedKeys(args.Create) {
-		obj, err := h.create(ctx, tx, args.Create[cid])
-		if err != nil {
-			if err := setError(notCreated, cid, err); err != nil {
+	return std.Set(c, s.begin, s.limits(), std.Setter[*txn]{
+		Type: h.typ,
+		Create: func(ctx context.Context, tx *txn, raw json.RawMessage) (string, map[string]any, error) {
+			props, err := properties(raw)
+			if err != nil {
+				return "", nil, err
+			}
+			obj, err := h.create(ctx, tx.tx, props)
+			if err != nil {
+				return "", nil, setError(err)
+			}
+			return obj["id"].(string), obj, nil
+		},
+		Update: func(ctx context.Context, tx *txn, id string, raw json.RawMessage) (map[string]any, error) {
+			patch, err := properties(raw)
+			if err != nil {
 				return nil, err
 			}
-			continue
-		}
-		created[cid] = obj
-		createdIDs[cid] = obj["id"].(string)
-	}
+			changed, err := h.update(ctx, tx.tx, id, patch)
+			return changed, setError(err)
+		},
+		Destroy: func(ctx context.Context, tx *txn, id string) error {
+			return setError(h.destroy(ctx, tx.tx, id))
+		},
+	}, req)
+}
 
-	// resolve turns "#cid" into the id of the object created as cid.
-	resolve := func(id string) (string, bool) {
-		cid, ok := strings.CutPrefix(id, "#")
-		if !ok {
-			return id, true
-		}
-		real, ok := createdIDs[cid]
-		return real, ok
+// setError makes a SetError, for Gizmo, of the method error that a setter
+// returns for an object that fails alone.  Any other error is left as it
+// is, and fails the method.
+func setError(err error) error {
+	var me *methodError
+	if errors.As(err, &me) {
+		return &gizmo.SetError{Type: me.Type, Description: me.Description, Properties: me.Properties}
 	}
-
-	updated, notUpdated := map[string]any{}, map[string]any{}
-	for _, key := range sortedKeys(args.Update) {
-		id, ok := resolve(key)
-		if !ok {
-			notUpdated[key] = &methodError{Type: "notFound", Description: "no object was created as " + key}
-			continue
-		}
-		changed, err := h.update(ctx, tx, id, args.Update[key])
-		if err != nil {
-			if err := setError(notUpdated, key, err); err != nil {
-				return nil, err
-			}
-			continue
-		}
-		if len(changed) == 0 {
-			updated[id] = nil
-		} else {
-			updated[id] = changed
-		}
-	}
-
-	destroyed, notDestroyed := []string{}, map[string]any{}
-	for _, key := range dedupe(args.Destroy) {
-		id, ok := resolve(key)
-		if !ok {
-			notDestroyed[key] = &methodError{Type: "notFound", Description: "no object was created as " + key}
-			continue
-		}
-		if err := h.destroy(ctx, tx, id); err != nil {
-			if err := setError(notDestroyed, key, err); err != nil {
-				return nil, err
-			}
-			continue
-		}
-		destroyed = append(destroyed, id)
-	}
-
-	newState, _, err := s.state(ctx, tx, h.typ)
-	if err != nil {
-		return nil, err
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, err
-	}
-	s.publish(ctx)
-
-	orNull := func(m map[string]any) any {
-		if len(m) == 0 {
-			return nil
-		}
-		return m
-	}
-	var destroyedOrNull any
-	if len(destroyed) > 0 {
-		destroyedOrNull = destroyed
-	}
-	return map[string]any{
-		"accountId":    args.AccountID,
-		"oldState":     oldState,
-		"newState":     newState,
-		"created":      orNull(created),
-		"updated":      orNull(updated),
-		"destroyed":    destroyedOrNull,
-		"notCreated":   orNull(notCreated),
-		"notUpdated":   orNull(notUpdated),
-		"notDestroyed": orNull(notDestroyed),
-	}, nil
+	return err
 }
 
 func sortedKeys[V any](m map[string]V) []string {

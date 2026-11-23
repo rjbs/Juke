@@ -382,11 +382,12 @@ the one above is an `invalidProperties` SetError; and every id in
 replaces `discs`
 whole; a patch can't point into it.
 
-Merging two albums is one `Album/set` that updates the album to keep,
-giving it the other's tracks, and destroys the other.  Only an album
-with no tracks can be destroyed; destroying one with tracks is rejected
-with an `albumNotEmpty` SetError, so a slip can't strand its tracks on
-no album.
+Merging two albums is two `Album/set` calls in one request: the first
+updates the album to keep, giving it the other's tracks, and the second
+destroys the other.  They can't be one call, because a `/set` destroys
+before it updates.  Only an album with no tracks can be destroyed;
+destroying one with tracks is rejected with an `albumNotEmpty` SetError,
+so a slip can't strand its tracks on no album.
 
 Setting `artworkBlobId` gives the album that image, which must be one
 the server has stored (any `artworkCandidates` entry, or another

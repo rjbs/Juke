@@ -5,8 +5,12 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"slices"
 	"sort"
 	"strings"
+
+	gizmo "github.com/rjbs/gizmo/jmap"
+	"github.com/rjbs/gizmo/std"
 
 	"semiotic.systems/juke/internal/store"
 )
@@ -74,30 +78,30 @@ func (s *Server) objectTypes() []*objectType {
 
 func (s *Server) methodTable() map[string]method {
 	m := map[string]method{
-		"Track/set": {CapJuke, func(ctx context.Context, s *Server, args json.RawMessage) (any, error) {
-			return s.set(ctx, trackSetter, args)
+		"Track/set": {CapJuke, func(c *gizmo.Call, s *Server, args json.RawMessage) (any, error) {
+			return s.set(c, trackSetter, args)
 		}},
-		"Playlist/set": {CapJuke, func(ctx context.Context, s *Server, args json.RawMessage) (any, error) {
-			return s.set(ctx, playlistSetter, args)
+		"Playlist/set": {CapJuke, func(c *gizmo.Call, s *Server, args json.RawMessage) (any, error) {
+			return s.set(c, playlistSetter, args)
 		}},
-		"Album/set": {CapJuke, func(ctx context.Context, s *Server, args json.RawMessage) (any, error) {
-			return s.set(ctx, albumSetter, args)
+		"Album/set": {CapJuke, func(c *gizmo.Call, s *Server, args json.RawMessage) (any, error) {
+			return s.set(c, albumSetter, args)
 		}},
-		"SmartPlaylist/set": {CapJuke, func(ctx context.Context, s *Server, args json.RawMessage) (any, error) {
-			return s.set(ctx, s.smartPlaylistSetter(), args)
+		"SmartPlaylist/set": {CapJuke, func(c *gizmo.Call, s *Server, args json.RawMessage) (any, error) {
+			return s.set(c, s.smartPlaylistSetter(), args)
 		}},
 	}
 	for _, t := range s.objectTypes() {
-		m[t.name+"/get"] = method{CapJuke, func(ctx context.Context, s *Server, args json.RawMessage) (any, error) {
-			return s.get(ctx, t, args)
+		m[t.name+"/get"] = method{CapJuke, func(c *gizmo.Call, s *Server, args json.RawMessage) (any, error) {
+			return s.get(c, t, args)
 		}}
-		m[t.name+"/changes"] = method{CapJuke, func(ctx context.Context, s *Server, args json.RawMessage) (any, error) {
-			return s.changes(ctx, t, args)
+		m[t.name+"/changes"] = method{CapJuke, func(c *gizmo.Call, s *Server, args json.RawMessage) (any, error) {
+			return s.changes(c, t, args)
 		}}
-		m[t.name+"/query"] = method{CapJuke, func(ctx context.Context, s *Server, args json.RawMessage) (any, error) {
-			return s.query(ctx, t, args)
+		m[t.name+"/query"] = method{CapJuke, func(c *gizmo.Call, s *Server, args json.RawMessage) (any, error) {
+			return s.query(c, t, args)
 		}}
-		m[t.name+"/queryChanges"] = method{CapJuke, func(context.Context, *Server, json.RawMessage) (any, error) {
+		m[t.name+"/queryChanges"] = method{CapJuke, func(*gizmo.Call, *Server, json.RawMessage) (any, error) {
 			return nil, errorOf("cannotCalculateChanges", "query changes are not supported; rerun the query")
 		}}
 	}
@@ -125,94 +129,32 @@ func (s *Server) state(ctx context.Context, q store.Queryer, typ string) (string
 
 // ---- /get -----------------------------------------------------------------
 
-type getArgs struct {
-	AccountID  string    `json:"accountId"`
-	IDs        *[]string `json:"ids"`
-	Properties *[]string `json:"properties"`
-}
-
-func (s *Server) get(ctx context.Context, t *objectType, raw json.RawMessage) (any, error) {
-	var args getArgs
-	if err := decodeArgs(raw, &args); err != nil {
-		return nil, err
-	}
-	if err := s.checkAccount(args.AccountID); err != nil {
-		return nil, err
-	}
-
-	props := t.properties
-	if !reviewing(ctx) {
-		props = without(props, t.reviewProperties)
-	}
-	if args.Properties != nil {
-		known := map[string]bool{}
-		for _, p := range props {
-			known[p] = true
-		}
-		props = []string{"id"}
-		for _, p := range *args.Properties {
-			if !known[p] {
-				return nil, errInvalidArguments("%s has no property %q", t.name, p)
-			}
-			if p != "id" {
-				props = append(props, p)
-			}
-		}
-	}
-
-	var ids []string
-	if args.IDs != nil {
-		ids = dedupe(*args.IDs)
-		if len(ids) > s.cfg.MaxObjectsInGet {
-			return nil, errorOf("requestTooLarge", "at most %d ids per /get", s.cfg.MaxObjectsInGet)
-		}
-	} else {
-		var n int
-		if err := s.store.DB.QueryRowContext(ctx, "SELECT count(*) FROM "+t.table).Scan(&n); err != nil {
-			return nil, err
-		}
-		if n > s.cfg.MaxObjectsInGet {
-			return nil, errorOf("requestTooLarge", "%d objects; at most %d per /get", n, s.cfg.MaxObjectsInGet)
-		}
-	}
-
-	// State is read before the objects.  If a write lands between the two,
-	// the client gets newer objects with an older state, and its next
-	// /changes repeats a few updates; the reverse would lose them.
-	// -- claude, 2026-10-24
-	state, _, err := s.state(ctx, s.store.DB, t.name)
+func (s *Server) get(c *gizmo.Call, t *objectType, raw json.RawMessage) (any, error) {
+	req, err := std.ParseGet(raw, nil)
 	if err != nil {
 		return nil, err
 	}
-	objects, found, err := t.load(ctx, s.store.DB, ids)
-	if err != nil {
-		return nil, err
-	}
-
-	order := found
-	if ids != nil {
-		order = ids
-	}
-	list := []object{}
-	notFound := []string{}
-	for _, id := range order {
-		obj, ok := objects[id]
-		if !ok {
-			notFound = append(notFound, id)
-			continue
+	visible := func(ctx context.Context) []string {
+		if reviewing(ctx) {
+			return t.properties
 		}
-		out := object{}
-		for _, p := range props {
-			out[p] = obj[p]
-		}
-		list = append(list, out)
+		return without(t.properties, t.reviewProperties)
 	}
-	return map[string]any{
-		"accountId": args.AccountID,
-		"state":     state,
-		"list":      list,
-		"notFound":  notFound,
-	}, nil
+	return std.Get(c, s.begin, s.limits(), std.Getter[*txn]{
+		Type: t.name,
+		KnownProperty: func(ctx context.Context, name string) bool {
+			return slices.Contains(visible(ctx), name)
+		},
+		DefaultProperties: visible,
+		Count: func(ctx context.Context, tx *txn) (int, error) {
+			var n int
+			err := tx.q.QueryRowContext(ctx, "SELECT count(*) FROM "+t.table).Scan(&n)
+			return n, err
+		},
+		Load: func(ctx context.Context, tx *txn, ids, _ []string) (map[string]object, []string, error) {
+			return t.load(ctx, tx.q, ids)
+		},
+	}, req)
 }
 
 func dedupe(ids []string) []string {
@@ -452,99 +394,81 @@ func loadPlaylists(ctx context.Context, q store.Queryer, ids []string) (map[stri
 
 // ---- /changes -------------------------------------------------------------
 
-type changesArgs struct {
-	AccountID  string `json:"accountId"`
-	SinceState string `json:"sinceState"`
-	MaxChanges *int   `json:"maxChanges"`
-}
-
-func (s *Server) changes(ctx context.Context, t *objectType, raw json.RawMessage) (any, error) {
-	var args changesArgs
-	if err := decodeArgs(raw, &args); err != nil {
-		return nil, err
-	}
-	if err := s.checkAccount(args.AccountID); err != nil {
-		return nil, err
-	}
-	if args.MaxChanges != nil && *args.MaxChanges <= 0 {
-		return nil, errInvalidArguments("maxChanges must be positive")
-	}
-	epoch, err := s.store.Epoch(ctx)
+func (s *Server) changes(c *gizmo.Call, t *objectType, raw json.RawMessage) (any, error) {
+	req, err := std.ParseChanges(raw, nil)
 	if err != nil {
 		return nil, err
 	}
-	since, err := store.ParseState(epoch, args.SinceState)
-	if err != nil {
-		return nil, errorOf("cannotCalculateChanges", "state %q is not from this server", args.SinceState)
-	}
-	_, current, err := s.state(ctx, s.store.DB, t.name)
-	if err != nil {
-		return nil, err
-	}
-	if since > current {
-		return nil, errorOf("cannotCalculateChanges", "state %q is in the future", args.SinceState)
-	}
-
-	limit := -1
-	if args.MaxChanges != nil {
-		limit = *args.MaxChanges + 1
-	}
-	rows, err := s.store.DB.QueryContext(ctx, `
-		SELECT id, created_modseq, modseq, 0 FROM `+t.table+` WHERE modseq > ?
-		UNION ALL
-		SELECT id, created_modseq, modseq, 1 FROM tombstone WHERE type = ? AND modseq > ?
-		ORDER BY 3
-		LIMIT ?`, since, t.name, since, limit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	created, updated, destroyed := []string{}, []string{}, []string{}
-	var last int64
-	n := 0
-	more := false
-	for rows.Next() {
-		var id string
-		var createdAt, modseq int64
-		var gone bool
-		if err := rows.Scan(&id, &createdAt, &modseq, &gone); err != nil {
+	return std.Changes(c, s.begin, req, func(ctx context.Context, tx *txn, sinceState string, maxChanges int) (*std.Changed, error) {
+		epoch, err := s.store.Epoch(ctx)
+		if err != nil {
 			return nil, err
 		}
-		if args.MaxChanges != nil && n == *args.MaxChanges {
-			more = true
-			break
+		since, err := store.ParseState(epoch, sinceState)
+		if err != nil {
+			return nil, errorOf("cannotCalculateChanges", "state %q is not from this server", sinceState)
 		}
-		n++
-		last = modseq
-		switch {
-		case gone && createdAt > since:
-			// Created and destroyed since the client last looked: it never
-			// saw this object, so there is nothing to tell it.
-		case gone:
-			destroyed = append(destroyed, id)
-		case createdAt > since:
-			created = append(created, id)
-		default:
-			updated = append(updated, id)
+		_, current, err := s.state(ctx, tx.q, t.name)
+		if err != nil {
+			return nil, err
 		}
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	newModseq := current
-	if more {
-		newModseq = last
-	}
-	return map[string]any{
-		"accountId":      args.AccountID,
-		"oldState":       args.SinceState,
-		"newState":       store.State(epoch, newModseq),
-		"hasMoreChanges": more,
-		"created":        created,
-		"updated":        updated,
-		"destroyed":      destroyed,
-	}, nil
+		if since > current {
+			return nil, errorOf("cannotCalculateChanges", "state %q is in the future", sinceState)
+		}
+
+		limit := -1
+		if maxChanges > 0 {
+			limit = maxChanges + 1
+		}
+		rows, err := tx.q.QueryContext(ctx, `
+			SELECT id, created_modseq, modseq, 0 FROM `+t.table+` WHERE modseq > ?
+			UNION ALL
+			SELECT id, created_modseq, modseq, 1 FROM tombstone WHERE type = ? AND modseq > ?
+			ORDER BY 3
+			LIMIT ?`, since, t.name, since, limit)
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+
+		ch := &std.Changed{}
+		var last int64
+		n := 0
+		for rows.Next() {
+			var id string
+			var createdAt, modseq int64
+			var gone bool
+			if err := rows.Scan(&id, &createdAt, &modseq, &gone); err != nil {
+				return nil, err
+			}
+			if maxChanges > 0 && n == maxChanges {
+				ch.HasMore = true
+				break
+			}
+			n++
+			last = modseq
+			switch {
+			case gone && createdAt > since:
+				// Created and destroyed since the client last looked: it never
+				// saw this object, so there is nothing to tell it.
+			case gone:
+				ch.Destroyed = append(ch.Destroyed, id)
+			case createdAt > since:
+				ch.Created = append(ch.Created, id)
+			default:
+				ch.Updated = append(ch.Updated, id)
+			}
+		}
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
+		newModseq := current
+		if ch.HasMore {
+			newModseq = last
+		}
+		ch.NewState = store.State(epoch, newModseq)
+		return ch, nil
+	})
 }
 
 // ---- /query ---------------------------------------------------------------
@@ -576,86 +500,49 @@ type queryArgs struct {
 	LimitSeconds *int64 `json:"limitSeconds"`
 }
 
-func (s *Server) query(ctx context.Context, t *objectType, raw json.RawMessage) (any, error) {
-	var args queryArgs
-	if err := decodeArgs(raw, &args); err != nil {
-		return nil, err
+func (s *Server) query(c *gizmo.Call, t *objectType, raw json.RawMessage) (any, error) {
+	var extra struct {
+		LimitBytes   *int64 `json:"limitBytes"`
+		LimitSeconds *int64 `json:"limitSeconds"`
 	}
-	if err := s.checkAccount(args.AccountID); err != nil {
-		return nil, err
-	}
-	for _, c := range args.Sort {
-		if c.Collation != "" && c.Collation != "i;unicode-casemap" {
-			return nil, errorOf("unsupportedSort", "unsupported collation %q", c.Collation)
-		}
-	}
-	if args.Limit != nil && *args.Limit < 0 {
-		return nil, errInvalidArguments("limit must not be negative")
-	}
-
-	state, _, err := s.state(ctx, s.store.DB, t.name)
+	req, err := std.ParseQuery(raw, &extra)
 	if err != nil {
 		return nil, err
 	}
-	limit := s.cfg.MaxQueryLimit
-	limited := true
-	if args.Limit != nil && *args.Limit <= s.cfg.MaxQueryLimit {
-		limit, limited = *args.Limit, false
+	args := &queryArgs{
+		AccountID:      req.AccountID,
+		Filter:         req.Filter,
+		Position:       req.Position,
+		Anchor:         req.Anchor,
+		AnchorOffset:   req.AnchorOffset,
+		Limit:          req.Limit,
+		CalculateTotal: req.CalculateTotal,
+		LimitBytes:     extra.LimitBytes,
+		LimitSeconds:   extra.LimitSeconds,
 	}
-
-	var ids []string
-	var total, position int
-	paged := false
-	if t.page != nil && args.Anchor == nil && args.Position >= 0 {
-		ids, total, paged, err = t.page(ctx, s, &args, args.Position, limit)
-		if err != nil {
+	for _, rawCmp := range req.Sort {
+		var cmp comparator
+		if err := decodeArgs(rawCmp, &cmp); err != nil {
 			return nil, err
 		}
-		position = args.Position
-	}
-	if !paged {
-		all, err := t.query(ctx, s, &args)
-		if err != nil {
-			return nil, err
+		if cmp.Collation != "" && cmp.Collation != "i;unicode-casemap" {
+			return nil, errorOf("unsupportedSort", "unsupported collation %q", cmp.Collation)
 		}
-		total = len(all)
-		position = args.Position
-		if args.Anchor != nil {
-			idx := -1
-			for i, id := range all {
-				if id == *args.Anchor {
-					idx = i
-					break
-				}
-			}
-			if idx < 0 {
-				return nil, errorOf("anchorNotFound", "%q is not in the results", *args.Anchor)
-			}
-			position = max(idx+args.AnchorOffset, 0)
-		} else if position < 0 {
-			position = max(total+position, 0)
-		}
-		end := min(position+limit, total)
-		ids = []string{}
-		if position < total {
-			ids = all[position:end]
-		}
+		args.Sort = append(args.Sort, cmp)
 	}
 
-	resp := map[string]any{
-		"accountId":           args.AccountID,
-		"queryState":          state,
-		"canCalculateChanges": false,
-		"position":            min(position, total),
-		"ids":                 ids,
+	q := std.Querier[*txn]{
+		Type: t.name,
+		All: func(ctx context.Context, _ *txn, _ *std.QueryRequest) ([]string, error) {
+			return t.query(ctx, s, args)
+		},
 	}
-	if args.CalculateTotal {
-		resp["total"] = total
+	if t.page != nil {
+		q.Page = func(ctx context.Context, _ *txn, _ *std.QueryRequest, position, limit int) ([]string, int, bool, error) {
+			return t.page(ctx, s, args, position, limit)
+		}
 	}
-	if limited && total-position > limit {
-		resp["limit"] = limit
-	}
-	return resp, nil
+	return std.Query(c, s.begin, s.limits(), q, req)
 }
 
 // queryByTitle queries a type that supports no filter, sorted only by
