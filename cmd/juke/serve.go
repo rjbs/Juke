@@ -54,6 +54,8 @@ func runServe(ctx context.Context, args []string) error {
 		MaxObjectsInGet: *maxGet,
 		Log:             logger,
 	})
+	go srv.Watch(ctx)
+
 	mux := http.NewServeMux()
 	mux.Handle("/", srv.Handler())
 	page := web.Handler(*webDir)

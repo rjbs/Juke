@@ -2,7 +2,7 @@ package store
 
 import (
 	"context"
-	"fmt"
+	"database/sql"
 	"sort"
 	"strings"
 )
@@ -22,11 +22,11 @@ type NewAlbum struct {
 
 // InsertAlbum inserts an album and its discs, and returns its new id.
 func InsertAlbum(ctx context.Context, q Queryer, a NewAlbum) (string, error) {
-	id, err := NewID("A")
+	id, err := NewID(ctx, q, TypeAlbum)
 	if err != nil {
 		return "", err
 	}
-	modseq, err := NextModseq(ctx, q)
+	modseq, err := NextModseq(ctx, q, TypeAlbum)
 	if err != nil {
 		return "", err
 	}
@@ -74,11 +74,11 @@ type NewTrack struct {
 
 // InsertTrack inserts a track and returns its new id.
 func InsertTrack(ctx context.Context, q Queryer, t NewTrack) (string, error) {
-	id, err := NewID("T")
+	id, err := NewID(ctx, q, TypeTrack)
 	if err != nil {
 		return "", err
 	}
-	modseq, err := NextModseq(ctx, q)
+	modseq, err := NextModseq(ctx, q, TypeTrack)
 	if err != nil {
 		return "", err
 	}
@@ -107,11 +107,11 @@ func InsertTrack(ctx context.Context, q Queryer, t NewTrack) (string, error) {
 
 // InsertPlaylist inserts a plain playlist and returns its new id.
 func InsertPlaylist(ctx context.Context, q Queryer, title string, trackIDs []string) (string, error) {
-	id, err := NewID("P")
+	id, err := NewID(ctx, q, TypePlaylist)
 	if err != nil {
 		return "", err
 	}
-	modseq, err := NextModseq(ctx, q)
+	modseq, err := NextModseq(ctx, q, TypePlaylist)
 	if err != nil {
 		return "", err
 	}
@@ -147,26 +147,12 @@ func SetPlaylistTracks(ctx context.Context, q Queryer, playlistID string, trackI
 
 // Destroy deletes an object's row and leaves a tombstone, so /changes
 // can report it destroyed.  Rows that refer to the object must be dealt
-// with first.
+// with first.  If there is no such object, it returns sql.ErrNoRows.
 func Destroy(ctx context.Context, q Queryer, typ, id string) error {
-	table, ok := tableFor[typ]
-	if !ok {
-		return fmt.Errorf("no such type %q", typ)
+	found, err := Kit.Destroy(ctx, q, typ, id)
+	if err == nil && !found {
+		err = sql.ErrNoRows
 	}
-	modseq, err := NextModseq(ctx, q)
-	if err != nil {
-		return err
-	}
-	var created int64
-	if err := q.QueryRowContext(ctx,
-		`DELETE FROM `+table+` WHERE id = ? RETURNING created_modseq`, id,
-	).Scan(&created); err != nil {
-		return err
-	}
-	_, err = q.ExecContext(ctx,
-		`INSERT INTO tombstone (type, id, created_modseq, modseq) VALUES (?, ?, ?, ?)`,
-		typ, id, created, modseq,
-	)
 	return err
 }
 
@@ -275,7 +261,7 @@ func SetDiscs(ctx context.Context, q Queryer, albumID string, discs []Disc) erro
 		if was == after[id] {
 			continue
 		}
-		if err := touch(ctx, q, "track", id); err != nil {
+		if err := touch(ctx, q, TypeTrack, id); err != nil {
 			return err
 		}
 		if was != "" && was != albumID {
@@ -283,20 +269,16 @@ func SetDiscs(ctx context.Context, q Queryer, albumID string, discs []Disc) erro
 		}
 	}
 	for _, id := range sortedKeys(losers) {
-		if err := touch(ctx, q, "album", id); err != nil {
+		if err := touch(ctx, q, TypeAlbum, id); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// touch gives a row a new modseq.
-func touch(ctx context.Context, q Queryer, table, id string) error {
-	modseq, err := NextModseq(ctx, q)
-	if err != nil {
-		return err
-	}
-	_, err = q.ExecContext(ctx, `UPDATE `+table+` SET modseq = ? WHERE id = ?`, modseq, id)
+// touch gives an object a new modseq.
+func touch(ctx context.Context, q Queryer, typ, id string) error {
+	_, err := Kit.Touch(ctx, q, typ, id)
 	return err
 }
 
@@ -321,11 +303,11 @@ type SmartQuery struct {
 
 // InsertSmartPlaylist inserts a smart playlist and returns its new id.
 func InsertSmartPlaylist(ctx context.Context, q Queryer, title string, sq SmartQuery) (string, error) {
-	id, err := NewID("S")
+	id, err := NewID(ctx, q, TypeSmartPlaylist)
 	if err != nil {
 		return "", err
 	}
-	modseq, err := NextModseq(ctx, q)
+	modseq, err := NextModseq(ctx, q, TypeSmartPlaylist)
 	if err != nil {
 		return "", err
 	}
@@ -340,7 +322,7 @@ func InsertSmartPlaylist(ctx context.Context, q Queryer, title string, sq SmartQ
 // WriteSmartPlaylist replaces a smart playlist's title and query, and
 // gives it a new modseq.
 func WriteSmartPlaylist(ctx context.Context, q Queryer, id, title string, sq SmartQuery) error {
-	modseq, err := NextModseq(ctx, q)
+	modseq, err := NextModseq(ctx, q, TypeSmartPlaylist)
 	if err != nil {
 		return err
 	}

@@ -28,7 +28,7 @@ func Released(ctx context.Context, db *sql.DB, catalog *sql.DB) (*ReleasedReport
 		return nil, err
 	}
 	defer tx.Rollback()
-	modseq, err := store.NextModseq(ctx, tx)
+	modseq, err := store.NextModseq(ctx, tx, store.TypeAlbum)
 	if err != nil {
 		return nil, err
 	}

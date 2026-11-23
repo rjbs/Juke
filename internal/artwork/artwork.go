@@ -586,7 +586,7 @@ func (r *run) assign(tracks []*track, folder map[string]string) error {
 	var albumModseq, trackModseq int64
 	setAlbum := func(id, art string) error {
 		if albumModseq == 0 {
-			if albumModseq, err = store.NextModseq(r.ctx, tx); err != nil {
+			if albumModseq, err = store.NextModseq(r.ctx, tx, store.TypeAlbum); err != nil {
 				return err
 			}
 		}
@@ -597,7 +597,7 @@ func (r *run) assign(tracks []*track, folder map[string]string) error {
 	}
 	setTrack := func(id, art string) error {
 		if trackModseq == 0 {
-			if trackModseq, err = store.NextModseq(r.ctx, tx); err != nil {
+			if trackModseq, err = store.NextModseq(r.ctx, tx, store.TypeTrack); err != nil {
 				return err
 			}
 		}

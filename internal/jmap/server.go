@@ -4,14 +4,19 @@
 package jmap
 
 import (
+	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/rjbs/gizmo/auth"
+	"github.com/rjbs/gizmo/blob"
+	"github.com/rjbs/gizmo/push"
 
 	"semiotic.systems/juke/internal/artwork"
 	"semiotic.systems/juke/internal/store"
@@ -46,10 +51,11 @@ type Config struct {
 
 // Server is a JMAP server over one Juke database, with one account.
 type Server struct {
-	cfg     Config
-	store   *store.Store
-	methods map[string]method
-	changed wakeup // woken when a /set commits
+	cfg    Config
+	store  *store.Store
+	dir    *auth.Directory
+	broker *push.Broker
+	log    *slog.Logger
 }
 
 // New returns a Server.
@@ -87,122 +93,55 @@ func New(cfg Config) *Server {
 	if cfg.Log == nil {
 		cfg.Log = log.New(os.Stderr, "juke: ", log.LstdFlags)
 	}
-	s := &Server{cfg: cfg, store: cfg.Store}
-	s.methods = s.methodTable()
+	s := &Server{cfg: cfg, store: cfg.Store, broker: push.NewBroker(), log: slogTo(cfg.Log)}
+	s.dir = s.directory()
+
+	// The broker is told the states as they stand, so that the first
+	// change published is taken for the one change it is, and not for a
+	// change to every type.
+	if states, err := s.States(context.Background()); err == nil {
+		s.broker.Prime(cfg.AccountID, states)
+	} else {
+		cfg.Log.Printf("push: %v", err)
+	}
 	return s
 }
 
-// Handler returns the server's HTTP handler.
+// Handler returns the server's HTTP handler.  Every request it is given
+// acts as the server's one user; whoever lets requests in decides who may
+// be that user.
 func (s *Server) Handler() http.Handler {
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /.well-known/jmap", s.handleSession)
-	mux.HandleFunc("GET /jmap/session", s.handleSession)
-	mux.HandleFunc("POST /jmap/api", s.handleAPI)
-	mux.HandleFunc("GET /jmap/download/{accountId}/{blobId}/{name}", s.handleDownload)
-	mux.HandleFunc("POST /jmap/upload/{accountId}/", s.handleUpload)
-	mux.HandleFunc("GET /jmap/eventsource", s.handleEventSource)
-	return mux
+	return auth.Loopback(s.dir, s.handler())
 }
 
-func (s *Server) baseURL(r *http.Request) string {
-	if s.cfg.BaseURL != "" {
-		return s.cfg.BaseURL
-	}
-	scheme := "http"
-	if r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https" {
-		scheme = "https"
-	}
-	return scheme + "://" + r.Host
-}
-
-func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
-	epoch, err := s.store.Epoch(r.Context())
-	if err != nil {
-		http.Error(w, "database error", http.StatusInternalServerError)
-		return
-	}
-	base := s.baseURL(r)
-	session := map[string]any{
-		"capabilities": map[string]any{
-			CapCore: map[string]any{
-				"maxSizeUpload":         s.cfg.MaxSizeUpload,
-				"maxConcurrentUpload":   1,
-				"maxSizeRequest":        s.cfg.MaxSizeRequest,
-				"maxConcurrentRequests": 4,
-				"maxCallsInRequest":     s.cfg.MaxCallsInRequest,
-				"maxObjectsInGet":       s.cfg.MaxObjectsInGet,
-				"maxObjectsInSet":       s.cfg.MaxObjectsInSet,
-				"collationAlgorithms":   []string{"i;unicode-casemap"},
-			},
-			CapJuke:   map[string]any{},
-			CapReview: map[string]any{},
-		},
-		"accounts": map[string]any{
-			s.cfg.AccountID: map[string]any{
-				"name":                s.cfg.Username,
-				"isPersonal":          true,
-				"isReadOnly":          false,
-				"accountCapabilities": map[string]any{CapJuke: map[string]any{}, CapReview: map[string]any{}},
-			},
-		},
-		"primaryAccounts": map[string]string{CapJuke: s.cfg.AccountID},
-		"username":        s.cfg.Username,
-		"apiUrl":          base + "/jmap/api",
-		"downloadUrl":     base + "/jmap/download/{accountId}/{blobId}/{name}?type={type}",
-		"uploadUrl":       base + "/jmap/upload/{accountId}/",
-		"eventSourceUrl":  base + "/jmap/eventsource?types={types}&closeafter={closeafter}&ping={ping}",
-		"state":           epoch,
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
-	enc := json.NewEncoder(w)
-	enc.SetEscapeHTML(false)
-	enc.Encode(session)
-}
-
-// handleDownload serves a blob: a track's audio, or an image of album
-// art.  A blobId always names the same bytes, so the response may be
-// cached forever; range requests come from http.ServeContent.
-func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
-	if r.PathValue("accountId") != s.cfg.AccountID {
-		http.NotFound(w, r)
-		return
-	}
-	blobID := r.PathValue("blobId")
+// Get finds a blob for the download endpoint: a track's audio, or an image
+// of album art.  It is half of what makes the server a blob.Store.
+func (s *Server) Get(ctx context.Context, _, blobID string) (*blob.Blob, error) {
 	var path, contentType string
-	err := s.store.DB.QueryRowContext(r.Context(),
+	err := s.store.DB.QueryRowContext(ctx,
 		`SELECT path, content_type FROM track WHERE blob_id = ?`, blobID,
 	).Scan(&path, &contentType)
 	name := filepath.Join(s.cfg.Library, filepath.FromSlash(path))
 	if errors.Is(err, sql.ErrNoRows) {
-		err = s.store.DB.QueryRowContext(r.Context(), `SELECT mime FROM artwork WHERE id = ?`, blobID).Scan(&contentType)
+		err = s.store.DB.QueryRowContext(ctx, `SELECT mime FROM artwork WHERE id = ?`, blobID).Scan(&contentType)
 		name = artwork.Path(s.cfg.Library, blobID)
 	}
 	if errors.Is(err, sql.ErrNoRows) {
-		http.NotFound(w, r)
-		return
+		return nil, blob.ErrNotFound
 	}
 	if err != nil {
-		http.Error(w, "database error", http.StatusInternalServerError)
-		return
+		return nil, err
 	}
 	f, err := os.Open(name)
 	if err != nil {
-		s.cfg.Log.Printf("blob %s: %v", r.PathValue("blobId"), err)
-		http.NotFound(w, r)
-		return
+		// The database knows the blob and the library hasn't got it.
+		s.cfg.Log.Printf("blob %s: %v", blobID, err)
+		return nil, blob.ErrNotFound
 	}
-	defer f.Close()
 	info, err := f.Stat()
 	if err != nil {
-		http.Error(w, "cannot read blob", http.StatusInternalServerError)
-		return
+		f.Close()
+		return nil, err
 	}
-
-	if t := r.URL.Query().Get("type"); t != "" {
-		contentType = t
-	}
-	w.Header().Set("Content-Type", contentType)
-	w.Header().Set("Cache-Control", "private, immutable, max-age=31536000")
-	http.ServeContent(w, r, r.PathValue("name"), info.ModTime(), f)
+	return &blob.Blob{Content: f, Type: contentType, ModTime: info.ModTime()}, nil
 }

@@ -171,7 +171,12 @@ The event source (RFC 8620 §7.3) sends a `state` event whenever a
 type's state changes, with `closeafter` and `ping` as the RFC describes.
 A connection learns of a change at once when this server commits a
 `/set`, and within `PushPollInterval` (five seconds) of a write from
-outside it, such as an import.
+outside it, such as an import.  A connection that isn't `closeafter=state`
+opens with an event giving every type's state, so that a client that
+fell behind while it was away learns so at once.
+
+The request envelope, the session, the event source and the routing of
+the blob endpoints are [Gizmo](https://github.com/rjbs/gizmo)'s.
 
 ## Not yet
 

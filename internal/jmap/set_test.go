@@ -196,20 +196,27 @@ func disc(trackIDs []string) map[string]any {
 
 // Two albums that should be one, as an import of per-disc folders makes:
 // one update takes the other's tracks as a second disc, and a destroy
-// removes the emptied album.
+// removes the emptied album.  The two are separate calls in one request,
+// because a /set destroys before it updates, and an album with tracks
+// can't be destroyed.
 func TestAlbumSetMergesAlbums(t *testing.T) {
 	f := newFixture(t, Config{})
 	weird := f.objectID("Album", "Off the Deep End")
 	devo := f.objectID("Album", "We Are Not Devo")
 	albums, tracks := f.state("Album"), f.state("Track")
 
-	f.set("Album", map[string]any{
-		"update": map[string]any{weird: map[string]any{"discs": []any{
-			disc(f.tracks("Smells Like Nirvana", "Lost Track", "Trigger Happy")),
-			map[string]any{"trackIds": f.tracks("Whip It", "Jocko Homo"), "title": "Bonus Disc"},
-		}}},
-		"destroy": []string{devo},
-	})
+	merge := map[string]any{"update": map[string]any{weird: map[string]any{"discs": []any{
+		disc(f.tracks("Smells Like Nirvana", "Lost Track", "Trigger Happy")),
+		map[string]any{"trackIds": f.tracks("Whip It", "Jocko Homo"), "title": "Bonus Disc"},
+	}}}}
+
+	for _, r := range f.calls("Album/set", merge, "Album/set", map[string]any{"destroy": []string{devo}}) {
+		for _, k := range []string{"notCreated", "notUpdated", "notDestroyed"} {
+			if r.Name != "Album/set" || r.Args[k] != nil {
+				t.Fatalf("%s %s: %v", r.Name, k, r.Args)
+			}
+		}
+	}
 	checkAlbum(t, f, weird, "Off the Deep End", "Weird Al Yankovic",
 		[]string{"Smells Like Nirvana", "Lost Track", "Trigger Happy"}, []string{"Whip It", "Jocko Homo"})
 	checkAlbumOf(t, f, "Whip It", weird)
