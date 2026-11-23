@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"log"
 	"log/slog"
-	"net/http"
 
 	"github.com/rjbs/gizmo/auth"
 	"github.com/rjbs/gizmo/httpd"
@@ -130,8 +129,7 @@ func (s *Server) handler() *httpd.Server {
 		},
 		Capabilities: map[string]any{CapJuke: map[string]any{}, CapReview: map[string]any{}},
 		Collations:   []string{"i;unicode-casemap"},
-		Download:     http.HandlerFunc(s.handleDownload),
-		Upload:       http.HandlerFunc(s.handleUpload),
+		Blobs:        s,
 		Logger:       s.log,
 	})
 }

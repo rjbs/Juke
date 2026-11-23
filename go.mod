@@ -4,7 +4,7 @@ go 1.27.3
 
 require (
 	github.com/dhowden/tag v0.0.0-20240417053706-3d75831295e8
-	github.com/rjbs/gizmo v0.0.0-20261123010554-1d2bba769c8e
+	github.com/rjbs/gizmo v0.1.0
 	golang.org/x/text v0.43.0
 	modernc.org/sqlite v1.61.0
 	tailscale.com v1.104.4

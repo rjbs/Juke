@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/rjbs/gizmo/auth"
+	"github.com/rjbs/gizmo/blob"
 	"github.com/rjbs/gizmo/push"
 
 	"semiotic.systems/juke/internal/artwork"
@@ -113,49 +114,34 @@ func (s *Server) Handler() http.Handler {
 	return auth.Loopback(s.dir, s.handler())
 }
 
-// handleDownload serves a blob: a track's audio, or an image of album
-// art.  A blobId always names the same bytes, so the response may be
-// cached forever; range requests come from http.ServeContent.
-func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
-	if r.PathValue("accountId") != s.cfg.AccountID {
-		http.NotFound(w, r)
-		return
-	}
-	blobID := r.PathValue("blobId")
+// Get finds a blob for the download endpoint: a track's audio, or an image
+// of album art.  It is half of what makes the server a blob.Store.
+func (s *Server) Get(ctx context.Context, _, blobID string) (*blob.Blob, error) {
 	var path, contentType string
-	err := s.store.DB.QueryRowContext(r.Context(),
+	err := s.store.DB.QueryRowContext(ctx,
 		`SELECT path, content_type FROM track WHERE blob_id = ?`, blobID,
 	).Scan(&path, &contentType)
 	name := filepath.Join(s.cfg.Library, filepath.FromSlash(path))
 	if errors.Is(err, sql.ErrNoRows) {
-		err = s.store.DB.QueryRowContext(r.Context(), `SELECT mime FROM artwork WHERE id = ?`, blobID).Scan(&contentType)
+		err = s.store.DB.QueryRowContext(ctx, `SELECT mime FROM artwork WHERE id = ?`, blobID).Scan(&contentType)
 		name = artwork.Path(s.cfg.Library, blobID)
 	}
 	if errors.Is(err, sql.ErrNoRows) {
-		http.NotFound(w, r)
-		return
+		return nil, blob.ErrNotFound
 	}
 	if err != nil {
-		http.Error(w, "database error", http.StatusInternalServerError)
-		return
+		return nil, err
 	}
 	f, err := os.Open(name)
 	if err != nil {
-		s.cfg.Log.Printf("blob %s: %v", r.PathValue("blobId"), err)
-		http.NotFound(w, r)
-		return
+		// The database knows the blob and the library hasn't got it.
+		s.cfg.Log.Printf("blob %s: %v", blobID, err)
+		return nil, blob.ErrNotFound
 	}
-	defer f.Close()
 	info, err := f.Stat()
 	if err != nil {
-		http.Error(w, "cannot read blob", http.StatusInternalServerError)
-		return
+		f.Close()
+		return nil, err
 	}
-
-	if t := r.URL.Query().Get("type"); t != "" {
-		contentType = t
-	}
-	w.Header().Set("Content-Type", contentType)
-	w.Header().Set("Cache-Control", "private, immutable, max-age=31536000")
-	http.ServeContent(w, r, r.PathValue("name"), info.ModTime(), f)
+	return &blob.Blob{Content: f, Type: contentType, ModTime: info.ModTime()}, nil
 }
