@@ -2,11 +2,12 @@ package store
 
 import (
 	"context"
-	"database/sql"
-	"errors"
 	"fmt"
+	"maps"
 	"path/filepath"
 	"testing"
+
+	"github.com/rjbs/gizmo/sqlitekit"
 )
 
 func newStore(t *testing.T) *Store {
@@ -17,27 +18,6 @@ func newStore(t *testing.T) *Store {
 	}
 	t.Cleanup(func() { s.Close() })
 	return s
-}
-
-func checkParse(t *testing.T, epoch, state string, want int64, wantErr error) {
-	t.Helper()
-	got, err := ParseState(epoch, state)
-	if !errors.Is(err, wantErr) {
-		t.Errorf("ParseState(%q, %q): error %v, want %v", epoch, state, err, wantErr)
-		return
-	}
-	if err == nil && got != want {
-		t.Errorf("ParseState(%q, %q) = %d, want %d", epoch, state, got, want)
-	}
-}
-
-func TestParseState(t *testing.T) {
-	checkParse(t, "abc", "abc-12", 12, nil)
-	checkParse(t, "abc", "abc-0", 0, nil)
-	checkParse(t, "abc", "xyz-12", 0, ErrForeignState)
-	checkParse(t, "abc", "abc", 0, ErrForeignState)
-	checkParse(t, "abc", "abc-twelve", 0, ErrForeignState)
-	checkParse(t, "abc", "abc--1", 0, ErrForeignState)
 }
 
 func TestTypeModseqFollowsWrites(t *testing.T) {
@@ -62,9 +42,85 @@ func TestTypeModseqFollowsWrites(t *testing.T) {
 	if _, err := InsertTrack(ctx, s.DB, NewTrack{Title: "T", DateAdded: "2014-01-01T00:00:00Z"}); err != nil {
 		t.Fatal(err)
 	}
+	// Each type counts for itself.
 	checkTypeModseq(TypeAlbum, 1)
-	checkTypeModseq(TypeTrack, 2)
+	checkTypeModseq(TypeTrack, 1)
 	checkTypeModseq(TypePlaylist, 0)
+}
+
+// A database from before Gizmo's state kit kept one modseq counter for
+// every type, an epoch, and its own tombstones.  Opening it carries them
+// over, so that the states clients hold still mean what they did.
+func TestOpenAdoptsOldState(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "juke.sqlite")
+	db, err := sqlitekit.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range migrations {
+		if _, err := db.Exec(m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, q := range []string{
+		fmt.Sprintf(`PRAGMA user_version = %d`, len(migrations)),
+		`INSERT INTO meta (name, value) VALUES ('epoch', 'oldepoch'), ('modseq', '9')`,
+		`INSERT INTO album (id, title, created_modseq, modseq) VALUES ('Aone', 'One', 1, 6)`,
+		`INSERT INTO track (id, title, date_added, created_modseq, modseq) VALUES ('Tone', 'One', '2014-01-01T00:00:00Z', 2, 4)`,
+		`INSERT INTO playlist (id, title, created_modseq, modseq) VALUES ('Pone', 'One', 3, 3)`,
+		`INSERT INTO tombstone (type, id, created_modseq, modseq) VALUES ('Track', 'Tgone', 5, 9), ('Playlist', 'Pgone', 7, 8)`,
+	} {
+		if _, err := db.Exec(q); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+	}
+	db.Close()
+
+	// Twice, since the second opening finds the work already done.
+	for range 2 {
+		s, err := Open(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		states, err := Kit.States(ctx, s.DB)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := map[string]string{"Album": "oldepoch-6", "Track": "oldepoch-9", "Playlist": "oldepoch-8", "SmartPlaylist": "oldepoch-0"}
+		if !maps.Equal(states, want) {
+			t.Errorf("states are %v, want %v", states, want)
+		}
+		tx, err := Kit.Read(ctx, s.DB)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ch, err := tx.Changes(ctx, TypeTrack, "oldepoch-3", 0)
+		if err != nil || len(ch.Updated) != 1 || ch.Updated[0] != "Tone" || len(ch.Destroyed) != 0 || len(ch.Created) != 0 {
+			t.Errorf("changes to Track since 3: %+v, error %v; want Tone updated, and no word of the track made and unmade since", ch, err)
+		}
+		ch, err = tx.Changes(ctx, TypePlaylist, "oldepoch-7", 0)
+		if err != nil || len(ch.Destroyed) != 1 || ch.Destroyed[0] != "Pgone" {
+			t.Errorf("changes to Playlist since 7: %+v, error %v; want Pgone destroyed", ch, err)
+		}
+		tx.Rollback()
+
+		var left int
+		if err := s.DB.QueryRow(`SELECT count(*) FROM sqlite_master WHERE name IN ('meta', 'tombstone')`).Scan(&left); err != nil || left != 0 {
+			t.Errorf("%d of the old tables are left, error %v", left, err)
+		}
+		s.Close()
+	}
+
+	// The one counter stood at 9, and each type goes on from its own state.
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if n, err := NextModseq(ctx, s.DB, TypeAlbum); err != nil || n != 7 {
+		t.Errorf("the next Album modseq is %d, error %v; want 7", n, err)
+	}
 }
 
 func TestEpochsDiffer(t *testing.T) {
@@ -96,7 +152,7 @@ func TestCreateRefusesExisting(t *testing.T) {
 func checkOpenMigrates(t *testing.T, from int, extra []string, want int, wantErr bool) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "juke.sqlite")
-	db, err := sql.Open("sqlite", dsn(path, false))
+	db, err := sqlitekit.Open(path)
 	if err != nil {
 		t.Fatal(err)
 	}

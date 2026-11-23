@@ -102,7 +102,7 @@ func Numbers(ctx context.Context, db *sql.DB, catalog *sql.DB, journal string) (
 			continue
 		}
 		if modseq == 0 {
-			if modseq, err = store.NextModseq(ctx, tx); err != nil {
+			if modseq, err = store.NextModseq(ctx, tx, store.TypeTrack); err != nil {
 				return nil, err
 			}
 		}

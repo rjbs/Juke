@@ -2,9 +2,7 @@ package jmap
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
-	"errors"
 	"log"
 	"log/slog"
 	"net/http"
@@ -13,6 +11,7 @@ import (
 	"github.com/rjbs/gizmo/httpd"
 	gizmo "github.com/rjbs/gizmo/jmap"
 	"github.com/rjbs/gizmo/push"
+	"github.com/rjbs/gizmo/sqlitekit"
 	"github.com/rjbs/gizmo/std"
 
 	"semiotic.systems/juke/internal/store"
@@ -97,26 +96,7 @@ var pushTypes = []string{store.TypeTrack, store.TypeAlbum, store.TypePlaylist, s
 
 // States gives the state of each type, for the event source.
 func (s *Server) States(ctx context.Context) (map[string]string, error) {
-	out := map[string]string{}
-	for _, t := range pushTypes {
-		state, _, err := s.state(ctx, s.store.DB, t)
-		if err != nil {
-			return nil, err
-		}
-		out[t] = state
-	}
-	return out, nil
-}
-
-// publish tells the event source of whatever has changed.  It offers every
-// type's state, and the broker passes on the ones that are news.
-func (s *Server) publish(ctx context.Context) {
-	states, err := s.States(ctx)
-	if err != nil {
-		s.cfg.Log.Printf("push: %v", err)
-		return
-	}
-	s.broker.Publish(s.cfg.AccountID, states)
+	return store.Kit.States(ctx, s.store.DB)
 }
 
 // Watch publishes the changes made by writers outside this server, such
@@ -161,71 +141,18 @@ func slogTo(l *log.Logger) *slog.Logger {
 	return slog.New(slog.NewTextHandler(l.Writer(), nil))
 }
 
-// txn is a transaction as Gizmo's standard methods know one.  A method
-// that writes gets a real one.  A method that only reads gets the database
-// itself, as reads here have always had: its statements each see what is
-// committed when they run.
-type txn struct {
-	ctx context.Context
-	s   *Server
-	q   store.Queryer
-	tx  *sql.Tx // nil when only reading
-}
+// txn is a transaction on the database, of the kind Gizmo's state kit
+// makes: a *sql.Tx that also knows each type's state, and so is one the
+// standard methods can run in.
+type txn = sqlitekit.Tx
 
+// begin begins a transaction.  One that writes tells the event source,
+// when it commits, of the states it changed.
 func (s *Server) begin(ctx context.Context, write bool) (*txn, error) {
 	if !write {
-		return &txn{ctx: ctx, s: s, q: s.store.DB}, nil
+		return store.Kit.Read(ctx, s.store.DB)
 	}
-	tx, err := s.store.DB.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, err
-	}
-	return &txn{ctx: ctx, s: s, q: tx, tx: tx}, nil
-}
-
-func (t *txn) State(ctx context.Context, typ string) (string, error) {
-	state, _, err := t.s.state(ctx, t.q, typ)
-	return state, err
-}
-
-func (t *txn) Savepoint(ctx context.Context, fn func() error) error {
-	if t.tx == nil {
-		return fn()
-	}
-	if _, err := t.tx.ExecContext(ctx, "SAVEPOINT object"); err != nil {
-		return err
-	}
-	err := fn()
-	if err != nil {
-		if _, undo := t.tx.ExecContext(ctx, "ROLLBACK TO object"); undo != nil {
-			return undo
-		}
-	}
-	if _, release := t.tx.ExecContext(ctx, "RELEASE object"); release != nil && err == nil {
-		return release
-	}
-	return err
-}
-
-func (t *txn) Commit() error {
-	if t.tx == nil {
-		return errors.New("a transaction that only reads can't be committed")
-	}
-	if err := t.tx.Commit(); err != nil {
-		return err
-	}
-	t.s.publish(t.ctx)
-	return nil
-}
-
-func (t *txn) Rollback() error {
-	if t.tx == nil {
-		return nil
-	}
-	if err := t.tx.Rollback(); err != nil && !errors.Is(err, sql.ErrTxDone) {
-		return err
-	}
-	return nil
+	return store.Kit.Begin(ctx, s.store.DB, s.broker.Publisher(s.cfg.AccountID))
 }
 
 // limits are the limits the standard methods keep to.

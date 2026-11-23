@@ -58,7 +58,7 @@ func (s *Server) set(c *gizmo.Call, h *setter, raw json.RawMessage) (any, error)
 			if err != nil {
 				return "", nil, err
 			}
-			obj, err := h.create(ctx, tx.tx, props)
+			obj, err := h.create(ctx, tx.Tx, props)
 			if err != nil {
 				return "", nil, setError(err)
 			}
@@ -69,11 +69,11 @@ func (s *Server) set(c *gizmo.Call, h *setter, raw json.RawMessage) (any, error)
 			if err != nil {
 				return nil, err
 			}
-			changed, err := h.update(ctx, tx.tx, id, patch)
+			changed, err := h.update(ctx, tx.Tx, id, patch)
 			return changed, setError(err)
 		},
 		Destroy: func(ctx context.Context, tx *txn, id string) error {
-			return setError(h.destroy(ctx, tx.tx, id))
+			return setError(h.destroy(ctx, tx.Tx, id))
 		},
 	}, req)
 }
@@ -272,7 +272,7 @@ var playlistSetter = &setter{
 		if err != nil {
 			return nil, err
 		}
-		modseq, err := store.NextModseq(ctx, tx)
+		modseq, err := store.NextModseq(ctx, tx, store.TypePlaylist)
 		if err != nil {
 			return nil, err
 		}
@@ -474,7 +474,7 @@ var albumSetter = &setter{
 		if err != nil {
 			return nil, err
 		}
-		modseq, err := store.NextModseq(ctx, tx)
+		modseq, err := store.NextModseq(ctx, tx, store.TypeAlbum)
 		if err != nil {
 			return nil, err
 		}
@@ -526,7 +526,7 @@ func setAlbumArtwork(ctx context.Context, tx *sql.Tx, id string, art *string) er
 	if _, err := tx.ExecContext(ctx, `UPDATE album SET artwork_id = ?, artwork_source = 'user' WHERE id = ?`, art, id); err != nil {
 		return err
 	}
-	modseq, err := store.NextModseq(ctx, tx)
+	modseq, err := store.NextModseq(ctx, tx, store.TypeTrack)
 	if err != nil {
 		return err
 	}

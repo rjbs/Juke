@@ -115,18 +115,6 @@ func (s *Server) checkAccount(id string) error {
 	return nil
 }
 
-func (s *Server) state(ctx context.Context, q store.Queryer, typ string) (string, int64, error) {
-	epoch, err := s.store.Epoch(ctx)
-	if err != nil {
-		return "", 0, err
-	}
-	modseq, err := store.TypeModseq(ctx, q, typ)
-	if err != nil {
-		return "", 0, err
-	}
-	return store.State(epoch, modseq), modseq, nil
-}
-
 // ---- /get -----------------------------------------------------------------
 
 func (s *Server) get(c *gizmo.Call, t *objectType, raw json.RawMessage) (any, error) {
@@ -148,11 +136,11 @@ func (s *Server) get(c *gizmo.Call, t *objectType, raw json.RawMessage) (any, er
 		DefaultProperties: visible,
 		Count: func(ctx context.Context, tx *txn) (int, error) {
 			var n int
-			err := tx.q.QueryRowContext(ctx, "SELECT count(*) FROM "+t.table).Scan(&n)
+			err := tx.Tx.QueryRowContext(ctx, "SELECT count(*) FROM "+t.table).Scan(&n)
 			return n, err
 		},
 		Load: func(ctx context.Context, tx *txn, ids, _ []string) (map[string]object, []string, error) {
-			return t.load(ctx, tx.q, ids)
+			return t.load(ctx, tx.Tx, ids)
 		},
 	}, req)
 }
@@ -399,75 +387,8 @@ func (s *Server) changes(c *gizmo.Call, t *objectType, raw json.RawMessage) (any
 	if err != nil {
 		return nil, err
 	}
-	return std.Changes(c, s.begin, req, func(ctx context.Context, tx *txn, sinceState string, maxChanges int) (*std.Changed, error) {
-		epoch, err := s.store.Epoch(ctx)
-		if err != nil {
-			return nil, err
-		}
-		since, err := store.ParseState(epoch, sinceState)
-		if err != nil {
-			return nil, errorOf("cannotCalculateChanges", "state %q is not from this server", sinceState)
-		}
-		_, current, err := s.state(ctx, tx.q, t.name)
-		if err != nil {
-			return nil, err
-		}
-		if since > current {
-			return nil, errorOf("cannotCalculateChanges", "state %q is in the future", sinceState)
-		}
-
-		limit := -1
-		if maxChanges > 0 {
-			limit = maxChanges + 1
-		}
-		rows, err := tx.q.QueryContext(ctx, `
-			SELECT id, created_modseq, modseq, 0 FROM `+t.table+` WHERE modseq > ?
-			UNION ALL
-			SELECT id, created_modseq, modseq, 1 FROM tombstone WHERE type = ? AND modseq > ?
-			ORDER BY 3
-			LIMIT ?`, since, t.name, since, limit)
-		if err != nil {
-			return nil, err
-		}
-		defer rows.Close()
-
-		ch := &std.Changed{}
-		var last int64
-		n := 0
-		for rows.Next() {
-			var id string
-			var createdAt, modseq int64
-			var gone bool
-			if err := rows.Scan(&id, &createdAt, &modseq, &gone); err != nil {
-				return nil, err
-			}
-			if maxChanges > 0 && n == maxChanges {
-				ch.HasMore = true
-				break
-			}
-			n++
-			last = modseq
-			switch {
-			case gone && createdAt > since:
-				// Created and destroyed since the client last looked: it never
-				// saw this object, so there is nothing to tell it.
-			case gone:
-				ch.Destroyed = append(ch.Destroyed, id)
-			case createdAt > since:
-				ch.Created = append(ch.Created, id)
-			default:
-				ch.Updated = append(ch.Updated, id)
-			}
-		}
-		if err := rows.Err(); err != nil {
-			return nil, err
-		}
-		newModseq := current
-		if ch.HasMore {
-			newModseq = last
-		}
-		ch.NewState = store.State(epoch, newModseq)
-		return ch, nil
+	return std.Changes(c, s.begin, req, func(ctx context.Context, tx *txn, since string, maxChanges int) (*std.Changed, error) {
+		return tx.Changes(ctx, t.name, since, maxChanges)
 	})
 }
 
@@ -682,7 +603,7 @@ var trackSetter = &setter{
 			cols = append(cols[:i:i], append([]columnValue{{"artwork_source", "user"}}, cols[i:]...)...)
 			break
 		}
-		modseq, err := store.NextModseq(ctx, tx)
+		modseq, err := store.NextModseq(ctx, tx, store.TypeTrack)
 		if err != nil {
 			return nil, err
 		}

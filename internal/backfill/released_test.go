@@ -6,6 +6,8 @@ import (
 	"testing"
 )
 
+// checkReleased checks an album's release date and its modseq.  The album is
+// made at modseq 1, Album's first, so a date set once leaves it at 2.
 func checkReleased(t *testing.T, db *sql.DB, album string, want string, wantModseq int64) {
 	t.Helper()
 	var got sql.NullString
@@ -34,7 +36,7 @@ func TestReleasedFromTags(t *testing.T) {
 	if r.FromTags != 1 || r.Without != 0 {
 		t.Errorf("report %+v, want 1 from tags, 0 without", r)
 	}
-	checkReleased(t, db, "Record", "1997-00-00", 6)
+	checkReleased(t, db, "Record", "1997-00-00", 2)
 }
 
 // With no dates in the tags, the catalog's year dates the album, as a
@@ -54,7 +56,7 @@ func TestReleasedFromCatalog(t *testing.T) {
 	if r.FromTags != 0 || r.FromCatalog != 1 || r.Without != 0 {
 		t.Errorf("report %+v, want 1 from catalog, 0 without", r)
 	}
-	checkReleased(t, db, "Record", "2002-00-00", 4)
+	checkReleased(t, db, "Record", "2002-00-00", 2)
 
 	again, err := Released(context.Background(), db, catalog)
 	if err != nil {
@@ -63,5 +65,5 @@ func TestReleasedFromCatalog(t *testing.T) {
 	if again.FromTags != 0 || again.FromCatalog != 0 {
 		t.Errorf("second run %+v, want nothing done", again)
 	}
-	checkReleased(t, db, "Record", "2002-00-00", 4)
+	checkReleased(t, db, "Record", "2002-00-00", 2)
 }

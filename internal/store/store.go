@@ -1,6 +1,7 @@
-// Package store holds Juke's metadata database: the SQLite schema, the
-// modseq counter that JMAP state strings come from, and the writes the
-// importer and the JMAP methods share.
+// Package store holds Juke's metadata database: the SQLite schema, and the
+// writes the importer and the JMAP methods share.  JMAP state, which is to
+// say each type's modseq counter and the tombstones of what has been
+// destroyed, is kept by Gizmo's sqlitekit, in tables of its own.
 //
 // Album membership lives on the track rows, as an album id, a disc index
 // and a position.  That makes it impossible for Track.albumId and
@@ -16,10 +17,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"strconv"
-	"strings"
 
-	_ "modernc.org/sqlite"
+	"github.com/rjbs/gizmo/sqlitekit"
 )
 
 // Store is an open Juke database.
@@ -224,20 +223,19 @@ ALTER TABLE smart_playlist ADD COLUMN is_helper INTEGER NOT NULL DEFAULT 0;
 `,
 }
 
-func dsn(path string, readOnly bool) string {
-	q := "_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)&_txlock=immediate"
-	if readOnly {
-		q += "&mode=ro"
-	} else {
-		q += "&_pragma=journal_mode(WAL)"
-	}
-	return "file:" + path + "?" + q
-}
+// Kit is Gizmo's state kit as Juke uses it: each type's table, and the
+// letter its ids begin with.
+var Kit = sqlitekit.New(
+	sqlitekit.Type{Name: TypeTrack, Table: "track", NewID: prefixedID("T")},
+	sqlitekit.Type{Name: TypeAlbum, Table: "album", NewID: prefixedID("A")},
+	sqlitekit.Type{Name: TypePlaylist, Table: "playlist", NewID: prefixedID("P")},
+	sqlitekit.Type{Name: TypeSmartPlaylist, Table: "smart_playlist", NewID: prefixedID("S")},
+)
 
 // Create makes a new, empty database at path, with a fresh epoch.  The
 // file must not exist yet: imports always build a new database.
 func Create(path string) (*Store, error) {
-	db, err := sql.Open("sqlite", dsn(path, false))
+	db, err := sqlitekit.Open(path)
 	if err != nil {
 		return nil, err
 	}
@@ -254,36 +252,28 @@ func Create(path string) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
-	epoch, err := randomToken(8)
-	if err != nil {
-		db.Close()
-		return nil, err
-	}
-	if _, err := db.Exec(
-		`INSERT INTO meta (name, value) VALUES ('epoch', ?), ('modseq', '0')`, epoch,
-	); err != nil {
-		db.Close()
-		return nil, err
-	}
 	return &Store{DB: db}, nil
 }
 
 // Open opens an existing database made by Create.
 func Open(path string) (*Store, error) {
-	db, err := sql.Open("sqlite", dsn(path, false))
+	db, err := sqlitekit.Open(path)
 	if err != nil {
 		return nil, err
 	}
-	s := &Store{DB: db}
-	if _, err := s.Epoch(context.Background()); err != nil {
+	var n int
+	if err := db.QueryRow(`SELECT count(*) FROM sqlite_master WHERE name = 'track'`).Scan(&n); err != nil || n == 0 {
 		db.Close()
+		if err == nil {
+			err = errors.New("it has no tracks table")
+		}
 		return nil, fmt.Errorf("%s is not a Juke database: %w", path, err)
 	}
 	if err := migrate(db); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}
-	return s, nil
+	return &Store{DB: db}, nil
 }
 
 // SchemaVersion is how many of the migrations have been applied.
@@ -293,10 +283,10 @@ func SchemaVersion(ctx context.Context, q Queryer) (int, error) {
 	return v, err
 }
 
-// migrate applies the migrations the database hasn't had yet, each in its
-// own transaction with the version that records it.  A database with a meta
-// table and no version predates versioning, and has the first migration's
-// schema already.
+// migrate applies the migrations the database hasn't had yet, and then
+// sees that it has Gizmo's state tables.  A database with a meta table
+// and no version predates versioning, and has the first migration's schema
+// already.
 func migrate(db *sql.DB) error {
 	ctx := context.Background()
 	version, err := SchemaVersion(ctx, db)
@@ -312,30 +302,64 @@ func migrate(db *sql.DB) error {
 			if _, err := db.Exec(`PRAGMA user_version = 1`); err != nil {
 				return err
 			}
-			version = 1
 		}
 	}
-	if version > len(migrations) {
-		return fmt.Errorf("schema version %d is newer than this build knows (%d)", version, len(migrations))
+	if err := sqlitekit.Migrate(ctx, db, migrations); err != nil {
+		return err
 	}
-	for i := version; i < len(migrations); i++ {
-		tx, err := db.Begin()
-		if err != nil {
-			return err
-		}
-		if _, err := tx.Exec(migrations[i]); err != nil {
-			tx.Rollback()
-			return fmt.Errorf("applying schema migration %d: %w", i+1, err)
-		}
-		if _, err := tx.Exec(fmt.Sprintf(`PRAGMA user_version = %d`, i+1)); err != nil {
-			tx.Rollback()
-			return err
-		}
-		if err := tx.Commit(); err != nil {
+	if err := Kit.Init(ctx, db); err != nil {
+		return err
+	}
+	return adoptKit(ctx, db)
+}
+
+// adoptKit moves a database that kept its own state onto Gizmo's state
+// tables, which Kit.Init has just made.  Juke used to keep an epoch and one
+// modseq counter for every type in the meta table, and tombstones in a
+// table of its own.  The epoch and the tombstones are carried over, and
+// each type's state is what it was, the highest modseq among its objects
+// and tombstones, so that the state strings clients hold stay good.  The
+// one counter becomes a counter for each type, which goes on from there.
+//
+// This runs once: it ends by dropping the old tables, and does nothing
+// when they aren't there.  A database just created has them too, empty,
+// from the first migration.  -- claude, 2026-11-22
+func adoptKit(ctx context.Context, db *sql.DB) error {
+	var n int
+	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_master WHERE name = 'tombstone'`).Scan(&n); err != nil || n == 0 {
+		return err
+	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	var epoch string
+	err = tx.QueryRowContext(ctx, `SELECT value FROM meta WHERE name = 'epoch'`).Scan(&epoch)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		// A new database: the epoch Kit.Init gave it stands.
+	case err != nil:
+		return err
+	default:
+		if err := sqlitekit.SetEpoch(ctx, tx, epoch); err != nil {
 			return err
 		}
 	}
-	return nil
+	for _, step := range []string{
+		`INSERT INTO gizmo_tombstone (type, id, created_modseq, modseq, destroyed_at)
+		 SELECT type, id, created_modseq, modseq, unixepoch() FROM tombstone`,
+		`UPDATE gizmo_state SET highest_modseq = max(highest_modseq,
+		   coalesce((SELECT max(modseq) FROM gizmo_tombstone WHERE gizmo_tombstone.type = gizmo_state.type), 0))`,
+		`DROP TABLE tombstone`,
+		`DROP TABLE meta`,
+	} {
+		if _, err := tx.ExecContext(ctx, step); err != nil {
+			return fmt.Errorf("moving state to Gizmo's tables: %w", err)
+		}
+	}
+	return tx.Commit()
 }
 
 // Close closes the database.
@@ -348,7 +372,7 @@ func (s *Store) Close() error { return s.DB.Close() }
 // -- claude, 2026-10-24
 func (s *Store) Epoch(ctx context.Context) (string, error) {
 	var epoch string
-	err := s.DB.QueryRowContext(ctx, `SELECT value FROM meta WHERE name = 'epoch'`).Scan(&epoch)
+	err := s.DB.QueryRowContext(ctx, `SELECT value FROM gizmo_meta WHERE name = 'epoch'`).Scan(&epoch)
 	return epoch, err
 }
 
@@ -359,15 +383,12 @@ type Queryer interface {
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
 
-// NextModseq advances the global modseq counter and returns the new value.
-// Every object written gets its own modseq, so that /changes can stop
-// after any object without splitting a group that shares one.
-func NextModseq(ctx context.Context, q Queryer) (int64, error) {
-	var n int64
-	err := q.QueryRowContext(ctx,
-		`UPDATE meta SET value = CAST(value AS INTEGER) + 1 WHERE name = 'modseq' RETURNING CAST(value AS INTEGER)`,
-	).Scan(&n)
-	return n, err
+// NextModseq advances a type's modseq counter and returns the new value,
+// which is the type's new state.  Every object written gets its own
+// modseq, so that /changes can stop after any object without splitting a
+// group that shares one.
+func NextModseq(ctx context.Context, q Queryer, typ string) (int64, error) {
+	return Kit.NextModseq(ctx, q, typ)
 }
 
 var tableFor = map[string]string{
@@ -377,42 +398,15 @@ var tableFor = map[string]string{
 	TypeSmartPlaylist: "smart_playlist",
 }
 
-// TypeModseq returns the highest modseq of any object of the type, live or
-// destroyed: the modseq part of the type's state.
+// TypeModseq returns the type's modseq counter: the modseq part of its
+// state.
 func TypeModseq(ctx context.Context, q Queryer, typ string) (int64, error) {
-	table, ok := tableFor[typ]
-	if !ok {
+	if _, ok := tableFor[typ]; !ok {
 		return 0, fmt.Errorf("no such type %q", typ)
 	}
 	var n int64
-	err := q.QueryRowContext(ctx, fmt.Sprintf(
-		`SELECT max(coalesce((SELECT max(modseq) FROM %s), 0),
-		            coalesce((SELECT max(modseq) FROM tombstone WHERE type = ?), 0))`, table,
-	), typ).Scan(&n)
+	err := q.QueryRowContext(ctx, `SELECT highest_modseq FROM gizmo_state WHERE type = ?`, typ).Scan(&n)
 	return n, err
-}
-
-// State formats a state string from an epoch and a modseq.
-func State(epoch string, modseq int64) string {
-	return epoch + "-" + strconv.FormatInt(modseq, 10)
-}
-
-// ErrForeignState means a state string came from another database, or is
-// not a state string at all.
-var ErrForeignState = errors.New("state is not from this database")
-
-// ParseState returns the modseq in a state string made by State, provided
-// the string carries this database's epoch.
-func ParseState(epoch, state string) (int64, error) {
-	e, n, ok := strings.Cut(state, "-")
-	if !ok || e != epoch {
-		return 0, ErrForeignState
-	}
-	modseq, err := strconv.ParseInt(n, 10, 64)
-	if err != nil || modseq < 0 {
-		return 0, ErrForeignState
-	}
-	return modseq, nil
 }
 
 var idEncoding = base32.NewEncoding("abcdefghijklmnopqrstuvwxyz234567").WithPadding(base32.NoPadding)
@@ -429,14 +423,22 @@ func randomToken(n int) (string, error) {
 // reshuffles never repeat, in the id alphabet so it reads as opaque.
 func NewSeed() (string, error) { return randomToken(8) }
 
-// NewID mints an opaque id: a one-letter type prefix and random
+// prefixedID makes ids that are a one-letter type prefix and random
 // characters from the JMAP id alphabet.
-func NewID(prefix string) (string, error) {
-	t, err := randomToken(10)
-	if err != nil {
-		return "", err
+func prefixedID(prefix string) func() (string, error) {
+	return func() (string, error) {
+		t, err := randomToken(10)
+		if err != nil {
+			return "", err
+		}
+		return prefix + t, nil
 	}
-	return prefix + t, nil
+}
+
+// NewID mints an opaque id for a new object of the type, one that isn't
+// already in use.
+func NewID(ctx context.Context, q Queryer, typ string) (string, error) {
+	return Kit.NewID(ctx, q, typ)
 }
 
 // BlobID derives a track's blobId from its id, the version of its

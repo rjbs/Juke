@@ -158,7 +158,7 @@ func fill(ctx context.Context, db *sql.DB, column string, run func(context.Conte
 		return err
 	}
 	defer tx.Rollback()
-	modseq, err := store.NextModseq(ctx, tx)
+	modseq, err := store.NextModseq(ctx, tx, store.TypeTrack)
 	if err != nil {
 		return err
 	}
