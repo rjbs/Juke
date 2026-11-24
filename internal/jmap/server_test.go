@@ -386,13 +386,7 @@ func TestRequestErrors(t *testing.T) {
 
 func TestSession(t *testing.T) {
 	f := newFixture(t, Config{})
-	resp, err := http.Get(f.BaseURL + "/.well-known/jmap")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp.Body.Close()
-	var s map[string]any
-	json.NewDecoder(resp.Body).Decode(&s)
+	s := f.Session()
 	checkEqual(t, "primary account", s["primaryAccounts"], map[string]any{CapJuke: "music", CapReview: "music"})
 	checkEqual(t, "apiUrl", s["apiUrl"], f.BaseURL+"/jmap/api")
 	checkEqual(t, "downloadUrl", s["downloadUrl"], f.BaseURL+"/jmap/download/{accountId}/{blobId}/{name}?type={type}")
