@@ -3,7 +3,6 @@ package jmap
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"image"
 	"image/png"
 	"net/http"
@@ -178,9 +177,7 @@ func TestUpload(t *testing.T) {
 	data := pngBytes()
 	up := upload(data)
 	checkEqual(t, "status", up.Status, http.StatusCreated)
-	var answer map[string]any
-	json.Unmarshal(up.Body, &answer)
-	checkEqual(t, "response", []any{answer["accountId"], up.Type, up.Size}, []any{"music", "image/png", int64(len(data))})
+	checkEqual(t, "response", []any{up.AccountID, up.Type, up.Size}, []any{"music", "image/png", int64(len(data))})
 	id := up.BlobID
 	again := upload(data)
 	checkEqual(t, "the same image again", []any{again.Status, again.BlobID}, []any{http.StatusCreated, id})
