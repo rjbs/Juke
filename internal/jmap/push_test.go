@@ -2,7 +2,6 @@ package jmap
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"strings"
 	"testing"
@@ -104,7 +103,7 @@ func TestPushPing(t *testing.T) {
 	events := f.listen("types=*&closeafter=no&ping=1")
 	ev := events.Next()
 	var data map[string]any
-	json.Unmarshal([]byte(ev.Data), &data)
+	ev.Decode(t, &data)
 	checkEqual(t, "event", ev.Type, "ping")
 	checkEqual(t, "ping data", data, map[string]any{"interval": float64(1)})
 }
