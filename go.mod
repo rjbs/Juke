@@ -5,9 +5,9 @@ go 1.27.3
 require (
 	github.com/dhowden/tag v0.0.0-20240417053706-3d75831295e8
 	github.com/rjbs/gizmo v0.1.4
+	github.com/rjbs/gizmo/tailnet v0.1.0
 	golang.org/x/text v0.43.0
 	modernc.org/sqlite v1.61.0
-	tailscale.com v1.104.4
 )
 
 require (
@@ -61,4 +61,5 @@ require (
 	modernc.org/libc v1.79.0 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.12.1 // indirect
+	tailscale.com v1.104.4 // indirect
 )
