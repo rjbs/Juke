@@ -21,7 +21,7 @@ import (
 func reviewFixture(t *testing.T) (f *fixture, a, b string) {
 	t.Helper()
 	f = newFixture(t, Config{})
-	f.using = []string{CapCore, CapJuke, CapReview}
+	f.Using = []string{CapCore, CapJuke, CapReview}
 	ctx := context.Background()
 	a, b = "Aaaaa", "Abbbb"
 	exec := func(sql string, args ...any) {
@@ -102,8 +102,7 @@ func TestReviewIssuesAndCandidates(t *testing.T) {
 		"sort": []map[string]any{{"property": "artist"}, {"property": "title"}}})
 	checkEqual(t, "by artist, the unnamed last", idList(byArtist["ids"]), []string{queen, al, devo})
 	checkMethodError(t, f, "Album/query", map[string]any{"sort": []map[string]any{{"property": "rating"}}}, "unsupportedSort")
-	r := f.calls("Album/query", map[string]any{"filter": map[string]any{"issue": "badHair"}})[0]
-	checkEqual(t, "an unknown issue", r.Args["type"], "unsupportedFilter")
+	checkMethodError(t, f, "Album/query", map[string]any{"filter": map[string]any{"issue": "badHair"}}, "unsupportedFilter")
 }
 
 func TestReviewChoosesArt(t *testing.T) {
@@ -150,20 +149,17 @@ func TestReviewChoosesArt(t *testing.T) {
 func TestReviewNeedsItsCapability(t *testing.T) {
 	f, a, _ := reviewFixture(t)
 	devo := f.albumOf("Whip It")
-	f.using = nil
+	f.Using = []string{CapCore, CapJuke}
 
 	album := f.album(devo)
 	_, hasIssues := album["issues"]
 	_, hasCandidates := album["artworkCandidates"]
 	checkEqual(t, "review properties absent", []bool{hasIssues, hasCandidates}, []bool{false, false})
-	r := f.calls("Album/get", map[string]any{"ids": []string{devo}, "properties": []string{"issues"}})[0]
-	checkEqual(t, "asking for one", r.Args["type"], "invalidArguments")
-	r = f.calls("Track/get", map[string]any{"ids": []string{f.ids["Whip It"]}, "properties": []string{"numberSource"}})[0]
-	checkEqual(t, "a track's number source", r.Args["type"], "invalidArguments")
-	r = f.calls("Album/query", map[string]any{"filter": map[string]any{"hasIssues": true}})[0]
-	checkEqual(t, "filtering", r.Args["type"], "unsupportedFilter")
-	r = f.calls("Album/set", map[string]any{"update": map[string]any{devo: map[string]any{"artworkBlobId": a}}})[0]
-	e := r.Args["notUpdated"].(map[string]any)[devo].(map[string]any)
+	checkMethodError(t, f, "Album/get", map[string]any{"ids": []string{devo}, "properties": []string{"issues"}}, "invalidArguments")
+	checkMethodError(t, f, "Track/get", map[string]any{"ids": []string{f.ids["Whip It"]}, "properties": []string{"numberSource"}}, "invalidArguments")
+	checkMethodError(t, f, "Album/query", map[string]any{"filter": map[string]any{"hasIssues": true}}, "unsupportedFilter")
+	r := f.call("Album/set", map[string]any{"update": map[string]any{devo: map[string]any{"artworkBlobId": a}}})
+	e := r["notUpdated"].(map[string]any)[devo].(map[string]any)
 	checkEqual(t, "choosing album art", e["type"], "invalidProperties")
 	checkSetRefused(t, f, "Whip It", map[string]any{"artworkBlobId": a}, "invalidProperties", "artworkBlobId")
 }
@@ -172,7 +168,7 @@ func TestReviewNeedsItsCapability(t *testing.T) {
 // the decoded response, or the error text.
 func (f *fixture) upload(data []byte) (int, map[string]any, string) {
 	f.t.Helper()
-	resp, err := http.Post(f.srv.URL+"/jmap/upload/music/", "application/octet-stream", bytes.NewReader(data))
+	resp, err := http.Post(f.BaseURL+"/jmap/upload/music/", "application/octet-stream", bytes.NewReader(data))
 	if err != nil {
 		f.t.Fatal(err)
 	}
@@ -196,7 +192,7 @@ func pngBytes() []byte {
 // Album/set then takes; anything else is refused.
 func TestUpload(t *testing.T) {
 	f := newFixture(t, Config{MaxSizeUpload: 4096})
-	f.using = []string{CapCore, CapJuke, CapReview}
+	f.Using = []string{CapCore, CapJuke, CapReview}
 	data := pngBytes()
 	status, r, _ := f.upload(data)
 	checkEqual(t, "status", status, http.StatusCreated)
@@ -217,6 +213,6 @@ func TestUpload(t *testing.T) {
 	checkEqual(t, "too large", status, http.StatusRequestEntityTooLarge)
 	status, _, _ = f.upload(append([]byte("\x89PNG\r\n\x1a\n"), []byte("but not really a PNG")...))
 	checkEqual(t, "an image that can't be decoded", status, http.StatusUnsupportedMediaType)
-	resp, _ := http.Post(f.srv.URL+"/jmap/upload/nobody/", "image/png", bytes.NewReader(data))
+	resp, _ := http.Post(f.BaseURL+"/jmap/upload/nobody/", "image/png", bytes.NewReader(data))
 	checkEqual(t, "another account", resp.StatusCode, http.StatusNotFound)
 }

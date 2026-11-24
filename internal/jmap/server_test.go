@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/rjbs/gizmo/jmaptest"
+
 	"semiotic.systems/juke/internal/artwork"
 	"semiotic.systems/juke/internal/store"
 )
@@ -334,28 +336,26 @@ func keys(v any) []any {
 
 func TestResultReferences(t *testing.T) {
 	f := newFixture(t, Config{})
-	rs := f.calls(
-		"Album/get", map[string]any{"ids": nil},
-		"Track/get", map[string]any{
-			"#ids":       map[string]any{"resultOf": "0", "name": "Album/get", "path": "/list/*/discs/*/trackIds"},
+	r := f.Request(
+		jmaptest.Do("Album/get", jmaptest.Args{"ids": nil}),
+		jmaptest.Do("Track/get", jmaptest.Args{
+			"#ids":       jmaptest.Ref("0", "Album/get", "/list/*/discs/*/trackIds"),
 			"properties": []string{"title"},
-		},
+		}),
 	)
-	var titles []string
-	for _, tr := range rs[1].Args["list"].([]any) {
-		titles = append(titles, tr.(map[string]any)["title"].(string))
-	}
-	checkEqual(t, "tracks on any album", len(titles), 7)
+	var got struct{ List []map[string]any }
+	r.Sentence(1).AssertNamed("Track/get").Decode(&got)
+	checkEqual(t, "tracks on any album", len(got.List), 7)
 
-	rs = f.calls(
-		"Track/query", map[string]any{},
-		"Track/get", map[string]any{"#ids": map[string]any{"resultOf": "0", "name": "Track/get", "path": "/ids"}},
-		"Track/get", map[string]any{"#ids": map[string]any{"resultOf": "0", "name": "Track/query", "path": "/nope"}},
-		"Track/get", map[string]any{"ids": nil, "#ids": map[string]any{"resultOf": "0", "name": "Track/query", "path": "/ids"}},
+	r = f.Request(
+		jmaptest.Do("Track/query", jmaptest.Args{}),
+		jmaptest.Do("Track/get", jmaptest.Args{"#ids": jmaptest.Ref("0", "Track/get", "/ids")}),
+		jmaptest.Do("Track/get", jmaptest.Args{"#ids": jmaptest.Ref("0", "Track/query", "/nope")}),
+		jmaptest.Do("Track/get", jmaptest.Args{"ids": nil, "#ids": jmaptest.Ref("0", "Track/query", "/ids")}),
 	)
-	checkEqual(t, "wrong name", rs[1].Args["type"], "invalidResultReference")
-	checkEqual(t, "bad path", rs[2].Args["type"], "invalidResultReference")
-	checkEqual(t, "both forms", rs[3].Args["type"], "invalidArguments")
+	r.Sentence(1).AssertError("invalidResultReference")
+	r.Sentence(2).AssertError("invalidResultReference")
+	r.Sentence(3).AssertError("invalidArguments")
 }
 
 func TestMethodsAndCapabilities(t *testing.T) {
@@ -366,17 +366,15 @@ func TestMethodsAndCapabilities(t *testing.T) {
 	echo := f.call("Core/echo", map[string]any{"hello": "world"})
 	checkEqual(t, "echo", echo["hello"], "world")
 
-	_, out := f.post(`{"using":["urn:ietf:params:jmap:core"],"methodCalls":[["Track/get",{"accountId":"music"},"a"]]}`)
-	first := out["methodResponses"].([]any)[0].([]any)
-	checkEqual(t, "a method needs its capability in use", first[1].(map[string]any)["type"], "unknownMethod")
+	// A method needs its capability in use.
+	f.Post(`{"using":["urn:ietf:params:jmap:core"],"methodCalls":[["Track/get",{"accountId":"music"},"a"]]}`).
+		Response(t).SingleSentence("error").AssertError("unknownMethod")
 }
 
 // checkRequestError posts a raw body and checks the request-level error.
 func checkRequestError(t *testing.T, f *fixture, body, wantType string) {
 	t.Helper()
-	status, out := f.post(body)
-	checkEqual(t, "status for "+body, status, http.StatusBadRequest)
-	checkEqual(t, "type for "+body, out["type"], "urn:ietf:params:jmap:error:"+wantType)
+	f.Post(body).AssertRequestError(t, wantType)
 }
 
 func TestRequestErrors(t *testing.T) {
@@ -389,7 +387,7 @@ func TestRequestErrors(t *testing.T) {
 
 func TestSession(t *testing.T) {
 	f := newFixture(t, Config{})
-	resp, err := http.Get(f.srv.URL + "/.well-known/jmap")
+	resp, err := http.Get(f.BaseURL + "/.well-known/jmap")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -397,8 +395,8 @@ func TestSession(t *testing.T) {
 	var s map[string]any
 	json.NewDecoder(resp.Body).Decode(&s)
 	checkEqual(t, "primary account", s["primaryAccounts"], map[string]any{CapJuke: "music", CapReview: "music"})
-	checkEqual(t, "apiUrl", s["apiUrl"], f.srv.URL+"/jmap/api")
-	checkEqual(t, "downloadUrl", s["downloadUrl"], f.srv.URL+"/jmap/download/{accountId}/{blobId}/{name}?type={type}")
+	checkEqual(t, "apiUrl", s["apiUrl"], f.BaseURL+"/jmap/api")
+	checkEqual(t, "downloadUrl", s["downloadUrl"], f.BaseURL+"/jmap/download/{accountId}/{blobId}/{name}?type={type}")
 	if state, _ := s["state"].(string); state == "" {
 		t.Errorf("the session has no state: %v", s["state"])
 	}
@@ -408,7 +406,7 @@ func TestSession(t *testing.T) {
 // the status and body.
 func checkDownload(t *testing.T, f *fixture, blobID, rangeHeader string, wantStatus int, wantBody string) {
 	t.Helper()
-	req, _ := http.NewRequest("GET", f.srv.URL+"/jmap/download/music/"+blobID+"/song.mp3?type=audio/mpeg", nil)
+	req, _ := http.NewRequest("GET", f.BaseURL+"/jmap/download/music/"+blobID+"/song.mp3?type=audio/mpeg", nil)
 	if rangeHeader != "" {
 		req.Header.Set("Range", rangeHeader)
 	}
@@ -503,7 +501,7 @@ func TestArtworkBlobs(t *testing.T) {
 	checkEqual(t, "track with its own art", art("Track", f.ids["Brave Sir Robin"]), []any{id, "image/png"})
 	checkEqual(t, "track with its album's art", art("Track", f.ids["Whip It"]), []any{nil, nil})
 
-	req, _ := http.NewRequest("GET", f.srv.URL+"/jmap/download/music/"+id+"/cover", nil)
+	req, _ := http.NewRequest("GET", f.BaseURL+"/jmap/download/music/"+id+"/cover", nil)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)

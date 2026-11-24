@@ -43,7 +43,7 @@ func (f *fixture) listenFromOpening(query string) <-chan pushEvent {
 	f.t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	f.t.Cleanup(cancel)
-	req, _ := http.NewRequestWithContext(ctx, "GET", f.srv.URL+"/jmap/eventsource?"+query, nil)
+	req, _ := http.NewRequestWithContext(ctx, "GET", f.BaseURL+"/jmap/eventsource?"+query, nil)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		f.t.Fatal(err)
@@ -190,7 +190,7 @@ func TestPushSeesOutsideWrites(t *testing.T) {
 func TestPushRefusals(t *testing.T) {
 	f := newFixture(t, Config{})
 	for _, query := range []string{"closeafter=sometimes", "ping=soon", "ping=-1"} {
-		resp, err := http.Get(f.srv.URL + "/jmap/eventsource?" + query)
+		resp, err := http.Get(f.BaseURL + "/jmap/eventsource?" + query)
 		if err != nil {
 			t.Fatal(err)
 		}

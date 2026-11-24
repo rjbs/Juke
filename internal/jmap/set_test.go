@@ -2,6 +2,8 @@ package jmap
 
 import (
 	"testing"
+
+	"github.com/rjbs/gizmo/jmaptest"
 )
 
 // objectID finds an album or playlist by title.
@@ -210,12 +212,9 @@ func TestAlbumSetMergesAlbums(t *testing.T) {
 		map[string]any{"trackIds": f.tracks("Whip It", "Jocko Homo"), "title": "Bonus Disc"},
 	}}}}
 
-	for _, r := range f.calls("Album/set", merge, "Album/set", map[string]any{"destroy": []string{devo}}) {
-		for _, k := range []string{"notCreated", "notUpdated", "notDestroyed"} {
-			if r.Name != "Album/set" || r.Args[k] != nil {
-				t.Fatalf("%s %s: %v", r.Name, k, r.Args)
-			}
-		}
+	r := f.Request(jmaptest.Do("Album/set", merge), jmaptest.Do("Album/set", map[string]any{"destroy": []string{devo}}))
+	for _, s := range r.AssertSentences(2) {
+		s.AssertNamed("Album/set").AsSet().AssertNoErrors()
 	}
 	checkAlbum(t, f, weird, "Off the Deep End", "Weird Al Yankovic",
 		[]string{"Smells Like Nirvana", "Lost Track", "Trigger Happy"}, []string{"Whip It", "Jocko Homo"})
