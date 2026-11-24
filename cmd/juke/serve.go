@@ -6,13 +6,15 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
 
+	"github.com/rjbs/gizmo/tailnet"
+
 	"semiotic.systems/juke/internal/jmap"
 	"semiotic.systems/juke/internal/store"
-	"semiotic.systems/juke/internal/tailnet"
 	"semiotic.systems/juke/internal/web"
 )
 
@@ -80,7 +82,10 @@ func runServe(ctx context.Context, args []string) error {
 	}
 
 	if *tailnetName != "" {
-		node, err := tailnet.Start(ctx, *tailnetName, *tailnetState, logger, *tailnetVerbose)
+		node, err := tailnet.Start(ctx, tailnet.Config{
+			Hostname: *tailnetName, Dir: *tailnetState, Verbose: *tailnetVerbose,
+			Logger: slog.New(slog.NewTextHandler(logger.Writer(), nil)),
+		})
 		if err != nil {
 			return fmt.Errorf("joining the tailnet: %w", err)
 		}
@@ -90,8 +95,8 @@ func runServe(ctx context.Context, args []string) error {
 			return fmt.Errorf("listening on the tailnet: %w", err)
 		}
 		logger.Printf("serving %s on %s/ to %s", *dbPath, node.URL(!*tailnetHTTP), allow.String())
-		srv.Guard().AllowHost(*tailnetName, node.DNSName)
-		loggedIn := tailnet.RequireLogin(node.WhoIs, allow, logger, guarded)
+		srv.Guard().AllowHost(node.Names()...)
+		loggedIn := node.RequireLogin(allow, guarded)
 		go func() { failed <- http.Serve(ln, loggedIn) }()
 	}
 
