@@ -34,6 +34,7 @@ func (f *fixture) listenFromOpening(query string) *jmaptest.Stream {
 	if stream.Status != http.StatusOK {
 		f.t.Fatalf("eventsource status %d", stream.Status)
 	}
+	checkEqual(f.t, "Content-Type", stream.Header.Get("Content-Type"), "text/event-stream")
 	return stream
 }
 
