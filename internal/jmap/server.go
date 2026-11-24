@@ -16,6 +16,7 @@ import (
 
 	"github.com/rjbs/gizmo/auth"
 	"github.com/rjbs/gizmo/blob"
+	"github.com/rjbs/gizmo/httpd"
 	"github.com/rjbs/gizmo/push"
 
 	"semiotic.systems/juke/internal/artwork"
@@ -55,6 +56,7 @@ type Server struct {
 	store  *store.Store
 	dir    *auth.Directory
 	broker *push.Broker
+	guard  *httpd.Guard
 	log    *slog.Logger
 }
 
@@ -93,7 +95,7 @@ func New(cfg Config) *Server {
 	if cfg.Log == nil {
 		cfg.Log = log.New(os.Stderr, "juke: ", log.LstdFlags)
 	}
-	s := &Server{cfg: cfg, store: cfg.Store, broker: push.NewBroker(), log: slogTo(cfg.Log)}
+	s := &Server{cfg: cfg, store: cfg.Store, broker: push.NewBroker(), guard: httpd.NewGuard(), log: slogTo(cfg.Log)}
 	s.dir = s.directory()
 
 	// The broker is told the states as they stand, so that the first
@@ -113,6 +115,13 @@ func New(cfg Config) *Server {
 func (s *Server) Handler() http.Handler {
 	return auth.Loopback(s.dir, s.handler())
 }
+
+// Guard is what keeps browsers from being used against the server: it
+// refuses requests that a page from somewhere else has a browser make, and
+// requests addressed to a name that isn't the server's.  The Handler is
+// guarded already.  The Guard is here to be told the server's names, apart
+// from the one in BaseURL, and to guard what is served beside the Handler.
+func (s *Server) Guard() *httpd.Guard { return s.guard }
 
 // Get finds a blob for the download endpoint: a track's audio, or an image
 // of album art.  It is half of what makes the server a blob.Store.

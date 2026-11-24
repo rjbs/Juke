@@ -119,6 +119,7 @@ func (s *Server) handler() *httpd.Server {
 			return nil
 		},
 		Broker: s.broker,
+		Guard:  s.guard,
 		Limits: gizmo.Limits{
 			MaxSizeUpload:       int64(s.cfg.MaxSizeUpload),
 			MaxConcurrentUpload: 1,
