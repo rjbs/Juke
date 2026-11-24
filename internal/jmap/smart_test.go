@@ -71,13 +71,15 @@ func TestSmartPlaylistSet(t *testing.T) {
 		"filter": map[string]any{"artist": "Devo"},
 		"sort":   []map[string]any{{"property": "random"}},
 	}}})
-	reseeded := r.Args["updated"].(map[string]any)[rock].(map[string]any)
+	reseeded := r.Updated(rock)
 	if seedOf(reseeded["sort"]) == "" || seedOf(reseeded["sort"]) == seedOf(created["sort"]) {
 		t.Errorf("updated = %v, want a new seed", reseeded)
 	}
 	checkSmartTracks(t, f, rock, "Whip It")
 	r = f.set("SmartPlaylist", map[string]any{"update": map[string]any{rock: map[string]any{"title": "Devo"}}})
-	checkEqual(t, "a plain update reports nothing", r.Args["updated"].(map[string]any)[rock], nil)
+	if told := r.Updated(rock); told != nil {
+		t.Errorf("a plain update reports %v, want nothing", told)
+	}
 
 	// A rule may draw on another smart playlist, or a plain one, and
 	// neither can be destroyed while it does.
