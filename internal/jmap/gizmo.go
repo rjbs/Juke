@@ -11,7 +11,6 @@ import (
 	gizmo "github.com/rjbs/gizmo/jmap"
 	"github.com/rjbs/gizmo/push"
 	"github.com/rjbs/gizmo/sqlitekit"
-	"github.com/rjbs/gizmo/std"
 
 	"semiotic.systems/juke/internal/store"
 )
@@ -75,15 +74,7 @@ func (s *Server) processor() *gizmo.Processor {
 // account, and is who every request acts as.  Who may make requests at
 // all is decided before they get here, by the listener.
 func (s *Server) directory() *auth.Directory {
-	dir, err := auth.NewDirectory(
-		map[string]*auth.User{s.cfg.Username: {Credentials: []auth.Credential{{Type: auth.CredLoopback}}}},
-		map[string]*auth.Account{s.cfg.AccountID: {Owner: s.cfg.Username, Name: s.cfg.Username}},
-	)
-	if err != nil {
-		// One user owning one account can't be a bad directory.
-		panic(err)
-	}
-	return dir
+	return auth.Solo(s.cfg.Username, s.cfg.AccountID)
 }
 
 // Capabilities is the account's accountCapabilities object.
@@ -118,20 +109,12 @@ func (s *Server) handler() *httpd.Server {
 			}
 			return nil
 		},
-		Broker: s.broker,
-		Guard:  s.guard,
-		Limits: gizmo.Limits{
-			MaxSizeUpload:       int64(s.cfg.MaxSizeUpload),
-			MaxConcurrentUpload: 1,
-			MaxSizeRequest:      int64(s.cfg.MaxSizeRequest),
-			MaxCallsInRequest:   s.cfg.MaxCallsInRequest,
-			MaxObjectsInGet:     s.cfg.MaxObjectsInGet,
-			MaxObjectsInSet:     s.cfg.MaxObjectsInSet,
-		},
-		Capabilities: map[string]any{CapJuke: map[string]any{}, CapReview: map[string]any{}},
-		Collations:   []string{"i;unicode-casemap"},
-		Blobs:        s,
-		Logger:       s.log,
+		Broker:     s.broker,
+		Guard:      s.guard,
+		Limits:     s.limits(),
+		Collations: []string{"i;unicode-casemap"},
+		Blobs:      s,
+		Logger:     s.log,
 	})
 }
 
@@ -154,11 +137,16 @@ func (s *Server) begin(ctx context.Context, write bool) (*txn, error) {
 	return store.Kit.Begin(ctx, s.store.DB, s.broker.Publisher(s.cfg.AccountID))
 }
 
-// limits are the limits the standard methods keep to.
-func (s *Server) limits() std.Limits {
-	return std.Limits{
-		MaxObjectsInGet: s.cfg.MaxObjectsInGet,
-		MaxObjectsInSet: s.cfg.MaxObjectsInSet,
-		MaxQueryLimit:   s.cfg.MaxQueryLimit,
+// limits are the server's limits.  The one value is what the session
+// advertises and what the standard methods keep to.
+func (s *Server) limits() gizmo.Limits {
+	return gizmo.Limits{
+		MaxSizeUpload:       int64(s.cfg.MaxSizeUpload),
+		MaxConcurrentUpload: 1,
+		MaxSizeRequest:      int64(s.cfg.MaxSizeRequest),
+		MaxCallsInRequest:   s.cfg.MaxCallsInRequest,
+		MaxObjectsInGet:     s.cfg.MaxObjectsInGet,
+		MaxObjectsInSet:     s.cfg.MaxObjectsInSet,
+		MaxQueryLimit:       s.cfg.MaxQueryLimit,
 	}
 }
