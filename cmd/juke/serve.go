@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 
@@ -64,13 +65,18 @@ func runServe(ctx context.Context, args []string) error {
 		mux.Handle("GET /"+name, page)
 	}
 
+	// The page is guarded along with the API, which guards itself.
+	guarded := srv.Guard().Handler(mux)
+
 	// Each listener runs until it fails, and the first failure ends the
 	// server. -- claude, 2026-11-01
 	failed := make(chan error, 2)
 
 	if *listen != "" {
 		logger.Printf("serving %s on http://%s/", *dbPath, *listen)
-		go func() { failed <- http.ListenAndServe(*listen, mux) }()
+		named, _, _ := net.SplitHostPort(*listen)
+		srv.Guard().AllowHost(named)
+		go func() { failed <- http.ListenAndServe(*listen, guarded) }()
 	}
 
 	if *tailnetName != "" {
@@ -84,8 +90,9 @@ func runServe(ctx context.Context, args []string) error {
 			return fmt.Errorf("listening on the tailnet: %w", err)
 		}
 		logger.Printf("serving %s on %s/ to %s", *dbPath, node.URL(!*tailnetHTTP), allow.String())
-		guarded := tailnet.RequireLogin(node.WhoIs, allow, logger, mux)
-		go func() { failed <- http.Serve(ln, guarded) }()
+		srv.Guard().AllowHost(*tailnetName, node.DNSName)
+		loggedIn := tailnet.RequireLogin(node.WhoIs, allow, logger, guarded)
+		go func() { failed <- http.Serve(ln, loggedIn) }()
 	}
 
 	return <-failed
