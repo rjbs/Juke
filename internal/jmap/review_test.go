@@ -6,10 +6,11 @@ import (
 	"encoding/json"
 	"image"
 	"image/png"
-	"io"
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/rjbs/gizmo/jmaptest"
 )
 
 // reviewFixture is the usual fixture with some trouble in it, and calls
@@ -164,23 +165,6 @@ func TestReviewNeedsItsCapability(t *testing.T) {
 	checkSetRefused(t, f, "Whip It", map[string]any{"artworkBlobId": a}, "invalidProperties", "artworkBlobId")
 }
 
-// upload posts bytes to the upload endpoint and returns the status and
-// the decoded response, or the error text.
-func (f *fixture) upload(data []byte) (int, map[string]any, string) {
-	f.t.Helper()
-	resp, err := http.Post(f.BaseURL+"/jmap/upload/music/", "application/octet-stream", bytes.NewReader(data))
-	if err != nil {
-		f.t.Fatal(err)
-	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
-	var out map[string]any
-	if json.Unmarshal(body, &out) != nil {
-		return resp.StatusCode, nil, strings.TrimSpace(string(body))
-	}
-	return resp.StatusCode, out, ""
-}
-
 func pngBytes() []byte {
 	img := image.NewRGBA(image.Rect(0, 0, 4, 3))
 	var buf bytes.Buffer
@@ -193,13 +177,16 @@ func pngBytes() []byte {
 func TestUpload(t *testing.T) {
 	f := newFixture(t, Config{MaxSizeUpload: 4096})
 	f.Using = []string{CapCore, CapJuke, CapReview}
+	upload := func(data []byte) *jmaptest.Uploaded { return f.Upload("application/octet-stream", data) }
 	data := pngBytes()
-	status, r, _ := f.upload(data)
-	checkEqual(t, "status", status, http.StatusCreated)
-	checkEqual(t, "response", []any{r["accountId"], r["type"], r["size"]}, []any{"music", "image/png", float64(len(data))})
-	id := r["blobId"].(string)
-	status, again, _ := f.upload(data)
-	checkEqual(t, "the same image again", []any{status, again["blobId"]}, []any{http.StatusCreated, id})
+	up := upload(data)
+	checkEqual(t, "status", up.Status, http.StatusCreated)
+	var answer map[string]any
+	json.Unmarshal(up.Body, &answer)
+	checkEqual(t, "response", []any{answer["accountId"], up.Type, up.Size}, []any{"music", "image/png", int64(len(data))})
+	id := up.BlobID
+	again := upload(data)
+	checkEqual(t, "the same image again", []any{again.Status, again.BlobID}, []any{http.StatusCreated, id})
 
 	devo := f.albumOf("Whip It")
 	f.call("Album/set", map[string]any{"update": map[string]any{devo: map[string]any{"artworkBlobId": id}}})
@@ -207,12 +194,12 @@ func TestUpload(t *testing.T) {
 	checkEqual(t, "set as the album's art", []any{album["artworkBlobId"], album["artworkType"]}, []any{id, "image/png"})
 	checkDownload(t, f, id, "", http.StatusOK, string(data))
 
-	status, _, text := f.upload([]byte("this is a text file, not a picture"))
-	checkEqual(t, "not an image", []any{status, text}, []any{http.StatusUnsupportedMediaType, "only images can be uploaded"})
-	status, _, _ = f.upload(append([]byte("\x89PNG\r\n\x1a\n"), make([]byte, 5000)...))
-	checkEqual(t, "too large", status, http.StatusRequestEntityTooLarge)
-	status, _, _ = f.upload(append([]byte("\x89PNG\r\n\x1a\n"), []byte("but not really a PNG")...))
-	checkEqual(t, "an image that can't be decoded", status, http.StatusUnsupportedMediaType)
-	resp, _ := http.Post(f.BaseURL+"/jmap/upload/nobody/", "image/png", bytes.NewReader(data))
-	checkEqual(t, "another account", resp.StatusCode, http.StatusNotFound)
+	up = upload([]byte("this is a text file, not a picture"))
+	checkEqual(t, "not an image", []any{up.Status, strings.TrimSpace(string(up.Body))}, []any{http.StatusUnsupportedMediaType, "only images can be uploaded"})
+	up = upload(append([]byte("\x89PNG\r\n\x1a\n"), make([]byte, 5000)...))
+	checkEqual(t, "too large", up.Status, http.StatusRequestEntityTooLarge)
+	up = upload(append([]byte("\x89PNG\r\n\x1a\n"), []byte("but not really a PNG")...))
+	checkEqual(t, "an image that can't be decoded", up.Status, http.StatusUnsupportedMediaType)
+	nobody := f.With(func(c *jmaptest.Tester) { c.AccountID = "nobody" })
+	checkEqual(t, "another account", nobody.Upload("image/png", data).Status, http.StatusNotFound)
 }

@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"io"
 	"net/http"
 	"os"
 	"strings"
@@ -406,19 +405,10 @@ func TestSession(t *testing.T) {
 // the status and body.
 func checkDownload(t *testing.T, f *fixture, blobID, rangeHeader string, wantStatus int, wantBody string) {
 	t.Helper()
-	req, _ := http.NewRequest("GET", f.BaseURL+"/jmap/download/music/"+blobID+"/song.mp3?type=audio/mpeg", nil)
-	if rangeHeader != "" {
-		req.Header.Set("Range", rangeHeader)
-	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
-	checkEqual(t, "download status "+rangeHeader, resp.StatusCode, wantStatus)
+	got := f.DownloadRange(blobID, "song.mp3", "audio/mpeg", rangeHeader)
+	checkEqual(t, "download status "+rangeHeader, got.Status, wantStatus)
 	if wantStatus < 300 {
-		checkEqual(t, "download body "+rangeHeader, string(body), wantBody)
+		checkEqual(t, "download body "+rangeHeader, string(got.Body), wantBody)
 	}
 }
 
@@ -501,14 +491,8 @@ func TestArtworkBlobs(t *testing.T) {
 	checkEqual(t, "track with its own art", art("Track", f.ids["Brave Sir Robin"]), []any{id, "image/png"})
 	checkEqual(t, "track with its album's art", art("Track", f.ids["Whip It"]), []any{nil, nil})
 
-	req, _ := http.NewRequest("GET", f.BaseURL+"/jmap/download/music/"+id+"/cover", nil)
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
-	checkEqual(t, "artwork status", resp.StatusCode, http.StatusOK)
-	checkEqual(t, "artwork type", resp.Header.Get("Content-Type"), "image/png")
-	checkEqual(t, "artwork body", string(body), string(data))
+	got := f.Download(id, "cover", "")
+	checkEqual(t, "artwork status", got.Status, http.StatusOK)
+	checkEqual(t, "artwork type", got.Header.Get("Content-Type"), "image/png")
+	checkEqual(t, "artwork body", string(got.Body), string(data))
 }
