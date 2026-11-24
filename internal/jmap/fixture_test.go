@@ -1,12 +1,9 @@
 package jmap
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"io"
 	"log"
-	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -15,6 +12,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/rjbs/gizmo/jmaptest"
 
 	"semiotic.systems/juke/internal/store"
 )
@@ -25,13 +24,12 @@ var fixtureNow = time.Date(2014, 6, 15, 12, 0, 0, 0, time.UTC)
 // fixture is a running server over a small, known library.  Tracks are
 // named by title in ids, which every title in the fixture keeps unique.
 type fixture struct {
+	*jmaptest.Tester
 	t       *testing.T
-	srv     *httptest.Server
 	store   *store.Store
 	library string
 	ids     map[string]string
 	titles  map[string]string
-	using   []string // the capabilities calls use; nil for core and juke
 }
 
 type fixtureTrack struct {
@@ -105,8 +103,10 @@ func newFixture(t *testing.T, cfg Config) *fixture {
 	watching, stop := context.WithCancel(ctx)
 	t.Cleanup(stop)
 	go srv.Watch(watching)
-	f.srv = httptest.NewServer(srv.Handler())
-	t.Cleanup(f.srv.Close)
+	web := httptest.NewServer(srv.Handler())
+	t.Cleanup(web.Close)
+	f.Tester = jmaptest.New(t, web.URL, CapCore, CapJuke)
+	f.AccountID = "music"
 	return f
 }
 
@@ -150,76 +150,19 @@ func (f *fixture) addTrack(albumID *string, disc, pos *int, tr fixtureTrack) {
 	f.titles[id] = tr.title
 }
 
-// response is one method response.
-type response struct {
-	Name   string
-	Args   map[string]any
-	CallID string
-}
-
-// post sends a raw API request body and returns the HTTP status and the
-// decoded JSON body.
-func (f *fixture) post(body string) (int, map[string]any) {
+// call makes a single method call and returns its response's arguments,
+// failing the test if it is an error.  The arguments are decoded plainly,
+// so that numbers are float64.
+func (f *fixture) call(method string, args jmaptest.Args) map[string]any {
 	f.t.Helper()
-	resp, err := http.Post(f.srv.URL+"/jmap/api", "application/json", bytes.NewBufferString(body))
-	if err != nil {
-		f.t.Fatal(err)
-	}
-	defer resp.Body.Close()
 	var out map[string]any
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		f.t.Fatalf("decoding response: %v", err)
-	}
-	return resp.StatusCode, out
-}
-
-// calls makes one API request of several method calls, each given as
-// method name and arguments; call ids are "0", "1" and so on.  An
-// arguments map without accountId gets the fixture's account.
-func (f *fixture) calls(calls ...any) []response {
-	f.t.Helper()
-	using := f.using
-	if using == nil {
-		using = []string{CapCore, CapJuke}
-	}
-	var methodCalls []any
-	for i := 0; i < len(calls); i += 2 {
-		args := calls[i+1].(map[string]any)
-		if _, ok := args["accountId"]; !ok {
-			args["accountId"] = "music"
-		}
-		methodCalls = append(methodCalls, []any{calls[i], args, string(rune('0' + i/2))})
-	}
-	body, _ := json.Marshal(map[string]any{
-		"using":       using,
-		"methodCalls": methodCalls,
-	})
-	status, out := f.post(string(body))
-	if status != http.StatusOK {
-		f.t.Fatalf("API status %d: %v", status, out)
-	}
-	var responses []response
-	for _, r := range out["methodResponses"].([]any) {
-		triple := r.([]any)
-		responses = append(responses, response{triple[0].(string), triple[1].(map[string]any), triple[2].(string)})
-	}
-	return responses
-}
-
-// call makes a single method call and returns its response, failing the
-// test if it is an error.
-func (f *fixture) call(method string, args map[string]any) map[string]any {
-	f.t.Helper()
-	r := f.calls(method, args)[0]
-	if r.Name == "error" {
-		f.t.Fatalf("%s: error %v", method, r.Args)
-	}
-	return r.Args
+	f.Request(jmaptest.Do(method, args)).SingleSentence(method).Decode(&out)
+	return out
 }
 
 func (f *fixture) state(typ string) string {
 	f.t.Helper()
-	return f.call(typ+"/get", map[string]any{"ids": []string{}})["state"].(string)
+	return f.Request(jmaptest.Do(typ+"/get", jmaptest.Args{"ids": []string{}})).SingleSentence(typ + "/get").Str("state")
 }
 
 func (f *fixture) titlesOf(ids []any) []string {
@@ -255,10 +198,5 @@ func checkEqual(t *testing.T, what string, got, want any) {
 // JMAP error type.
 func checkMethodError(t *testing.T, f *fixture, method string, args map[string]any, wantType string) {
 	t.Helper()
-	r := f.calls(method, args)[0]
-	if r.Name != "error" {
-		t.Errorf("%s %v: got %s, want error %s", method, args, r.Name, wantType)
-		return
-	}
-	checkEqual(t, method+" error type", r.Args["type"], wantType)
+	f.Request(jmaptest.Do(method, args)).SingleSentence("error").AssertError(wantType)
 }

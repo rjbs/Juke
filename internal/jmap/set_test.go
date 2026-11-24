@@ -2,6 +2,8 @@ package jmap
 
 import (
 	"testing"
+
+	"github.com/rjbs/gizmo/jmaptest"
 )
 
 // objectID finds an album or playlist by title.
@@ -27,15 +29,9 @@ func (f *fixture) tracks(titles ...string) []string {
 }
 
 // set makes a /set call and fails the test if any object in it fails.
-func (f *fixture) set(typ string, args map[string]any) map[string]any {
+func (f *fixture) set(typ string, args map[string]any) *jmaptest.Set {
 	f.t.Helper()
-	r := f.call(typ+"/set", args)
-	for _, k := range []string{"notCreated", "notUpdated", "notDestroyed"} {
-		if r[k] != nil {
-			f.t.Fatalf("%s/set %s: %v", typ, k, r[k])
-		}
-	}
-	return r
+	return f.Request(jmaptest.Do(typ+"/set", args)).SingleSentence(typ + "/set").AsSet().AssertNoErrors()
 }
 
 // checkPlaylist gets a playlist and checks its title and tracks.
@@ -92,10 +88,8 @@ func TestPlaylistSet(t *testing.T) {
 		"trip":  map[string]any{"title": "Road Trip", "trackIds": f.tracks("Whip It", "Jocko Homo")},
 		"empty": map[string]any{"title": "Someday"},
 	}})
-	created := r["created"].(map[string]any)
-	trip := created["trip"].(map[string]any)["id"].(string)
-	someday := created["empty"].(map[string]any)["id"].(string)
-	checkEqual(t, "defaulted trackIds are reported", created["empty"].(map[string]any)["trackIds"], []any{})
+	trip, someday := r.CreatedID("trip"), r.CreatedID("empty")
+	checkEqual(t, "defaulted trackIds are reported", r.Created("empty")["trackIds"], []any{})
 	checkPlaylist(t, f, trip, "Road Trip", "Whip It", "Jocko Homo")
 	checkPlaylist(t, f, someday, "Someday")
 
@@ -110,15 +104,15 @@ func TestPlaylistSet(t *testing.T) {
 	mix := f.objectID("Playlist", "Mix")
 	mid := f.state("Playlist")
 	r = f.set("Playlist", map[string]any{"destroy": []string{mix}})
-	checkEqual(t, "destroyed", r["destroyed"], []any{mix})
+	checkEqual(t, "destroyed", r.DestroyedIDs(), []string{mix})
 	checkEqual(t, "gone", idList(f.call("Playlist/get", map[string]any{"ids": []string{mix}})["notFound"]), []string{mix})
 	checkDestroyed(t, f, "Playlist", mid, mix)
 	checkQuery(t, f, map[string]any{"inPlaylist": mix}, nil)
 
 	// The two made since "before" were never seen, and Mix was destroyed.
 	checkDestroyed(t, f, "Playlist", before, mix)
-	r = f.call("Playlist/changes", map[string]any{"sinceState": before})
-	checkEqual(t, "created since before", sorted(idList(r["created"])), sorted([]string{trip, someday}))
+	changes := f.call("Playlist/changes", map[string]any{"sinceState": before})
+	checkEqual(t, "created since before", sorted(idList(changes["created"])), sorted([]string{trip, someday}))
 }
 
 func TestPlaylistSetCreatedInSameCall(t *testing.T) {
@@ -127,7 +121,7 @@ func TestPlaylistSetCreatedInSameCall(t *testing.T) {
 		"create": map[string]any{"new": map[string]any{"title": "Draft"}},
 		"update": map[string]any{"#new": map[string]any{"trackIds": f.tracks("Whip It")}},
 	})
-	id := r["created"].(map[string]any)["new"].(map[string]any)["id"].(string)
+	id := r.CreatedID("new")
 	checkPlaylist(t, f, id, "Draft", "Whip It")
 }
 
@@ -210,12 +204,9 @@ func TestAlbumSetMergesAlbums(t *testing.T) {
 		map[string]any{"trackIds": f.tracks("Whip It", "Jocko Homo"), "title": "Bonus Disc"},
 	}}}}
 
-	for _, r := range f.calls("Album/set", merge, "Album/set", map[string]any{"destroy": []string{devo}}) {
-		for _, k := range []string{"notCreated", "notUpdated", "notDestroyed"} {
-			if r.Name != "Album/set" || r.Args[k] != nil {
-				t.Fatalf("%s %s: %v", r.Name, k, r.Args)
-			}
-		}
+	r := f.Request(jmaptest.Do("Album/set", merge), jmaptest.Do("Album/set", map[string]any{"destroy": []string{devo}}))
+	for _, s := range r.AssertSentences(2) {
+		s.AssertNamed("Album/set").AsSet().AssertNoErrors()
 	}
 	checkAlbum(t, f, weird, "Off the Deep End", "Weird Al Yankovic",
 		[]string{"Smells Like Nirvana", "Lost Track", "Trigger Happy"}, []string{"Whip It", "Jocko Homo"})
@@ -266,12 +257,11 @@ func TestAlbumSetCreates(t *testing.T) {
 		"full":  map[string]any{"title": "Holy Grail", "artist": "Monty Python", "discs": []any{disc(f.tracks("Brave Sir Robin"))}},
 		"empty": map[string]any{"title": "Someday"},
 	}})
-	created := r["created"].(map[string]any)
-	grail := created["full"].(map[string]any)["id"].(string)
+	grail := r.CreatedID("full")
 	checkAlbum(t, f, grail, "Holy Grail", "Monty Python", []string{"Brave Sir Robin"})
 	checkAlbumOf(t, f, "Brave Sir Robin", grail)
-	checkEqual(t, "defaults are reported", created["empty"], map[string]any{
-		"id":       created["empty"].(map[string]any)["id"],
+	checkEqual(t, "defaults are reported", r.Created("empty"), map[string]any{
+		"id":       r.CreatedID("empty"),
 		"artist":   nil,
 		"released": nil,
 		"discs":    []any{map[string]any{"trackIds": []any{}, "title": nil}},
@@ -286,7 +276,7 @@ func TestAlbumSetReleased(t *testing.T) {
 	r := f.set("Album", map[string]any{"create": map[string]any{
 		"n": map[string]any{"title": "Night at the Opera", "artist": "Queen", "released": "1975-11-00"},
 	}})
-	opera := r["created"].(map[string]any)["n"].(map[string]any)["id"].(string)
+	opera := r.CreatedID("n")
 	checkEqual(t, "created with a date", f.album(opera, "released")["released"], "1975-11-00")
 
 	f.set("Album", map[string]any{"update": map[string]any{queen: map[string]any{"released": "1979-06-22"}}})

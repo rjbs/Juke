@@ -6,10 +6,11 @@ import (
 	"encoding/json"
 	"image"
 	"image/png"
-	"io"
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/rjbs/gizmo/jmaptest"
 )
 
 // reviewFixture is the usual fixture with some trouble in it, and calls
@@ -21,7 +22,7 @@ import (
 func reviewFixture(t *testing.T) (f *fixture, a, b string) {
 	t.Helper()
 	f = newFixture(t, Config{})
-	f.using = []string{CapCore, CapJuke, CapReview}
+	f.Using = []string{CapCore, CapJuke, CapReview}
 	ctx := context.Background()
 	a, b = "Aaaaa", "Abbbb"
 	exec := func(sql string, args ...any) {
@@ -102,8 +103,7 @@ func TestReviewIssuesAndCandidates(t *testing.T) {
 		"sort": []map[string]any{{"property": "artist"}, {"property": "title"}}})
 	checkEqual(t, "by artist, the unnamed last", idList(byArtist["ids"]), []string{queen, al, devo})
 	checkMethodError(t, f, "Album/query", map[string]any{"sort": []map[string]any{{"property": "rating"}}}, "unsupportedSort")
-	r := f.calls("Album/query", map[string]any{"filter": map[string]any{"issue": "badHair"}})[0]
-	checkEqual(t, "an unknown issue", r.Args["type"], "unsupportedFilter")
+	checkMethodError(t, f, "Album/query", map[string]any{"filter": map[string]any{"issue": "badHair"}}, "unsupportedFilter")
 }
 
 func TestReviewChoosesArt(t *testing.T) {
@@ -139,9 +139,8 @@ func TestReviewChoosesArt(t *testing.T) {
 	checkEqual(t, "folder art, the one dissenter decided", g.album(g.albumOf("We Will Rock You"))["issues"], []any{"noArt"})
 	checkEqual(t, "which is no issue either", f.album(devo)["issues"], []any{})
 
-	r = f.call("Album/set", map[string]any{"update": map[string]any{devo: map[string]any{"artworkBlobId": "Anope"}}})
-	e := r["notUpdated"].(map[string]any)[devo].(map[string]any)
-	checkEqual(t, "an image not stored", []any{e["type"], idList(e["properties"])}, []any{"invalidProperties", []string{"artworkBlobId"}})
+	// An image not stored can't be chosen.
+	checkSetError(t, f, "Album", map[string]any{"update": map[string]any{devo: map[string]any{"artworkBlobId": "Anope"}}}, "invalidProperties", "artworkBlobId")
 	checkSetRefused(t, f, "Whip It", map[string]any{"artworkBlobId": "Anope"}, "invalidProperties", "artworkBlobId")
 }
 
@@ -150,39 +149,17 @@ func TestReviewChoosesArt(t *testing.T) {
 func TestReviewNeedsItsCapability(t *testing.T) {
 	f, a, _ := reviewFixture(t)
 	devo := f.albumOf("Whip It")
-	f.using = nil
+	f.Using = []string{CapCore, CapJuke}
 
 	album := f.album(devo)
 	_, hasIssues := album["issues"]
 	_, hasCandidates := album["artworkCandidates"]
 	checkEqual(t, "review properties absent", []bool{hasIssues, hasCandidates}, []bool{false, false})
-	r := f.calls("Album/get", map[string]any{"ids": []string{devo}, "properties": []string{"issues"}})[0]
-	checkEqual(t, "asking for one", r.Args["type"], "invalidArguments")
-	r = f.calls("Track/get", map[string]any{"ids": []string{f.ids["Whip It"]}, "properties": []string{"numberSource"}})[0]
-	checkEqual(t, "a track's number source", r.Args["type"], "invalidArguments")
-	r = f.calls("Album/query", map[string]any{"filter": map[string]any{"hasIssues": true}})[0]
-	checkEqual(t, "filtering", r.Args["type"], "unsupportedFilter")
-	r = f.calls("Album/set", map[string]any{"update": map[string]any{devo: map[string]any{"artworkBlobId": a}}})[0]
-	e := r.Args["notUpdated"].(map[string]any)[devo].(map[string]any)
-	checkEqual(t, "choosing album art", e["type"], "invalidProperties")
+	checkMethodError(t, f, "Album/get", map[string]any{"ids": []string{devo}, "properties": []string{"issues"}}, "invalidArguments")
+	checkMethodError(t, f, "Track/get", map[string]any{"ids": []string{f.ids["Whip It"]}, "properties": []string{"numberSource"}}, "invalidArguments")
+	checkMethodError(t, f, "Album/query", map[string]any{"filter": map[string]any{"hasIssues": true}}, "unsupportedFilter")
+	checkSetError(t, f, "Album", map[string]any{"update": map[string]any{devo: map[string]any{"artworkBlobId": a}}}, "invalidProperties")
 	checkSetRefused(t, f, "Whip It", map[string]any{"artworkBlobId": a}, "invalidProperties", "artworkBlobId")
-}
-
-// upload posts bytes to the upload endpoint and returns the status and
-// the decoded response, or the error text.
-func (f *fixture) upload(data []byte) (int, map[string]any, string) {
-	f.t.Helper()
-	resp, err := http.Post(f.srv.URL+"/jmap/upload/music/", "application/octet-stream", bytes.NewReader(data))
-	if err != nil {
-		f.t.Fatal(err)
-	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
-	var out map[string]any
-	if json.Unmarshal(body, &out) != nil {
-		return resp.StatusCode, nil, strings.TrimSpace(string(body))
-	}
-	return resp.StatusCode, out, ""
 }
 
 func pngBytes() []byte {
@@ -196,14 +173,17 @@ func pngBytes() []byte {
 // Album/set then takes; anything else is refused.
 func TestUpload(t *testing.T) {
 	f := newFixture(t, Config{MaxSizeUpload: 4096})
-	f.using = []string{CapCore, CapJuke, CapReview}
+	f.Using = []string{CapCore, CapJuke, CapReview}
+	upload := func(data []byte) *jmaptest.Uploaded { return f.Upload("application/octet-stream", data) }
 	data := pngBytes()
-	status, r, _ := f.upload(data)
-	checkEqual(t, "status", status, http.StatusCreated)
-	checkEqual(t, "response", []any{r["accountId"], r["type"], r["size"]}, []any{"music", "image/png", float64(len(data))})
-	id := r["blobId"].(string)
-	status, again, _ := f.upload(data)
-	checkEqual(t, "the same image again", []any{status, again["blobId"]}, []any{http.StatusCreated, id})
+	up := upload(data)
+	checkEqual(t, "status", up.Status, http.StatusCreated)
+	var answer map[string]any
+	json.Unmarshal(up.Body, &answer)
+	checkEqual(t, "response", []any{answer["accountId"], up.Type, up.Size}, []any{"music", "image/png", int64(len(data))})
+	id := up.BlobID
+	again := upload(data)
+	checkEqual(t, "the same image again", []any{again.Status, again.BlobID}, []any{http.StatusCreated, id})
 
 	devo := f.albumOf("Whip It")
 	f.call("Album/set", map[string]any{"update": map[string]any{devo: map[string]any{"artworkBlobId": id}}})
@@ -211,12 +191,12 @@ func TestUpload(t *testing.T) {
 	checkEqual(t, "set as the album's art", []any{album["artworkBlobId"], album["artworkType"]}, []any{id, "image/png"})
 	checkDownload(t, f, id, "", http.StatusOK, string(data))
 
-	status, _, text := f.upload([]byte("this is a text file, not a picture"))
-	checkEqual(t, "not an image", []any{status, text}, []any{http.StatusUnsupportedMediaType, "only images can be uploaded"})
-	status, _, _ = f.upload(append([]byte("\x89PNG\r\n\x1a\n"), make([]byte, 5000)...))
-	checkEqual(t, "too large", status, http.StatusRequestEntityTooLarge)
-	status, _, _ = f.upload(append([]byte("\x89PNG\r\n\x1a\n"), []byte("but not really a PNG")...))
-	checkEqual(t, "an image that can't be decoded", status, http.StatusUnsupportedMediaType)
-	resp, _ := http.Post(f.srv.URL+"/jmap/upload/nobody/", "image/png", bytes.NewReader(data))
-	checkEqual(t, "another account", resp.StatusCode, http.StatusNotFound)
+	up = upload([]byte("this is a text file, not a picture"))
+	checkEqual(t, "not an image", []any{up.Status, strings.TrimSpace(string(up.Body))}, []any{http.StatusUnsupportedMediaType, "only images can be uploaded"})
+	up = upload(append([]byte("\x89PNG\r\n\x1a\n"), make([]byte, 5000)...))
+	checkEqual(t, "too large", up.Status, http.StatusRequestEntityTooLarge)
+	up = upload(append([]byte("\x89PNG\r\n\x1a\n"), []byte("but not really a PNG")...))
+	checkEqual(t, "an image that can't be decoded", up.Status, http.StatusUnsupportedMediaType)
+	nobody := f.With(func(c *jmaptest.Tester) { c.AccountID = "nobody" })
+	checkEqual(t, "another account", nobody.Upload("image/png", data).Status, http.StatusNotFound)
 }
