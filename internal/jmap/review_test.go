@@ -139,9 +139,8 @@ func TestReviewChoosesArt(t *testing.T) {
 	checkEqual(t, "folder art, the one dissenter decided", g.album(g.albumOf("We Will Rock You"))["issues"], []any{"noArt"})
 	checkEqual(t, "which is no issue either", f.album(devo)["issues"], []any{})
 
-	r = f.call("Album/set", map[string]any{"update": map[string]any{devo: map[string]any{"artworkBlobId": "Anope"}}})
-	e := r["notUpdated"].(map[string]any)[devo].(map[string]any)
-	checkEqual(t, "an image not stored", []any{e["type"], idList(e["properties"])}, []any{"invalidProperties", []string{"artworkBlobId"}})
+	// An image not stored can't be chosen.
+	checkSetError(t, f, "Album", map[string]any{"update": map[string]any{devo: map[string]any{"artworkBlobId": "Anope"}}}, "invalidProperties", "artworkBlobId")
 	checkSetRefused(t, f, "Whip It", map[string]any{"artworkBlobId": "Anope"}, "invalidProperties", "artworkBlobId")
 }
 
@@ -159,9 +158,7 @@ func TestReviewNeedsItsCapability(t *testing.T) {
 	checkMethodError(t, f, "Album/get", map[string]any{"ids": []string{devo}, "properties": []string{"issues"}}, "invalidArguments")
 	checkMethodError(t, f, "Track/get", map[string]any{"ids": []string{f.ids["Whip It"]}, "properties": []string{"numberSource"}}, "invalidArguments")
 	checkMethodError(t, f, "Album/query", map[string]any{"filter": map[string]any{"hasIssues": true}}, "unsupportedFilter")
-	r := f.call("Album/set", map[string]any{"update": map[string]any{devo: map[string]any{"artworkBlobId": a}}})
-	e := r["notUpdated"].(map[string]any)[devo].(map[string]any)
-	checkEqual(t, "choosing album art", e["type"], "invalidProperties")
+	checkSetError(t, f, "Album", map[string]any{"update": map[string]any{devo: map[string]any{"artworkBlobId": a}}}, "invalidProperties")
 	checkSetRefused(t, f, "Whip It", map[string]any{"artworkBlobId": a}, "invalidProperties", "artworkBlobId")
 }
 

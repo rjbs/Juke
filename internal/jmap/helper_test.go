@@ -10,8 +10,7 @@ func checkHelperFlag(t *testing.T, typ string, props map[string]any, wantCreated
 	t.Helper()
 	f := newFixture(t, Config{})
 	r := f.set(typ, map[string]any{"create": map[string]any{"new": props}})
-	created := r["created"].(map[string]any)["new"].(map[string]any)
-	id := created["id"].(string)
+	created, id := r.Created("new"), r.CreatedID("new")
 	if _, given := props["isHelper"]; !given {
 		checkEqual(t, typ+" created isHelper default", created["isHelper"], false)
 	}

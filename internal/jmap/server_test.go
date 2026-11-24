@@ -292,12 +292,8 @@ func checkSetRefused(t *testing.T, f *fixture, title string, patch map[string]an
 	if id == "" {
 		id = title
 	}
-	r := f.call("Track/set", map[string]any{"update": map[string]any{id: patch}})
-	if r["notUpdated"] == nil {
-		t.Errorf("update %v of %s: not refused", patch, title)
-		return
-	}
-	e := r["notUpdated"].(map[string]any)[id].(map[string]any)
+	e := f.Request(jmaptest.Do("Track/set", map[string]any{"update": map[string]any{id: patch}})).
+		SingleSentence("Track/set").AsSet().NotUpdated(id)
 	checkEqual(t, "SetError type", e["type"], wantType)
 	if len(wantProps) > 0 {
 		checkEqual(t, "SetError properties", idList(e["properties"]), wantProps)
