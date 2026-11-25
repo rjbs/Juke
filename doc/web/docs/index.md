@@ -15,4 +15,5 @@ under it.
   ones of [RFC 8620](https://www.rfc-editor.org/rfc/rfc8620).
 
 The server is written in Go, on [Gizmo](https://github.com/rjbs/gizmo), a
-library for building JMAP servers.
+library for building JMAP servers.  Its source, and the rest of its design
+notes, are [on GitHub](https://github.com/rjbs/Juke).
