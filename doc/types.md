@@ -79,14 +79,14 @@ following properties:
 - **numberSource**: `String|null` (review only)
   What gave the track its number; see [import](import.md).  This is set
   by the server.  One of:
-  - `tags`: the disc and track number tags.
-  - `catalog`: the 2014 catalog.
-  - `file`: the number the file name starts with.
-  - `user`: an `Album/set` placed it.
-  - `none`: nothing gave it a number, or another track had the one it
-    gave, so it was placed after the rest.
+    - `tags`: the disc and track number tags.
+    - `catalog`: the 2014 catalog.
+    - `file`: the number the file name starts with.
+    - `user`: an `Album/set` placed it.
+    - `none`: nothing gave it a number, or another track had the one it
+      gave, so it was placed after the rest.
 
-  Null where an older import didn't say.
+    Null where an older import didn't say.
 
 A track has no number properties: its disc number is its disc's place
 in its album's `discs`, and its track number is its place in that
@@ -283,23 +283,24 @@ It has the following properties:
 - **issues**: `String[]` (review only)
   What might be wrong with the album, in this order.  This is set by
   the server.  Each is one of:
-  - `noArt`: tracks with audio, but no image.
-  - `artOverrides`: some tracks carry a picture other than the album's,
-    and show it.
-  - `artTie`: the rule picked the album's image on a tie; see
-    [artwork](artwork.md).
-  - `folderArt`: the image file beside the tracks differs from pictures
-    the tracks carry.
-  - `unnumbered`: a track was numbered from nowhere: nothing gave it a
-    number, or another track had the one it gave, so the import put it
-    after the rest.
-  - `gaps`: tracks with no audio.
+    - `noArt`: tracks with audio, but no image.
+    - `artOverrides`: some tracks carry a picture other than the album's,
+      and show it.
+    - `artTie`: the rule picked the album's image on a tie; see
+      [artwork](artwork.md).
+    - `folderArt`: the image file beside the tracks differs from pictures
+      the tracks carry.
+    - `unnumbered`: a track was numbered from nowhere: nothing gave it a
+      number, or another track had the one it gave, so the import put it
+      after the rest.
+    - `gaps`: tracks with no audio.
 
-  The art issues are moot once the album's art has been chosen by hand;
-  `artTie` and `folderArt` also once every track carrying some other
-  picture has had its own art set or cleared by hand, since deciding
-  them is accepting the album's; and `unnumbered` once `discs` has been
-  set, since the order is then the user's.
+    The art issues are moot once the album's art has been chosen by hand;
+    `artTie` and `folderArt` also once every track carrying some other
+    picture has had its own art set or cleared by hand, since deciding
+    them is accepting the album's; and `unnumbered` once `discs` has been
+    set, since the order is then the user's.
+
 - **artworkCandidates**: `Candidate[]` (review only)
   The images the album could have: the image file beside its tracks
   first, then each picture its tracks' files carry, by first carrier in
