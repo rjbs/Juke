@@ -2,8 +2,8 @@
 
 The server speaks JMAP (RFC 8620) over the capability
 `https://semiotic.systems/jmap/juke`, which gives an account four
-object types: Track, Album, Playlist and SmartPlaylist.  Each has the
-standard `/get`, `/changes`, `/query`, `/queryChanges` and `/set`
+object types: Track, Album, Playlist, and SmartPlaylist.  Each has the
+standard `/get`, `/changes`, `/query`, `/queryChanges`, and `/set`
 methods, with the differences from the standard noted under each type.
 The set is deliberately small.  Properties are added when something
 needs them, not because the files have them; most of what ID3 tags
@@ -95,10 +95,10 @@ written into served files are computed from this.
 
 **A track with no audio** stands for a gap: a track the 2014 catalog
 knows an album had, whose file is lost.  It keeps the catalog's title,
-artist, rating and play count, and holds its position on the album.  If
+artist, rating, and play count, and holds its position on the album.  If
 the audio is found later, it is attached to the same track, which keeps
-its id, its playlist memberships and its history.  Clients show it but
-cannot play, download or pin it.
+its id, its playlist memberships, and its history.  Clients show it but
+cannot play, download, or pin it.
 
 **Ratings:** the 2014 library stores ratings as 0 to 100 in steps of 10.
 Every track rating in it was set by hand, none computed from an album
@@ -125,7 +125,7 @@ Standard JMAP `/query` method, with these additions.
 
 A **FilterCondition** object has the following properties, any of which
 may be given; all must match.  Conditions combine with the standard
-`AND`, `OR` and `NOT` FilterOperators.  String matches are
+`AND`, `OR`, and `NOT` FilterOperators.  String matches are
 case-insensitive, using the `i;unicode-casemap` collation that JMAP
 defaults to.
 
@@ -239,7 +239,7 @@ Standard JMAP `/set` method, except that only updates are allowed.
 Tracks are created and destroyed only by import; a create or destroy is
 rejected with a `forbidden` SetError.
 
-An update may set `rating`, `playCount`, `lastPlayed` and `genre`, and,
+An update may set `rating`, `playCount`, `lastPlayed`, and `genre`, and,
 under the review capability, `artworkBlobId`.  A patch naming any other
 property, or giving one of these a value outside its type, is rejected
 with an `invalidProperties` SetError listing the offending properties.
@@ -265,7 +265,7 @@ It has the following properties:
   The album's artist, or null for a various-artists compilation.
 - **released**: `String|null`
   When the album came out, as `YYYY-MM-DD` with `00` for a month or day
-  not known: `1991-00-00`, `1991-02-00` or `1991-02-19`.  A known day
+  not known: `1991-00-00`, `1991-02-00`, or `1991-02-19`.  A known day
   needs a known month.  Null when nothing says.  The form sorts as text,
   so a year alone sorts before any date in that year.  The import takes
   it from the tracks' tags (the date most of them give) and the catalog's
@@ -376,7 +376,7 @@ Both together is the one issue.  FilterOperators are not supported.
 ### Album/set
 
 Standard JMAP `/set` method.  A create or update may set `title`,
-`artist`, `released` and `discs`, and, under the review capability,
+`artist`, `released`, and `discs`, and, under the review capability,
 `artworkBlobId`.  An album needs a title; a `released` in any shape but
 the one above is an `invalidProperties` SetError; and every id in
 `discs` must name a track, each once.  As RFC 8620 requires, an update
@@ -415,7 +415,7 @@ properties:
 - **isHelper**: `Boolean` (default: false)
   The playlist is kept for smart playlists' rules to name, not for
   listening.  Clients list helpers apart from other playlists, but
-  treat them alike otherwise: they can still be played, added to and
+  treat them alike otherwise: they can still be played, added to, and
   kept offline.
 
 ### Playlist/get
@@ -435,7 +435,7 @@ is an `unsupportedFilter` error) and the only sort property is
 ### Playlist/set
 
 Standard JMAP `/set` method.  A create or update may set `title`,
-`trackIds` and `isHelper`; a playlist needs a title, and every id in
+`trackIds`, and `isHelper`; a playlist needs a title, and every id in
 `trackIds` must name a track.  As RFC 8620 requires, an update
 replaces `trackIds` whole; a patch can't point into it.
 
@@ -490,7 +490,7 @@ is an `unsupportedFilter` error) and the only sort property is
 ### SmartPlaylist/set
 
 Standard JMAP `/set` method.  A create or update may set `title`,
-`filter`, `sort`, `limit`, `limitBytes`, `limitSeconds` and
+`filter`, `sort`, `limit`, `limitBytes`, `limitSeconds`, and
 `isHelper`; a smart playlist needs a title.
 
 The server compiles the filter and sort before storing them and

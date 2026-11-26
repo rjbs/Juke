@@ -7,7 +7,7 @@ use_directory_urls: true
 
 # From here to the nav, this file is the same as those of the Jinx manual
 # (../Jinx/doc/manual), the Go booklet in gizmo and NerfLearning, but for the
-# primary colour, so that the sites look alike and can still be told apart.
+# primary color, so that the sites look alike and can still be told apart.
 # Change them together.
 theme:
   name: material
