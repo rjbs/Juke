@@ -16,8 +16,8 @@ under it.
 
 The server is written in Go, on [Gizmo](https://github.com/rjbs/gizmo), a
 library for building JMAP servers.  Its source, and the rest of its design
-notes, are [on GitHub](https://github.com/rjbs/Juke).
+notes, are [on GitHub](https://github.com/rjbs/juke).
 
 The player is written in Swift, and does its syncing with
-[Jinx](https://semiotic.systems/Jinx/), a library that keeps a local copy of
+[Jinx](https://semiotic.systems/jinx/), a library that keeps a local copy of
 JMAP data current with a server.
