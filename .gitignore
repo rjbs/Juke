@@ -3,3 +3,6 @@
 /sample/
 /doc/web/site/
 /doc/web/docs/types.md
+
+# Copied in from imprint by its build-site
+/doc/web/docs/imprint.css
